@@ -125,6 +125,37 @@ Compose CLI.
 Private Git, environment/secrets, persistence, build packs, webhooks, parallel
 workers, arbitrary routes and real workloads remain outside this boundary.
 
+## Disposable image update pilot
+
+The `foxos-image-update-lab` path is an immutable-image transaction proof, not a
+general container updater.
+
+- Only the reviewed repository and tag/digest pairs in
+  `pilot/image-update-canary.json` are accepted. Mutable `latest`, arbitrary
+  registries, registry credentials and user-provided digests are rejected.
+- Planning resolves the registry descriptor through Docker Engine. Apply
+  resolves it again and fails closed if the digest, descriptor, platforms,
+  active pointer or planned metadata changed.
+- Docker pulls the immutable repository digest. FoxOS verifies both the local
+  image ID and `RepoDigests` before container creation.
+- Candidates are non-root, read-only, capability-free,
+  `no-new-privileges`, CPU/memory/PID limited and mount-free. They use a fresh
+  dedicated bridge and publish only a dynamic loopback port.
+- The dedicated bridge is separate from existing provider networks but permits
+  ordinary outbound traffic. The reviewed canary must not be treated as an
+  egress sandbox.
+- Health is proven before cutover. A failed candidate is removed without
+  stopping the current revision; partial cutover attempts restore and re-prove
+  the previous revision.
+- Apply and rollback require operation-specific exact confirmations. Only
+  fixed FoxOS resource and disposable labels can participate.
+- `.foxos-data/image-updates/` is owner-only but contains image names, digests,
+  platforms, health fingerprints and operation history.
+
+Do not broaden this allowlist or apply its disposable label to a real workload.
+Persistence, secrets, routes, registry authentication and database consistency
+need separate gates before a normal application can use image update/rollback.
+
 ## Disposable adoption pilot
 
 The first adoption engine is intentionally restricted to disposable lab

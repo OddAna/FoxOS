@@ -261,3 +261,33 @@ This boundary does not support private Git, persistence, environment/secrets,
 build packs, webhooks, parallel execution, arbitrary routes or real workloads.
 Its isolated bridge allows ordinary container egress; egress policy is a
 separate gate before untrusted or production workloads are eligible.
+
+### Implemented boundary: Disposable image update
+
+The third Milestone 5 slice accepts only `foxos-image-update-lab` and the two
+reviewed `traefik/whoami` tag/digest pairs in the repository canary manifest.
+Docker Engine is the registry adapter. FoxOS resolves the distribution
+descriptor before planning, pins its immutable repository digest and supported
+platforms, resolves it again at apply, and rejects tag, plan or current-state
+drift before pulling the digest reference.
+
+Apply creates a fresh dedicated bridge and one non-root candidate. The runtime
+has no mounts, host access, environment or secrets; its root filesystem is
+read-only, every capability is dropped, `no-new-privileges` is set and
+CPU/memory/PID limits are fixed. Only a dynamic loopback host port is published.
+The current revision remains running until the candidate returns the planned
+HTTP status and response marker.
+
+Successful cutover preserves the previous container and its network under a
+history-only identity. Exact rollback validates both container and network
+ownership, parks the newer revision, restores the previous one and repeats its
+original health proof. A failed candidate is removed with its dedicated network;
+a partial promotion attempts to restore and re-prove the previous revision.
+Process locking prevents concurrent image transactions, and a stale running
+operation becomes an explicit interrupted record after agent restart.
+
+Owner-only plans, immutable revisions, operation history and the current pointer
+are stored under `.foxos-data/image-updates/`. The registry is replaceable input;
+FoxOS state is the update and rollback authority. This fixed lab is not approval
+for arbitrary image repositories, credentials, persistent applications, routes,
+production workloads or Store update controls.

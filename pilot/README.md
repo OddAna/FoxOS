@@ -132,3 +132,22 @@ both v1 services running and both v2 services parked as rollback history. Exact
 commands and confirmations are in the main README. Do not put real code, data
 or credentials in this graph and do not reuse
 `com.foxos.compose-deployment.disposable=true` outside this pilot.
+
+## Disposable image update canary
+
+`image-update-canary.json` records the only repository, tag/digest pairs,
+runtime constraints and health marker accepted by the first controlled image
+update proof. FoxOS resolves each reviewed tag through Docker Engine, pins and
+pulls its immutable digest, starts a constrained loopback-only candidate, and
+preserves the previous healthy container and its dedicated network for exact
+rollback.
+
+Apply `v1.10.3`, then `v1.11.0`, then roll back the second operation. The final
+active digest and HTTP proof must match `v1.10.3`; the newer revision remains
+stopped as history. Exact commands and confirmations are in the main README.
+
+This canary has no persistence, credentials, secrets, environment, domain,
+provider network or production data. Do not reuse
+`com.foxos.image-update.disposable=true` on another container and do not expand
+the reviewed tag set without repeating digest, platform, runtime, health,
+cutover and rollback review.

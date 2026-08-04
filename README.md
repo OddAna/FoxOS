@@ -45,6 +45,9 @@ not use the host package manager for its own runtime.
 - **Disposable Compose deployment graph** — a strict two-or-three-service
   public-Git Compose subset builds every service, runs a serial cancellable
   queue, health-gates the ingress, and rolls the complete service group back
+- **Digest-pinned image updates** — the fixed disposable image canary resolves
+  reviewed registry tags to immutable digests, health-gates a constrained
+  candidate, preserves the prior revision, and proves exact rollback
 
 FoxOS is currently an **alpha**. See [Current limitations](#current-limitations)
 before exposing it to other users.
@@ -251,6 +254,11 @@ The authenticated API exposes:
 | `GET /api/compose-deployments/jobs/:jobId` | Read one persisted queue job and its terminal operation ID |
 | `POST /api/compose-deployments/jobs/:jobId/cancel` | Cancel a queued job or request cooperative cancellation before cutover |
 | `POST /api/compose-deployments/:operationId/rollback` | Restore and re-prove the complete previous Compose service group |
+| `GET /api/image-updates` | Read the fixed image-update lab's reviewed inputs, plans, operations and current revision |
+| `POST /api/image-updates/plans` | Resolve a reviewed image tag to its immutable registry digest and create a no-mutation plan |
+| `GET /api/image-updates/plans/:planId` | Read one immutable image-update plan and its exact apply confirmation |
+| `POST /api/image-updates/plans/:planId/apply` | Revalidate, pull by digest, constrain and health-gate a disposable image revision |
+| `POST /api/image-updates/:operationId/rollback` | Restore and re-prove the preserved previous image revision |
 | `GET /api/adoptions` | Read locally stored plans and operations |
 | `GET /api/routes` | Read FoxOS-owned route records and their last verification state |
 | `POST /api/adoptions/plans/:planId/apply` | Apply an explicitly confirmed disposable plan |
@@ -366,6 +374,54 @@ Plans, revisions, jobs, per-service redacted build logs, operations and the
 current group live under `.foxos-data/compose-deployments/` with owner-only
 permissions. Private Git, environment/secrets, persistence, build packs,
 webhooks, parallel jobs, general routes and real workloads remain unsupported.
+
+## Disposable image update pilot
+
+The image-update path proves the remaining Milestone 5 transaction without
+touching a Store application or an imported workload. It accepts only the fixed
+`foxos-image-update-lab` identity and the two tag/digest pairs recorded in
+[`pilot/image-update-canary.json`](pilot/image-update-canary.json). There is no
+arbitrary repository, registry credential, provider API, Coolify, domain,
+Cloudflare, S3, volume, environment or secret input.
+
+Planning asks Docker Engine for the registry distribution descriptor and stores
+the immutable repository digest, descriptor metadata, supported platforms,
+runtime constraints and health proof. It rejects a tag whose current digest no
+longer matches the reviewed set. Apply resolves the tag again, rejects plan or
+active-state drift, and pulls `traefik/whoami@sha256:...` rather than the mutable
+tag.
+
+Each revision starts as a non-root candidate with a read-only root filesystem,
+all Linux capabilities dropped, `no-new-privileges`, bounded CPU, memory and
+PIDs, no mounts, a dedicated FoxOS bridge and only a Docker-assigned
+`127.0.0.1` port. FoxOS verifies HTTP `200` and the planned response marker
+before stopping the current canary. A failed pull, constraint check or health
+proof removes the candidate and its network. A successful update keeps the
+previous healthy container and network stopped as rollback evidence. Exact
+rollback restores that container and repeats its original health proof.
+
+Run the v1 → v2 → v1 proof through the agent:
+
+```bash
+docker compose exec -T foxos node /app/imageUpdateCli.js plan \
+  --image traefik/whoami:v1.10.3 \
+  --health-path / \
+  --expected-body "Hostname:" \
+  --confirm "PLAN DISPOSABLE IMAGE UPDATE"
+
+docker compose exec -T foxos node /app/imageUpdateCli.js apply PLAN_ID \
+  --confirm "APPLY IMAGE UPDATE PLAN_ID"
+
+# Create and apply a v1.11.0 plan, then restore v1.10.3 exactly.
+docker compose exec -T foxos node /app/imageUpdateCli.js rollback OPERATION_ID \
+  --confirm "ROLLBACK IMAGE UPDATE OPERATION_ID"
+```
+
+Plans, revisions, operations and the current pointer live under
+`.foxos-data/image-updates/` with owner-only permissions. The Store does not
+show the active or retained lab containers. General image-based application
+updates remain blocked until per-application manifests, persistence, secrets,
+routes and recovery policy can participate in the same transaction.
 
 ## Disposable adoption pilot
 
@@ -536,6 +592,9 @@ Do not copy its contents into Git or logs.
 - The App Store catalog is intentionally small and reviewed; arbitrary Compose
   files and untrusted install scripts are not accepted through the UI. The only
   Compose support is the fixed, strict, no-persistence disposable CLI/API pilot
+- Image update/rollback is currently limited to the two reviewed tags of the
+  fixed disposable canary; normal Store and imported applications are not
+  eligible yet
 - App Store images are maintained by their respective third-party projects, not
   by FoxOS
 - The included FoxOS-owned HTTPS gateway currently ships one DNS-01 adapter for
@@ -585,6 +644,7 @@ FoxOS/
 │   ├── backupManager.js       # Encrypted S3-compatible round-trip and restore gate
 │   ├── sourceDeploymentManager.js # Public Git commit, Docker build, health gate and rollback pilot
 │   ├── composeDeploymentManager.js # Strict service graph, serial queue, group cutover and rollback
+│   ├── imageUpdateManager.js # Reviewed registry digest, candidate health and exact rollback
 │   ├── adoptionManager.js     # Disposable plan/apply/rollback transaction
 │   └── package.json
 └── frontend/

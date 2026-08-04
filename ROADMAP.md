@@ -134,6 +134,9 @@ target blocks only adoption/migration operations that require restore proof.
 - [x] Start dependencies on a fresh isolated bridge, health-gate only the
   loopback ingress, preserve the complete previous group and roll it back in
   dependency order.
+- [x] Resolve the first reviewed image tags to registry digests, revalidate at
+  apply, pull by immutable reference, health-gate a constrained candidate and
+  restore the preserved previous image through exact rollback.
 - [ ] Add private Git through encrypted scoped deploy credentials.
 - [ ] Add webhook triggers and reviewed build-pack workflows; general Compose,
   persistence and production workloads remain separate gates.
@@ -172,7 +175,10 @@ target blocks only adoption/migration operations that require restore proof.
   serial queue with safe cancellation checkpoints; parallel workers remain open.
 - [x] Health-gate candidate deployment and exact rollback to the previous healthy
   disposable revision; general rolling deployment remains open.
-- [ ] Add controlled image update, digest pinning and rollback for image-based apps.
+- [x] Add the fixed disposable proof for controlled image update, digest pinning
+  and exact rollback.
+- [ ] Generalize the proven image transaction to FoxOS-managed applications only
+  after their persistence, secret, route and recovery manifests are complete.
 
 ## Environment and secrets
 

@@ -78,6 +78,15 @@
   health-before-group-cutover and full-group rollback. Do not reinterpret this
   as permission for arbitrary Compose, persistence, private Git, build packs,
   real routes or production workloads.
+- The controlled image update implementation is a third fixed disposable pilot.
+  Preserve the `foxos-image-update-lab` identity, reviewed
+  `traefik/whoami:v1.10.3` and `v1.11.0` tag/digest set, registry revalidation,
+  immutable digest pull, non-root/read-only/capability-free runtime, fresh
+  dedicated bridge, loopback-only port, health-before-cutover, process lock,
+  retained previous revision and exact rollback. Do not widen it to Store apps,
+  imported containers, arbitrary registries, credentials, persistence, secrets,
+  routes or real workloads without Burak's explicit approval and the missing
+  safety gates in `ROADMAP.md`.
 - Read `ARCHITECTURE.md` before changing discovery, deployment, domains,
   secrets, persistence, backup or migration behavior.
 
