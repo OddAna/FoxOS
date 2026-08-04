@@ -4,7 +4,7 @@ on:
   push:
     branches: [develop]
   pull_request:
-    branches: [main]
+    branches: [main, develop]
 
 permissions:
   contents: read
@@ -50,6 +50,8 @@ jobs:
       - name: Validate Compose and installer
         run: |
           docker compose config --quiet
+          docker compose -f pilot/compose-deployment-canary/v1/compose.yaml config --quiet
+          docker compose -f pilot/compose-deployment-canary/v2/compose.yaml config --quiet
           if docker compose config | grep -Eiq 'cloudflare|s3-compatible|r2[._-]'; then
             echo 'Base Compose unexpectedly contains an external provider dependency.' >&2
             exit 1
@@ -85,6 +87,15 @@ jobs:
             done
             image_ids=$(docker images -q --filter label=com.foxos.deployment.disposable=true)
             if [ -n "$image_ids" ]; then docker image rm -f $image_ids || true; fi
+            for cleanup_attempt in 1 2; do
+              compose_container_ids=$(docker ps -aq --filter label=com.foxos.compose-deployment.disposable=true)
+              if [ -n "$compose_container_ids" ]; then docker rm -f $compose_container_ids || true; fi
+              compose_network_ids=$(docker network ls -q --filter label=com.foxos.compose-deployment.disposable=true)
+              if [ -n "$compose_network_ids" ]; then docker network rm $compose_network_ids || true; fi
+              sleep 1
+            done
+            compose_image_ids=$(docker images -q --filter label=com.foxos.compose-deployment.disposable=true)
+            if [ -n "$compose_image_ids" ]; then docker image rm -f $compose_image_ids || true; fi
             docker compose down || true
           }
           trap cleanup EXIT
@@ -143,3 +154,45 @@ jobs:
           test "$deployment_revision" = "$plan_v1_revision"
           deployment_port=$(printf '%s' "$deployment_status" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(String(JSON.parse(s).current.hostPort)))')
           curl --fail --silent --show-error "http://127.0.0.1:$deployment_port/" | grep -F "FoxOS source deployment canary v1" >/dev/null
+
+          source_ref="${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}"
+          compose_plan_v1=$(docker compose exec -T foxos node /app/composeDeploymentCli.js plan \
+            --repository https://github.com/OddAna/FoxOS.git \
+            --ref "$source_ref" \
+            --manifest pilot/compose-deployment-canary/v1/compose.yaml \
+            --ingress-service web \
+            --health-path / \
+            --expected-body "FoxOS compose deployment canary v1 + api-v1" \
+            --confirm "PLAN DISPOSABLE COMPOSE")
+          compose_plan_v1_id=$(printf '%s' "$compose_plan_v1" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).planId))')
+          compose_plan_v1_revision=$(printf '%s' "$compose_plan_v1" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).revisionId))')
+          compose_job_v1=$(docker compose exec -T foxos node /app/composeDeploymentCli.js enqueue "$compose_plan_v1_id" \
+            --confirm "DEPLOY COMPOSE $compose_plan_v1_id")
+          compose_job_v1_id=$(printf '%s' "$compose_job_v1" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).jobId))')
+          compose_job_v1_done=$(docker compose exec -T foxos node /app/composeDeploymentCli.js wait "$compose_job_v1_id" --timeout-seconds 900)
+          printf '%s' "$compose_job_v1_done" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>{if(JSON.parse(s).status!=="succeeded")process.exit(1)})'
+
+          compose_plan_v2=$(docker compose exec -T foxos node /app/composeDeploymentCli.js plan \
+            --repository https://github.com/OddAna/FoxOS.git \
+            --ref "$source_ref" \
+            --manifest pilot/compose-deployment-canary/v2/compose.yaml \
+            --ingress-service web \
+            --health-path / \
+            --expected-body "FoxOS compose deployment canary v2 + api-v2" \
+            --confirm "PLAN DISPOSABLE COMPOSE")
+          compose_plan_v2_id=$(printf '%s' "$compose_plan_v2" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).planId))')
+          compose_job_v2=$(docker compose exec -T foxos node /app/composeDeploymentCli.js enqueue "$compose_plan_v2_id" \
+            --confirm "DEPLOY COMPOSE $compose_plan_v2_id")
+          compose_job_v2_id=$(printf '%s' "$compose_job_v2" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).jobId))')
+          compose_job_v2_done=$(docker compose exec -T foxos node /app/composeDeploymentCli.js wait "$compose_job_v2_id" --timeout-seconds 900)
+          compose_operation_v2_id=$(printf '%s' "$compose_job_v2_done" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).operationId))')
+          docker compose exec -T foxos node /app/composeDeploymentCli.js rollback "$compose_operation_v2_id" \
+            --confirm "ROLLBACK COMPOSE $compose_operation_v2_id" >/dev/null
+          compose_status=$(docker compose exec -T foxos node /app/composeDeploymentCli.js status)
+          compose_revision=$(printf '%s' "$compose_status" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).current.revisionId))')
+          test "$compose_revision" = "$compose_plan_v1_revision"
+          compose_port=$(printf '%s' "$compose_status" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(String(JSON.parse(s).current.hostPort)))')
+          curl --fail --silent --show-error "http://127.0.0.1:$compose_port/" | grep -F "FoxOS compose deployment canary v1 + api-v1" >/dev/null
+          test "$(docker ps -q --filter label=com.foxos.compose-deployment.disposable=true | wc -l)" -eq 2
+          test "$(docker ps -aq --filter label=com.foxos.compose-deployment.disposable=true | wc -l)" -eq 4
+          test "$(docker network ls -q --filter label=com.foxos.compose-deployment.disposable=true | wc -l)" -eq 2

@@ -110,3 +110,25 @@ are in the main README.
 Do not copy production code, credentials or real data into these directories.
 Do not rename another container to `foxos-deployment-lab` or reuse its
 `com.foxos.deployment.disposable=true` label.
+
+## Disposable Compose deployment canary
+
+`compose-deployment-canary/v1` and `v2` are the only reviewed graphs intended
+for the strict Compose pilot. Each graph contains a `web` ingress and an `api`
+dependency, both built from small digest-pinned Dockerfiles. The web response
+includes the API version, so the health proof verifies both service startup and
+the isolated service-name dependency path.
+
+FoxOS parses these manifests itself. It does not run `docker compose up` and it
+does not accept the normal Compose surface: no images, environment, secrets,
+args, commands, published ports, volumes, configs, custom networks, privilege
+or host access. It builds both services without build networking, creates only
+the fixed `foxos-compose-lab*` containers and project network, exposes only the
+web ingress on dynamic loopback and processes apply through the persisted
+serial queue.
+
+Apply v1, then v2, then roll back the v2 operation. A successful proof ends with
+both v1 services running and both v2 services parked as rollback history. Exact
+commands and confirmations are in the main README. Do not put real code, data
+or credentials in this graph and do not reuse
+`com.foxos.compose-deployment.disposable=true` outside this pilot.

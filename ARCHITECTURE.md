@@ -227,3 +227,37 @@ name. Exact-confirmation rollback verifies both container identities, restores
 the previous name/runtime and repeats its original health proof. This pilot has
 no provider API, Coolify, route, domain, TLS, secret, persistent volume or
 off-host-backup dependency and cannot deploy a real workload.
+
+### Implemented boundary: Disposable Compose deployment graph
+
+The second Milestone 5 slice remains separate from adoption and from the
+single-container source canary. It accepts only the fixed
+`foxos-compose-lab` identity and a public-Git manifest containing two or three
+source-built services. FoxOS parses and normalizes the manifest; it never hands
+unreviewed input to `docker compose up`.
+
+The accepted graph has simple acyclic dependencies, one private TCP port per
+service and one ingress on port `8080`. Every service must be reachable from
+that ingress. Images, environment, secrets, arguments, commands, entrypoints,
+host/public ports, volumes, configs, provider networks, devices, capabilities,
+privileged/host namespaces and arbitrary extensions are rejected. Build
+contexts remain bounded, symlink-free, digest-pinned and networkless.
+
+FoxOS builds every service into an immutable image ID, creates a fresh isolated
+bridge, starts dependencies before the ingress and publishes only the ingress
+to a dynamic loopback port. All containers are read-only-root, capability-free,
+`no-new-privileges` and CPU/memory/PID limited. The previous group remains
+running until the ingress returns the planned HTTP status and exact body marker.
+
+Apply jobs enter a persistent single-worker queue. Queued cancellation is
+immediate; running cancellation is cooperative at safe checkpoints before
+cutover. An agent restart marks an in-progress job interrupted instead of
+silently replaying it. Successful cutover preserves every previous service and
+its isolated network. Exact rollback identity-checks the current and previous
+group, starts the previous dependency order and repeats its original ingress
+proof. Owner-only state is stored under `.foxos-data/compose-deployments/`.
+
+This boundary does not support private Git, persistence, environment/secrets,
+build packs, webhooks, parallel execution, arbitrary routes or real workloads.
+Its isolated bridge allows ordinary container egress; egress policy is a
+separate gate before untrusted or production workloads are eligible.

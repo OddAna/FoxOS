@@ -1,0 +1,17 @@
+name: foxos-compose-lab
+
+services:
+  api:
+    build:
+      context: api
+      dockerfile: Dockerfile
+    expose:
+      - "9090"
+  web:
+    build:
+      context: web
+      dockerfile: Dockerfile
+    depends_on:
+      - api
+    expose:
+      - "8080"

@@ -42,6 +42,9 @@ not use the host package manager for its own runtime.
 - **Server-owned secrets and recovery gate** — environment revisions reference
   AES-256-GCM encrypted local secrets, while disposable adoption requires an
   encrypted off-host upload, download, authentication and real restore proof
+- **Disposable Compose deployment graph** — a strict two-or-three-service
+  public-Git Compose subset builds every service, runs a serial cancellable
+  queue, health-gates the ingress, and rolls the complete service group back
 
 FoxOS is currently an **alpha**. See [Current limitations](#current-limitations)
 before exposing it to other users.
@@ -242,6 +245,12 @@ The authenticated API exposes:
 | `POST /api/deployments/plans` | Resolve a public HTTPS Git branch/tag to an immutable commit and create a reviewed Dockerfile plan |
 | `POST /api/deployments/plans/:planId/apply` | Build and health-gate an exactly confirmed disposable source revision |
 | `POST /api/deployments/:operationId/rollback` | Restore the preserved previous healthy source revision |
+| `GET /api/compose-deployments` | Read the fixed Compose lab's revisions, queue, jobs, operations and current service group |
+| `POST /api/compose-deployments/plans` | Pin and validate a public-Git strict Compose graph and every service build context |
+| `POST /api/compose-deployments/plans/:planId/enqueue` | Add an exactly confirmed Compose plan to the serial deployment queue |
+| `GET /api/compose-deployments/jobs/:jobId` | Read one persisted queue job and its terminal operation ID |
+| `POST /api/compose-deployments/jobs/:jobId/cancel` | Cancel a queued job or request cooperative cancellation before cutover |
+| `POST /api/compose-deployments/:operationId/rollback` | Restore and re-prove the complete previous Compose service group |
 | `GET /api/adoptions` | Read locally stored plans and operations |
 | `GET /api/routes` | Read FoxOS-owned route records and their last verification state |
 | `POST /api/adoptions/plans/:planId/apply` | Apply an explicitly confirmed disposable plan |
@@ -305,6 +314,58 @@ This path has no domain, external route, volume, secret, Cloudflare, S3 or
 Coolify dependency. It proves the source-build/deployment transaction only; real
 applications, private Git credentials, webhooks, persistent data and general
 rolling deployments remain blocked.
+
+## Disposable Compose deployment pilot
+
+FoxOS also accepts one strict Compose graph under the separate fixed
+`foxos-compose-lab` identity. This is not a call to `docker compose up` and it is
+not a general Compose execution endpoint. FoxOS parses the manifest itself and
+accepts only two or three source-built services, simple acyclic `depends_on`
+lists and one declared private TCP port per service. Every service must be part
+of the ingress dependency graph; the ingress is fixed to private port `8080`.
+
+The manifest cannot set images, environment values, secrets, build arguments,
+ports, volumes, configs, custom networks, commands, entrypoints, privileges,
+devices or host namespaces. Every service uses the same bounded,
+digest-pinned-Dockerfile and networkless-build rules as the single-container
+pilot. At runtime FoxOS creates a new isolated project bridge. Only the ingress
+gets a Docker-assigned `127.0.0.1` port; no service receives a public bind,
+volume, host mount, capability or provider network.
+
+Compose applies run through a server-persisted serial queue. Queued jobs can be
+cancelled immediately; a running cancellation is checked between source,
+build, candidate and pre-cutover phases. A verified candidate starts
+dependencies first, then proves the ingress HTTP status and response marker
+before the previous service group is stopped. Rollback identity-checks every
+service, restores the whole previous group in dependency order and repeats its
+original ingress proof.
+
+The repository includes v1/v2 two-service canaries. Plan and queue v1 with:
+
+```bash
+docker compose exec -T foxos node /app/composeDeploymentCli.js plan \
+  --repository https://github.com/OddAna/FoxOS.git \
+  --ref develop \
+  --manifest pilot/compose-deployment-canary/v1/compose.yaml \
+  --ingress-service web \
+  --health-path / \
+  --expected-body "FoxOS compose deployment canary v1 + api-v1" \
+  --confirm "PLAN DISPOSABLE COMPOSE"
+
+docker compose exec -T foxos node /app/composeDeploymentCli.js enqueue PLAN_ID \
+  --confirm "DEPLOY COMPOSE PLAN_ID"
+
+docker compose exec -T foxos node /app/composeDeploymentCli.js wait JOB_ID
+
+# After applying v2, roll its operation back to v1.
+docker compose exec -T foxos node /app/composeDeploymentCli.js rollback OPERATION_ID \
+  --confirm "ROLLBACK COMPOSE OPERATION_ID"
+```
+
+Plans, revisions, jobs, per-service redacted build logs, operations and the
+current group live under `.foxos-data/compose-deployments/` with owner-only
+permissions. Private Git, environment/secrets, persistence, build packs,
+webhooks, parallel jobs, general routes and real workloads remain unsupported.
 
 ## Disposable adoption pilot
 
@@ -473,7 +534,8 @@ Do not copy its contents into Git or logs.
 - A fresh installation intentionally has no external backup adapter configured;
   ordinary FoxOS host management does not require one
 - The App Store catalog is intentionally small and reviewed; arbitrary Compose
-  files and untrusted install scripts are not accepted through the UI
+  files and untrusted install scripts are not accepted through the UI. The only
+  Compose support is the fixed, strict, no-persistence disposable CLI/API pilot
 - App Store images are maintained by their respective third-party projects, not
   by FoxOS
 - The included FoxOS-owned HTTPS gateway currently ships one DNS-01 adapter for
@@ -522,6 +584,7 @@ FoxOS/
 │   ├── secretManager.js       # Encrypted secrets and classified environment revisions
 │   ├── backupManager.js       # Encrypted S3-compatible round-trip and restore gate
 │   ├── sourceDeploymentManager.js # Public Git commit, Docker build, health gate and rollback pilot
+│   ├── composeDeploymentManager.js # Strict service graph, serial queue, group cutover and rollback
 │   ├── adoptionManager.js     # Disposable plan/apply/rollback transaction
 │   └── package.json
 └── frontend/
