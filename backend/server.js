@@ -7,8 +7,10 @@ const { execFile } = require('child_process');
 const express = require('express');
 const { APP_CATALOG, getCatalogApp } = require('./appCatalog');
 const {
+  catalogContainerForApp,
   containerName,
   createContainerPayload,
+  discoveredAppStates,
   imagePullPath,
   managedContainerForApp,
   stateForCatalogApp,
@@ -419,7 +421,10 @@ async function hostPortIsListening(port) {
 
 async function getCatalogState() {
   const containers = await dockerRequest('GET', '/containers/json?all=1');
-  return APP_CATALOG.map((catalogApp) => stateForCatalogApp(catalogApp, containers));
+  return [
+    ...APP_CATALOG.map((catalogApp) => stateForCatalogApp(catalogApp, containers)),
+    ...discoveredAppStates(containers, APP_CATALOG)
+  ];
 }
 
 app.get('/api/health', (req, res) => {
@@ -740,7 +745,7 @@ app.post('/api/apps/:appId/install', async (req, res) => {
   let createdContainerId = null;
   try {
     const containers = await dockerRequest('GET', '/containers/json?all=1');
-    if (managedContainerForApp(containers, catalogApp.id)) {
+    if (catalogContainerForApp(containers, catalogApp)) {
       return res.status(409).json({ error: 'This application is already installed' });
     }
     if (await hostPortIsListening(options.hostPort)) {

@@ -6,7 +6,10 @@ const path = require('node:path');
 const test = require('node:test');
 const { APP_CATALOG, getCatalogApp } = require('./appCatalog');
 const {
+  catalogContainerForApp,
   createContainerPayload,
+  discoveredAppStates,
+  externalUrlForContainer,
   imagePullPath,
   stateForCatalogApp,
   validateInstallOptions
@@ -134,9 +137,91 @@ test('catalog validates exposure and derives installation state from Docker', ()
   }]);
 
   assert.equal(state.installed, true);
+  assert.equal(state.managedByFoxOS, true);
+  assert.equal(state.canManage, true);
   assert.equal(state.state, 'running');
   assert.equal(state.hostPort, 8083);
   assert.equal(state.bindAddress, '0.0.0.0');
+});
+
+test('catalog recognizes an existing matching image without taking ownership', () => {
+  const uptimeKuma = getCatalogApp('uptime-kuma');
+  const existingContainer = {
+    Id: 'c'.repeat(64),
+    Image: 'louislam/uptime-kuma:1',
+    Names: ['/existing-uptime-kuma'],
+    State: 'running',
+    Status: 'Up 2 days',
+    Labels: {},
+    Ports: [{ PrivatePort: 3001, PublicPort: 13001, Type: 'tcp', IP: '0.0.0.0' }]
+  };
+
+  assert.equal(catalogContainerForApp([existingContainer], uptimeKuma), existingContainer);
+  const state = stateForCatalogApp(uptimeKuma, [existingContainer]);
+  assert.equal(state.installed, true);
+  assert.equal(state.managedByFoxOS, false);
+  assert.equal(state.canManage, false);
+  assert.equal(state.installationSource, 'docker');
+  assert.equal(state.hostPort, 13001);
+});
+
+test('discovery returns user-facing applications and excludes dependencies', () => {
+  const n8nContainer = {
+    Id: 'd'.repeat(64),
+    Image: 'custom-n8n-build:latest',
+    Names: ['/n8n-service'],
+    State: 'running',
+    Status: 'Up 1 hour',
+    Labels: {
+      'coolify.managed': 'true',
+      'coolify.type': 'service',
+      'coolify.service.subType': 'application',
+      'coolify.service.subName': 'n8n',
+      'coolify.serviceName': 'workflow-automation',
+      'coolify.projectName': 'automation',
+      'coolify.resourceName': 'n8n-production',
+      'traefik.http.routers.http-n8n.rule': 'Host(`n8n.example.test`) && PathPrefix(`/`)',
+      'traefik.http.routers.https-n8n.rule': 'Host(`n8n.example.test`) && PathPrefix(`/`)'
+    },
+    Ports: [{ PrivatePort: 5678, Type: 'tcp' }]
+  };
+  const databaseContainer = {
+    Id: 'e'.repeat(64),
+    Image: 'postgres:16-alpine',
+    Names: ['/postgres'],
+    State: 'running',
+    Status: 'Up 1 hour',
+    Labels: {
+      'coolify.managed': 'true',
+      'coolify.type': 'service',
+      'coolify.service.subType': 'database',
+      'coolify.service.subName': 'postgres'
+    },
+    Ports: [{ PrivatePort: 5432, Type: 'tcp' }]
+  };
+  const workerContainer = {
+    Id: 'f'.repeat(64),
+    Image: 'n8nio/runners:latest',
+    Names: ['/task-runner'],
+    State: 'running',
+    Status: 'Up 1 hour',
+    Labels: {
+      'coolify.managed': 'true',
+      'coolify.type': 'service',
+      'coolify.service.subType': 'application',
+      'coolify.service.subName': 'task-runners'
+    },
+    Ports: [{ PrivatePort: 5680, Type: 'tcp' }]
+  };
+
+  assert.equal(externalUrlForContainer(n8nContainer), 'https://n8n.example.test');
+  const discovered = discoveredAppStates([n8nContainer, databaseContainer, workerContainer], APP_CATALOG);
+  assert.equal(discovered.length, 1);
+  assert.equal(discovered[0].name, 'n8n');
+  assert.equal(discovered[0].installed, true);
+  assert.equal(discovered[0].canManage, false);
+  assert.equal(discovered[0].installationSource, 'coolify');
+  assert.equal(discovered[0].externalUrl, 'https://n8n.example.test');
 });
 
 test.after(async () => {
@@ -225,4 +310,36 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   });
   assert.equal(removeResponse.status, 200);
   assert.equal(mockContainer, null);
+
+  mockContainer = {
+    Id: 'c'.repeat(64),
+    Image: 'corentinth/it-tools:2024.10.22-7ca5933',
+    Names: ['/existing-it-tools'],
+    State: 'running',
+    Status: 'Up 2 days',
+    Labels: {},
+    Ports: [{ PrivatePort: 80, PublicPort: 18083, Type: 'tcp', IP: '0.0.0.0' }]
+  };
+
+  const discoveredCatalogResponse = await fetch(baseUrl() + '/api/apps', {
+    headers: { Cookie: cookie }
+  });
+  const discoveredCatalogApps = (await discoveredCatalogResponse.json()).apps;
+  const discoveredItTools = discoveredCatalogApps.find((catalogApp) => catalogApp.id === 'it-tools');
+  assert.equal(discoveredItTools.installed, true);
+  assert.equal(discoveredItTools.canManage, false);
+
+  const duplicateInstallResponse = await fetch(baseUrl() + '/api/apps/it-tools/install', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ hostPort: 18084, bindAddress: '127.0.0.1' })
+  });
+  assert.equal(duplicateInstallResponse.status, 409);
+
+  const externalStopResponse = await fetch(baseUrl() + '/api/apps/it-tools/stop', {
+    method: 'POST',
+    headers: { Cookie: cookie }
+  });
+  assert.equal(externalStopResponse.status, 404);
+  mockContainer = null;
 });

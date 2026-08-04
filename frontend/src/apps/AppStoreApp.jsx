@@ -70,7 +70,9 @@ const AppStoreApp = () => {
       const payload = await response.json();
       setApps((payload.apps || []).map(decorateApp));
     } catch (error) {
-      showDialog({ title: 'Mağaza Hatası', message: error.message, type: 'error' });
+      if (!quiet) {
+        showDialog({ title: 'Mağaza Hatası', message: error.message, type: 'error' });
+      }
     } finally {
       if (!quiet) setLoading(false);
     }
@@ -78,6 +80,11 @@ const AppStoreApp = () => {
 
   useEffect(() => {
     loadApps();
+  }, [loadApps]);
+
+  useEffect(() => {
+    const refreshTimer = window.setInterval(() => loadApps({ quiet: true }), 15000);
+    return () => window.clearInterval(refreshTimer);
   }, [loadApps]);
 
   useEffect(() => {
@@ -150,6 +157,11 @@ const AppStoreApp = () => {
       showDialog({ title: 'Servis Kapalı', message: 'Bu uygulamayı açmak için önce servisi başlatın.', type: 'warning' });
       return;
     }
+    if (app.externalUrl) {
+      window.open(app.externalUrl, '_blank', 'noopener,noreferrer');
+      return;
+    }
+
     if (!app.hostPort) {
       showDialog({ title: 'Port Bulunamadı', message: 'Docker yayın portu okunamadı.', type: 'error' });
       return;
@@ -273,7 +285,7 @@ const AppStoreApp = () => {
                 <h1 style={{ margin: '0 0 10px 0', fontSize: '32px', fontWeight: 'bold' }}>{featuredApp.name}</h1>
                 <p style={{ margin: '0 0 20px 0', fontSize: '16px', opacity: 0.9, lineHeight: '1.5' }}>{featuredApp.description}</p>
                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center', position: 'relative' }}>
-                  {featuredApp.installed && <ServiceMenu app={featuredApp} suffix="featured" />}
+                  {featuredApp.installed && featuredApp.canManage && <ServiceMenu app={featuredApp} suffix="featured" />}
                   {featuredApp.installed ? (
                     <button type="button" onClick={(event) => handleOpenApp(event, featuredApp)} disabled={uninstalling[featuredApp.id]} style={{ background: 'rgba(255,255,255,0.2)', color: '#fff', border: '1px solid rgba(255,255,255,0.4)', padding: '8px 24px', borderRadius: '20px', fontSize: '14px', fontWeight: 'bold', cursor: uninstalling[featuredApp.id] ? 'wait' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: '8px', opacity: uninstalling[featuredApp.id] ? 0.7 : 1 }}>
                       {uninstalling[featuredApp.id] ? <Loader2 size={16} className="spin" /> : <Check size={16} />}
@@ -323,7 +335,7 @@ const AppStoreApp = () => {
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '16px' }}>
                     <span style={{ fontSize: '11px', background: 'rgba(255,255,255,0.1)', padding: '4px 8px', borderRadius: '4px', color: '#ccc' }}>{app.category}</span>
                     <div style={{ display: 'flex', gap: '8px', alignItems: 'center', position: 'relative' }}>
-                      {app.installed && <ServiceMenu app={app} suffix="grid" />}
+                      {app.installed && app.canManage && <ServiceMenu app={app} suffix="grid" />}
                       {app.installed ? (
                         <button type="button" onClick={(event) => handleOpenApp(event, app)} disabled={uninstalling[app.id]} style={{ background: 'transparent', color: '#0ea5e9', border: '1px solid #0ea5e9', padding: '6px 16px', borderRadius: '16px', fontSize: '13px', fontWeight: 'bold', cursor: uninstalling[app.id] ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: '6px', opacity: uninstalling[app.id] ? 0.7 : 1 }}>
                           {uninstalling[app.id] ? <Loader2 size={14} className="spin" /> : <Check size={14} />} {uninstalling[app.id] ? 'Kaldırılıyor...' : 'Aç'}

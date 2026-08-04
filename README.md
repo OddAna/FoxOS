@@ -27,8 +27,9 @@ not use the host package manager for its own runtime.
   memory, and disk usage
 - **Real Docker control** — list containers and start, stop, or restart them
 - **Real App Store** — install a reviewed catalog of Docker applications on the
-  server and manage their real container lifecycle from the original FoxOS
-  store interface
+  server, discover usable applications that already exist on that server, and
+  manage the real lifecycle of FoxOS-owned installations from the original
+  FoxOS store interface
 - **Host terminal** — commands run directly in the Linux host namespaces
 - **Host file access** — the Files app contains a `Sunucu` entry linked to
   the host root filesystem
@@ -145,6 +146,13 @@ from Docker. The store installs apps on their catalog port with a private
 `127.0.0.1` bind by default. Persistent app data is kept in a named Docker volume
 and is preserved by the store when the app is removed; the authenticated API can
 explicitly remove a FoxOS-owned volume when requested.
+
+The store also inspects the live Docker inventory. Existing catalog images and
+user-facing Docker or Coolify applications with a published port or proxy route
+appear as installed without being re-created. These discovered applications are
+read-only in the store so FoxOS cannot accidentally remove a deployment owned by
+another platform. Databases, workers, agents, reverse proxies, and other internal
+dependency containers are not presented as standalone store applications.
 
 ## Operations
 
