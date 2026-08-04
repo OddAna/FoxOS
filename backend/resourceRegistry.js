@@ -303,7 +303,9 @@ function identityAliases(container, labels) {
   const coolifyResource = labels['coolify.resourceName'];
   const coolifyService = labels['coolify.serviceName'] || labels['coolify.service.subName'];
 
-  if (foxosId) aliases.push(`foxos:${foxosId}`);
+  if (foxosId && /^res_[a-f0-9]{32}$/.test(foxosId) && (
+    isTrue(labels['com.foxos.managed']) || isTrue(labels['com.foxos.core'])
+  )) aliases.push(`foxos:${foxosId}`);
   if (composeProject && composeService) aliases.push(`compose:${composeProject}:${composeService}:${composeNumber}`);
   if (coolifyResource) aliases.push(`coolify-resource:${coolifyResource}:${coolifyService || ''}:${name}`);
   aliases.push(`container-name:${name}`);
@@ -313,9 +315,13 @@ function identityAliases(container, labels) {
 
 function resolveResourceId(identityState, aliases, observedAt, randomUUID) {
   const aliasHashes = aliases.map((alias) => hash(alias, 64));
+  const claimedFoxosId = aliases.map((alias) => alias.match(/^foxos:(res_[a-f0-9]{32})$/))
+    .find(Boolean);
   const existing = aliasHashes.map((aliasHash) => identityState.aliases[aliasHash])
     .find((candidate) => candidate && candidate.resourceId);
-  const resourceId = existing ? existing.resourceId : 'res_' + randomUUID().replace(/-/g, '');
+  const resourceId = claimedFoxosId
+    ? claimedFoxosId[1]
+    : existing ? existing.resourceId : 'res_' + randomUUID().replace(/-/g, '');
 
   for (const aliasHash of aliasHashes) {
     const record = identityState.aliases[aliasHash];
@@ -726,6 +732,7 @@ module.exports = {
   detectConflicts,
   identityAliases,
   parseTraefikRoutes,
+  resolveResourceId,
   roleFor,
   safeLabels
 };

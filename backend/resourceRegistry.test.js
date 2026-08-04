@@ -8,6 +8,7 @@ const {
   detectConflicts,
   identityAliases,
   parseTraefikRoutes,
+  resolveResourceId,
   roleFor,
   safeLabels
 } = require('./resourceRegistry');
@@ -261,6 +262,7 @@ test('FoxOS gateway stays protected while being classified as the FoxOS proxy', 
 
 test('a preserved rollback container cannot claim the adopted resource identity', () => {
   const labels = {
+    'com.foxos.managed': 'true',
     'com.foxos.resource.id': 'res_' + '1'.repeat(32),
     'com.docker.compose.project': 'foxos-adoption-lab',
     'com.docker.compose.service': 'web',
@@ -277,6 +279,43 @@ test('a preserved rollback container cannot claim the adopted resource identity'
 
   assert.equal(adoptedAliases.includes('foxos:' + labels['com.foxos.resource.id']), true);
   assert.deepEqual(rollbackAliases, ['rollback-container:' + 'b'.repeat(64)]);
+});
+
+test('trusted FoxOS labels own the canonical resource ID and replace a previous generated alias', () => {
+  const claimedId = 'res_' + 'a'.repeat(32);
+  const generatedId = 'res_' + 'b'.repeat(32);
+  const identityState = { schemaVersion: 1, aliases: {} };
+  const observedAt = '2026-08-04T20:00:00.000Z';
+
+  const first = resolveResourceId(
+    identityState,
+    ['container-name:foxos-image-update-lab'],
+    observedAt,
+    () => generatedId.slice(4)
+  );
+  assert.equal(first, generatedId);
+
+  const trustedAliases = identityAliases({
+    Id: 'a'.repeat(64),
+    Names: ['/foxos-image-update-lab']
+  }, {
+    'com.foxos.managed': 'true',
+    'com.foxos.resource.id': claimedId
+  });
+  const migrated = resolveResourceId(identityState, trustedAliases, observedAt, () => {
+    throw new Error('A trusted FoxOS identity must not generate a replacement ID');
+  });
+  assert.equal(migrated, claimedId);
+  assert.equal(
+    Object.values(identityState.aliases).every((record) => record.resourceId === claimedId),
+    true
+  );
+
+  const untrustedAliases = identityAliases({
+    Id: 'c'.repeat(64),
+    Names: ['/external-container']
+  }, { 'com.foxos.resource.id': 'res_' + 'd'.repeat(32) });
+  assert.equal(untrustedAliases.some((alias) => alias.startsWith('foxos:')), false);
 });
 
 test('deployment history containers cannot claim the active deployment identity', () => {
