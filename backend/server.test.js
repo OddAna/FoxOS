@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { APP_CATALOG, getCatalogApp } = require('./appCatalog');
+const { iconCandidatesFromHtml, safeHttpUrl } = require('./appIcon');
 const {
   catalogContainerForApp,
   createContainerPayload,
@@ -61,7 +62,10 @@ const dockerMock = http.createServer((req, res) => {
     });
     return;
   }
-  if (req.method === 'POST' && req.url.startsWith('/containers/' + mockContainerId + '/')) {
+  if (req.method === 'GET' && mockContainer && req.url === '/containers/' + mockContainer.Id + '/json') {
+    return respond(200, { Config: { Labels: mockContainer.Labels || {} } });
+  }
+  if (req.method === 'POST' && mockContainer && req.url.startsWith('/containers/' + mockContainer.Id + '/')) {
     if (req.url.includes('/stop')) {
       mockContainer.State = 'exited';
       mockContainer.Status = 'Exited (0)';
@@ -160,7 +164,7 @@ test('catalog recognizes an existing matching image without taking ownership', (
   const state = stateForCatalogApp(uptimeKuma, [existingContainer]);
   assert.equal(state.installed, true);
   assert.equal(state.managedByFoxOS, false);
-  assert.equal(state.canManage, false);
+  assert.equal(state.canManage, true);
   assert.equal(state.installationSource, 'docker');
   assert.equal(state.hostPort, 13001);
 });
@@ -219,9 +223,63 @@ test('discovery returns user-facing applications and excludes dependencies', () 
   assert.equal(discovered.length, 1);
   assert.equal(discovered[0].name, 'n8n');
   assert.equal(discovered[0].installed, true);
-  assert.equal(discovered[0].canManage, false);
+  assert.equal(discovered[0].canManage, true);
   assert.equal(discovered[0].installationSource, 'coolify');
   assert.equal(discovered[0].externalUrl, 'https://n8n.example.test');
+});
+
+test('multiple WordPress instances remain separate and use their route identities', () => {
+  const wordpressContainers = ['one', 'two'].map((instance, index) => ({
+    Id: String(index + 1).repeat(64),
+    Image: 'wordpress:latest',
+    Names: ['/wordpress-' + instance],
+    State: 'running',
+    Status: 'Up 1 hour',
+    Labels: {
+      'coolify.managed': 'true',
+      'coolify.type': 'service',
+      'coolify.service.subType': 'application',
+      'coolify.service.subName': 'wordpress',
+      'coolify.resourceName': 'wordpress-' + instance,
+      [`traefik.http.routers.https-wordpress-${instance}.rule`]: `Host(\`blog-${instance}.example.test\`)`
+    },
+    Ports: [{ PrivatePort: 80, Type: 'tcp' }]
+  }));
+  wordpressContainers[0].State = 'exited';
+  wordpressContainers[0].Status = 'Exited (0) 1 minute ago';
+  wordpressContainers[0].Ports = [];
+
+  const discovered = discoveredAppStates(wordpressContainers, APP_CATALOG);
+  assert.equal(discovered.length, 2);
+  assert.deepEqual(discovered.map((appState) => appState.name), [
+    'WordPress · blog-one.example.test',
+    'WordPress · blog-two.example.test'
+  ]);
+  assert.notEqual(discovered[0].id, discovered[1].id);
+  assert.deepEqual(discovered.map((appState) => appState.containerName), [
+    'wordpress-one',
+    'wordpress-two'
+  ]);
+  assert.equal(discovered[0].state, 'exited');
+  assert.equal(discovered[0].hostPort, null);
+  assert.equal(discovered.every((appState) => appState.canManage), true);
+  assert.equal(discovered.every((appState) => appState.logoUrl.endsWith('/wordpress.svg')), true);
+});
+
+test('custom application icon discovery resolves safe favicon sources', () => {
+  const candidates = iconCandidatesFromHtml(`
+    <link href="/assets/app-mark.svg" rel="icon">
+    <link rel="apple-touch-icon" href="icons/touch.png">
+    <link rel="stylesheet" href="/styles.css">
+  `, 'https://app.example.test/dashboard');
+
+  assert.deepEqual(candidates, [
+    'https://app.example.test/assets/app-mark.svg',
+    'https://app.example.test/icons/touch.png'
+  ]);
+  assert.equal(safeHttpUrl('https://app.example.test/favicon.ico').hostname, 'app.example.test');
+  assert.equal(safeHttpUrl('file:///etc/passwd'), null);
+  assert.equal(safeHttpUrl('https://user:password@app.example.test/icon.svg'), null);
 });
 
 test.after(async () => {
@@ -327,7 +385,7 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   const discoveredCatalogApps = (await discoveredCatalogResponse.json()).apps;
   const discoveredItTools = discoveredCatalogApps.find((catalogApp) => catalogApp.id === 'it-tools');
   assert.equal(discoveredItTools.installed, true);
-  assert.equal(discoveredItTools.canManage, false);
+  assert.equal(discoveredItTools.canManage, true);
 
   const duplicateInstallResponse = await fetch(baseUrl() + '/api/apps/it-tools/install', {
     method: 'POST',
@@ -341,5 +399,12 @@ test('setup creates an authenticated session and unlocks the workspace', async (
     headers: { Cookie: cookie }
   });
   assert.equal(externalStopResponse.status, 404);
+
+  const discoveredContainerStopResponse = await fetch(baseUrl() + '/api/containers/' + mockContainer.Id + '/stop', {
+    method: 'POST',
+    headers: { Cookie: cookie }
+  });
+  assert.equal(discoveredContainerStopResponse.status, 200);
+  assert.equal(mockContainer.State, 'exited');
   mockContainer = null;
 });

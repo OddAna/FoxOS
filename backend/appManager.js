@@ -1,5 +1,6 @@
 const MANAGED_LABEL = 'com.foxos.managed';
 const APP_ID_LABEL = 'com.foxos.app.id';
+const DASHBOARD_ICON_BASE = 'https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/';
 
 const DISCOVERED_APP_PROFILES = Object.freeze([
   Object.freeze({
@@ -8,6 +9,7 @@ const DISCOVERED_APP_PROFILES = Object.freeze([
     publisher: 'AdGuard Team',
     category: 'Network',
     containerPort: 80,
+    logoUrl: DASHBOARD_ICON_BASE + 'adguard-home.svg',
     imageRepositories: Object.freeze(['adguard/adguardhome']),
     serviceNames: Object.freeze(['adguardhome']),
     description: 'Ağ genelinde reklam ve takip engelleme sağlayan DNS yönetim uygulaması.'
@@ -18,6 +20,7 @@ const DISCOVERED_APP_PROFILES = Object.freeze([
     publisher: 'Beszel',
     category: 'Monitoring',
     containerPort: 8090,
+    logoUrl: DASHBOARD_ICON_BASE + 'beszel.svg',
     imageRepositories: Object.freeze(['henrygd/beszel']),
     serviceNames: Object.freeze(['beszel']),
     description: 'Sunucu kaynaklarını ve servis durumunu izleyen hafif yönetim paneli.'
@@ -28,6 +31,7 @@ const DISCOVERED_APP_PROFILES = Object.freeze([
     publisher: 'Coollabs',
     category: 'DevOps',
     containerPort: 8080,
+    logoUrl: DASHBOARD_ICON_BASE + 'coolify.svg',
     imageRepositories: Object.freeze(['ghcr.io/coollabsio/coolify']),
     serviceNames: Object.freeze(['coolify']),
     description: 'Uygulamaları ve veritabanlarını kendi sunucunuzda dağıtmak için kullanılan platform.'
@@ -39,6 +43,7 @@ const DISCOVERED_APP_PROFILES = Object.freeze([
     category: 'Developer',
     containerPort: 8080,
     openPath: '/manager',
+    logoUrl: 'https://raw.githubusercontent.com/evolution-foundation/docs-evolution/main/favicon.png',
     imageRepositories: Object.freeze(['evoapicloud/evolution-api']),
     serviceNames: Object.freeze(['evolution-api']),
     description: 'WhatsApp bağlantıları ve otomasyonları için kendi sunucunuzda çalışan API.'
@@ -49,6 +54,7 @@ const DISCOVERED_APP_PROFILES = Object.freeze([
     publisher: 'n8n',
     category: 'Automation',
     containerPort: 5678,
+    logoUrl: DASHBOARD_ICON_BASE + 'n8n.svg',
     imageRepositories: Object.freeze(['n8nio/n8n']),
     serviceNames: Object.freeze(['n8n']),
     description: 'İş akışlarını görsel olarak oluşturup sunucunuzda çalıştırabileceğiniz otomasyon platformu.'
@@ -59,6 +65,7 @@ const DISCOVERED_APP_PROFILES = Object.freeze([
     publisher: 'NocoDB',
     category: 'Databases',
     containerPort: 8080,
+    logoUrl: DASHBOARD_ICON_BASE + 'nocodb.svg',
     imageRepositories: Object.freeze(['nocodb/nocodb']),
     serviceNames: Object.freeze(['nocodb']),
     description: 'Veritabanlarını elektronik tablo benzeri bir arayüzle yöneten açık kaynaklı platform.'
@@ -69,6 +76,7 @@ const DISCOVERED_APP_PROFILES = Object.freeze([
     publisher: 'Open WebUI',
     category: 'AI',
     containerPort: 8080,
+    logoUrl: DASHBOARD_ICON_BASE + 'open-webui.svg',
     imageRepositories: Object.freeze(['ghcr.io/open-webui/open-webui']),
     serviceNames: Object.freeze(['open-webui']),
     description: 'Yerel ve uzak yapay zekâ modelleri için kendi sunucunuzda çalışan web arayüzü.'
@@ -80,6 +88,7 @@ const DISCOVERED_APP_PROFILES = Object.freeze([
     category: 'Databases',
     containerPort: 6333,
     openPath: '/dashboard',
+    logoUrl: DASHBOARD_ICON_BASE + 'qdrant.svg',
     imageRepositories: Object.freeze(['qdrant/qdrant']),
     serviceNames: Object.freeze(['qdrant']),
     description: 'Vektör arama ve yapay zekâ uygulamaları için açık kaynaklı veritabanı.'
@@ -90,6 +99,7 @@ const DISCOVERED_APP_PROFILES = Object.freeze([
     publisher: 'WordPress.org',
     category: 'Web Apps',
     containerPort: 80,
+    logoUrl: DASHBOARD_ICON_BASE + 'wordpress.svg',
     imageRepositories: Object.freeze(['wordpress']),
     serviceNames: Object.freeze(['wordpress']),
     description: 'Web siteleri ve içerik yönetimi için açık kaynaklı yayın platformu.'
@@ -181,6 +191,11 @@ function containerDisplayName(container) {
   return String(name).replace(/^\//, '');
 }
 
+function dockerContainerName(container) {
+  const name = container.Names && container.Names[0];
+  return name ? String(name).replace(/^\//, '') : containerDisplayName(container);
+}
+
 function catalogContainerForApp(containers, catalogApp) {
   const managed = managedContainerForApp(containers, catalogApp.id);
   if (managed) {
@@ -265,7 +280,11 @@ function isDiscoverableApplication(container) {
   );
   const hasUsableEndpoint = Boolean(externalUrlForContainer(container) || publishedPortForContainer(container));
 
-  return hasUsableEndpoint && Boolean(profile || isCoolifyApplication || labels['coolify.managed'] !== 'true');
+  return Boolean(
+    profile ||
+    (isCoolifyApplication && (hasUsableEndpoint || container.State !== 'running')) ||
+    (hasUsableEndpoint && labels['coolify.managed'] !== 'true')
+  );
 }
 
 function slugify(value) {
@@ -286,6 +305,18 @@ function humanizeName(value) {
     .join(' ') || 'Docker Application';
 }
 
+function hostnameForUrl(url) {
+  if (!url) {
+    return null;
+  }
+
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return null;
+  }
+}
+
 function discoveredAppStates(containers, catalogApps) {
   const catalogContainerIds = new Set(
     catalogApps.map((catalogApp) => catalogContainerForApp(containers, catalogApp))
@@ -293,8 +324,18 @@ function discoveredAppStates(containers, catalogApps) {
       .map((container) => container.Id)
   );
 
-  return containers
-    .filter((container) => !catalogContainerIds.has(container.Id) && isDiscoverableApplication(container))
+  const discoverableContainers = containers.filter((container) => (
+    !catalogContainerIds.has(container.Id) && isDiscoverableApplication(container)
+  ));
+  const profileCounts = discoverableContainers.reduce((counts, container) => {
+    const profile = discoveredProfileForContainer(container);
+    if (profile) {
+      counts.set(profile.id, (counts.get(profile.id) || 0) + 1);
+    }
+    return counts;
+  }, new Map());
+
+  return discoverableContainers
     .map((container) => {
       const labels = container.Labels || {};
       const profile = discoveredProfileForContainer(container);
@@ -302,15 +343,24 @@ function discoveredAppStates(containers, catalogApps) {
       const port = publishedPortForContainer(container, profile ? profile.containerPort : null);
       const stableName = labels['coolify.resourceName'] || containerDisplayName(container);
       const externalUrl = externalUrlForContainer(container);
+      const instanceName = hostnameForUrl(externalUrl) || humanizeName(stableName);
+      const hasMultipleProfileInstances = profile && profileCounts.get(profile.id) > 1;
+      const appId = 'discovered-' + (profile ? profile.id + '-' : '') + slugify(stableName);
 
       return {
-        id: 'discovered-' + (profile ? profile.id + '-' : '') + slugify(stableName),
-        name: profile ? profile.name : humanizeName(rawName),
+        id: appId,
+        name: profile
+          ? profile.name + (hasMultipleProfileInstances ? ' · ' + instanceName : '')
+          : humanizeName(rawName),
+        instanceName,
         publisher: profile ? profile.publisher : labels['coolify.projectName'] || 'Docker',
         category: profile ? profile.category : 'Web Apps',
-        summary: profile ? profile.description : 'Bu sunucuda önceden kurulmuş ve çalışan uygulama.',
+        summary: profile ? profile.description : 'Bu sunucuda önceden kurulmuş uygulama.',
         description: profile ? profile.description : 'FoxOS bu uygulamayı mevcut Docker kurulumundan otomatik olarak keşfetti.',
         image: container.Image,
+        logoUrl: profile && profile.logoUrl
+          ? profile.logoUrl
+          : externalUrl ? '/api/apps/' + encodeURIComponent(appId) + '/icon' : null,
         containerPort: port ? port.PrivatePort : null,
         defaultPort: port ? port.PublicPort : null,
         docsUrl: null,
@@ -321,12 +371,12 @@ function discoveredAppStates(containers, catalogApps) {
         installed: true,
         installable: false,
         managedByFoxOS: false,
-        canManage: false,
+        canManage: true,
         installationSource: labels['coolify.managed'] === 'true' ? 'coolify' : 'docker',
         state: container.State || 'unknown',
         status: container.Status || null,
         containerId: container.Id,
-        containerName: containerDisplayName(container),
+        containerName: dockerContainerName(container),
         hostPort: port ? port.PublicPort : null,
         bindAddress: port ? port.IP || null : null,
         externalUrl: externalUrl && profile && profile.openPath
@@ -351,6 +401,7 @@ function stateForCatalogApp(catalogApp, containers) {
       status: null,
       containerId: null,
       containerName: null,
+      instanceName: null,
       hostPort: null,
       bindAddress: null,
       externalUrl: null
@@ -362,21 +413,25 @@ function stateForCatalogApp(catalogApp, containers) {
     container.Labels[APP_ID_LABEL] === catalogApp.id
   );
   const port = publishedPortForContainer(container, catalogApp.containerPort);
+  const externalUrl = externalUrlForContainer(container);
 
   return {
     ...catalogApp,
     installed: true,
     installable: true,
     managedByFoxOS,
-    canManage: managedByFoxOS,
-    installationSource: managedByFoxOS ? 'foxos' : 'docker',
+    canManage: true,
+    installationSource: managedByFoxOS
+      ? 'foxos'
+      : container.Labels && container.Labels['coolify.managed'] === 'true' ? 'coolify' : 'docker',
     state: container.State || 'unknown',
     status: container.Status || null,
     containerId: container.Id,
-    containerName: containerDisplayName(container),
+    containerName: dockerContainerName(container),
+    instanceName: hostnameForUrl(externalUrl) || dockerContainerName(container),
     hostPort: port && port.PublicPort ? port.PublicPort : null,
     bindAddress: port && port.IP ? port.IP : null,
-    externalUrl: externalUrlForContainer(container)
+    externalUrl
   };
 }
 

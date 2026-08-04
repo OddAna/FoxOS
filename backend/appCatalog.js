@@ -1,3 +1,5 @@
+const DASHBOARD_ICON_BASE = 'https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/';
+
 const APP_CATALOG = Object.freeze([
   Object.freeze({
     id: 'uptime-kuma',
@@ -11,6 +13,7 @@ const APP_CATALOG = Object.freeze([
     defaultPort: 3001,
     accent: '#62e6a7',
     icon: 'activity',
+    logoUrl: DASHBOARD_ICON_BASE + 'uptime-kuma.svg',
     docsUrl: 'https://github.com/louislam/uptime-kuma',
     volumes: Object.freeze([
       Object.freeze({ name: 'foxos-app-uptime-kuma-data', target: '/app/data' })
@@ -31,6 +34,7 @@ const APP_CATALOG = Object.freeze([
     defaultPort: 8082,
     accent: '#8ba9ff',
     icon: 'logs',
+    logoUrl: DASHBOARD_ICON_BASE + 'dozzle.svg',
     docsUrl: 'https://github.com/amir20/dozzle',
     volumes: Object.freeze([]),
     binds: Object.freeze(['/var/run/docker.sock:/var/run/docker.sock:ro']),
@@ -50,6 +54,7 @@ const APP_CATALOG = Object.freeze([
     defaultPort: 8083,
     accent: '#ffbd66',
     icon: 'tools',
+    logoUrl: DASHBOARD_ICON_BASE + 'it-tools.svg',
     docsUrl: 'https://github.com/CorentinTh/it-tools',
     volumes: Object.freeze([]),
     binds: Object.freeze([]),
@@ -68,6 +73,7 @@ const APP_CATALOG = Object.freeze([
     defaultPort: 8084,
     accent: '#ff7a90',
     icon: 'document',
+    logoUrl: DASHBOARD_ICON_BASE + 'stirling-pdf.svg',
     docsUrl: 'https://github.com/Stirling-Tools/Stirling-PDF',
     volumes: Object.freeze([]),
     binds: Object.freeze([]),

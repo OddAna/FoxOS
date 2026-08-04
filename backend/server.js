@@ -6,6 +6,7 @@ const path = require('path');
 const { execFile } = require('child_process');
 const express = require('express');
 const { APP_CATALOG, getCatalogApp } = require('./appCatalog');
+const { resolveAppIcon } = require('./appIcon');
 const {
   catalogContainerForApp,
   containerName,
@@ -722,6 +723,27 @@ app.get('/api/apps', async (req, res) => {
     res.json({ apps: await getCatalogState() });
   } catch (error) {
     res.status(503).json({ error: error.message });
+  }
+});
+
+app.get('/api/apps/:appId/icon', async (req, res) => {
+  try {
+    const appState = (await getCatalogState()).find((candidate) => candidate.id === req.params.appId);
+    if (!appState || !appState.installed || !appState.externalUrl) {
+      return res.status(404).json({ error: 'Application icon source is not available' });
+    }
+
+    const icon = await resolveAppIcon(appState);
+    if (!icon) {
+      return res.status(404).json({ error: 'Application icon was not found' });
+    }
+
+    res.setHeader('Content-Type', icon.contentType);
+    res.setHeader('Content-Length', icon.buffer.length);
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.end(icon.buffer);
+  } catch (error) {
+    res.status(502).json({ error: error.message });
   }
 });
 

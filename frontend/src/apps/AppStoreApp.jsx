@@ -6,6 +6,7 @@ import {
   Compass,
   Database,
   Download,
+  ExternalLink,
   FileText,
   Film,
   Globe,
@@ -15,6 +16,7 @@ import {
   RotateCw,
   Search,
   Server,
+  Settings,
   Square,
   Terminal,
   Trash2,
@@ -44,6 +46,7 @@ const APP_VISUALS = {
   'it-tools': { icon: <Wrench size={38} color="#f59e0b" /> },
   'stirling-pdf': { icon: <FileText size={38} color="#ef4444" /> }
 };
+const DEFAULT_APP_LOGO = 'https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/docker.svg';
 
 const decorateApp = (app) => ({
   ...app,
@@ -51,6 +54,30 @@ const decorateApp = (app) => ({
   appType: 'webapp',
   ...APP_VISUALS[app.id]
 });
+
+const AppLogo = ({ app, size = 40 }) => {
+  const [sourceIndex, setSourceIndex] = useState(0);
+  const logoSources = [app.logoUrl, DEFAULT_APP_LOGO].filter((source, index, sources) => (
+    source && sources.indexOf(source) === index
+  ));
+
+  useEffect(() => {
+    setSourceIndex(0);
+  }, [app.logoUrl]);
+
+  if (logoSources[sourceIndex]) {
+    return (
+      <img
+        src={logoSources[sourceIndex]}
+        alt={`${app.name} logosu`}
+        onError={() => setSourceIndex((current) => current + 1)}
+        style={{ width: size, height: size, objectFit: 'contain', display: 'block' }}
+      />
+    );
+  }
+
+  return app.icon || <Server size={size} color="#0ea5e9" />;
+};
 
 const AppStoreApp = () => {
   const [activeCategory, setActiveCategory] = useState('kesfet');
@@ -88,7 +115,10 @@ const AppStoreApp = () => {
   }, [loadApps]);
 
   useEffect(() => {
-    const closeMenu = () => setActiveMenu(null);
+    const closeMenu = (event) => {
+      if (event.target.closest?.('[data-app-menu]')) return;
+      setActiveMenu(null);
+    };
     window.addEventListener('click', closeMenu);
     return () => window.removeEventListener('click', closeMenu);
   }, []);
@@ -120,7 +150,10 @@ const AppStoreApp = () => {
     setActiveMenu(null);
     setActionRunning((current) => ({ ...current, [app.id]: action }));
     try {
-      await apiFetch(`/api/apps/${app.id}/${action}`, { method: 'POST' });
+      const actionPath = app.managedByFoxOS
+        ? `/api/apps/${app.id}/${action}`
+        : `/api/containers/${app.containerId}/${action}`;
+      await apiFetch(actionPath, { method: 'POST' });
       await loadApps({ quiet: true });
     } catch (error) {
       showDialog({ title: 'İşlem Hatası', message: error.message, type: 'error' });
@@ -181,6 +214,32 @@ const AppStoreApp = () => {
     window.open(`http://${hostname}:${app.hostPort}`, '_blank', 'noopener,noreferrer');
   };
 
+  const handleSettings = (event, app) => {
+    event.stopPropagation();
+    setActiveMenu(null);
+    const accessAddress = app.externalUrl || (app.hostPort
+      ? `${app.bindAddress || 'sunucu'}:${app.hostPort}`
+      : 'Yayınlanmış adres yok');
+    const managementSource = app.managedByFoxOS
+      ? 'FoxOS'
+      : app.installationSource === 'coolify' ? 'Coolify' : 'Docker';
+
+    showDialog({
+      title: `${app.name} Ayarları`,
+      type: 'info',
+      message: (
+        <div style={{ display: 'grid', gap: '8px', wordBreak: 'break-word' }}>
+          <div><strong>Durum:</strong> {app.status || app.state}</div>
+          <div><strong>Instance:</strong> {app.instanceName || app.containerName}</div>
+          <div><strong>Container:</strong> {app.containerName}</div>
+          <div><strong>İmaj:</strong> {app.image}</div>
+          <div><strong>Yönetim:</strong> {managementSource}</div>
+          <div><strong>Erişim:</strong> {accessAddress}</div>
+        </div>
+      )
+    });
+  };
+
   const displayedApps = useMemo(() => {
     if (searchQuery) {
       const query = searchQuery.toLocaleLowerCase('tr-TR');
@@ -215,6 +274,9 @@ const AppStoreApp = () => {
       />
       <button
         type="button"
+        data-app-menu
+        aria-label={`${app.name} seçenekleri`}
+        title={`${app.name} seçenekleri`}
         onClick={(event) => {
           event.stopPropagation();
           const menuId = `${app.id}-${suffix}`;
@@ -229,12 +291,21 @@ const AppStoreApp = () => {
         <MoreVertical size={suffix === 'featured' ? 16 : 14} />
       </button>
       {activeMenu === `${app.id}-${suffix}` && (
-        <div style={{ position: 'absolute', top: '100%', right: suffix === 'featured' ? '90px' : '70px', background: 'rgba(30, 30, 35, 0.95)', backdropFilter: 'blur(10px)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', padding: '4px', zIndex: 10, minWidth: '150px', boxShadow: '0 10px 25px rgba(0,0,0,0.5)' }}>
-          <div onClick={(event) => runAction(event, app, 'start')} style={{ padding: '8px 12px', fontSize: '13px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '8px' }} className="menu-item"><Play size={14} /> Başlat</div>
-          <div onClick={(event) => runAction(event, app, 'stop')} style={{ padding: '8px 12px', fontSize: '13px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '8px' }} className="menu-item"><Square size={14} /> Durdur</div>
+        <div data-app-menu style={{ position: 'absolute', top: suffix === 'featured' ? '100%' : 'auto', bottom: suffix === 'featured' ? 'auto' : '100%', right: suffix === 'featured' ? '90px' : '70px', background: 'rgba(30, 30, 35, 0.95)', backdropFilter: 'blur(10px)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', padding: '4px', zIndex: 10, minWidth: '150px', boxShadow: '0 10px 25px rgba(0,0,0,0.5)' }}>
+          <div onClick={(event) => handleOpenApp(event, app)} style={{ padding: '8px 12px', fontSize: '13px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '8px' }} className="menu-item"><ExternalLink size={14} /> Aç</div>
+          {app.state === 'running' ? (
+            <div onClick={(event) => runAction(event, app, 'stop')} style={{ padding: '8px 12px', fontSize: '13px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '8px' }} className="menu-item"><Square size={14} /> Durdur</div>
+          ) : (
+            <div onClick={(event) => runAction(event, app, 'start')} style={{ padding: '8px 12px', fontSize: '13px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '8px' }} className="menu-item"><Play size={14} /> Başlat</div>
+          )}
           <div onClick={(event) => runAction(event, app, 'restart')} style={{ padding: '8px 12px', fontSize: '13px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '8px' }} className="menu-item"><RotateCw size={14} /> Yeniden Başlat</div>
-          <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '4px 0' }} />
-          <div onClick={(event) => handleUninstall(event, app)} style={{ padding: '8px 12px', fontSize: '13px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '8px', color: '#ff5f56' }} className="menu-item"><Trash2 size={14} /> Sil</div>
+          <div onClick={(event) => handleSettings(event, app)} style={{ padding: '8px 12px', fontSize: '13px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '8px' }} className="menu-item"><Settings size={14} /> Ayarlar</div>
+          {app.managedByFoxOS && (
+            <>
+              <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '4px 0' }} />
+              <div onClick={(event) => handleUninstall(event, app)} style={{ padding: '8px 12px', fontSize: '13px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '8px', color: '#ff5f56' }} className="menu-item"><Trash2 size={14} /> Sil</div>
+            </>
+          )}
         </div>
       )}
     </>
@@ -299,7 +370,7 @@ const AppStoreApp = () => {
                 </div>
               </div>
               <div style={{ width: '120px', height: '120px', background: 'rgba(255,255,255,0.9)', padding: '20px', borderRadius: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 20px 40px rgba(0,0,0,0.2)', zIndex: 1 }}>
-                {featuredApp.icon}
+                <AppLogo app={featuredApp} size={80} />
               </div>
             </div>
           </div>
@@ -325,7 +396,7 @@ const AppStoreApp = () => {
               {displayedApps.map((app) => (
                 <div key={app.id} style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '16px', padding: '20px', display: 'flex', flexDirection: 'column', minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '16px' }}>
-                    <div style={{ width: '60px', height: '60px', flex: '0 0 60px', borderRadius: '14px', background: 'rgba(255,255,255,0.9)', padding: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{app.icon || <Server size={38} color="#0ea5e9" />}</div>
+                    <div style={{ width: '60px', height: '60px', flex: '0 0 60px', borderRadius: '14px', background: 'rgba(255,255,255,0.9)', padding: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><AppLogo app={app} /></div>
                     <div style={{ minWidth: 0 }}>
                       <h3 style={{ margin: '0 0 4px 0', fontSize: '16px', fontWeight: 'bold' }}>{app.name}</h3>
                       <div style={{ fontSize: '12px', color: '#888', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{app.developer}</div>

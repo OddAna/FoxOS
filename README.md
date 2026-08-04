@@ -149,10 +149,14 @@ explicitly remove a FoxOS-owned volume when requested.
 
 The store also inspects the live Docker inventory. Existing catalog images and
 user-facing Docker or Coolify applications with a published port or proxy route
-appear as installed without being re-created. These discovered applications are
-read-only in the store so FoxOS cannot accidentally remove a deployment owned by
-another platform. Databases, workers, agents, reverse proxies, and other internal
-dependency containers are not presented as standalone store applications.
+appear as installed without being re-created. Every discovered container remains
+a separate application instance, so multiple WordPress sites or repeated app
+deployments do not collapse into one card. The Store can open, start, stop, and
+restart these existing containers; only FoxOS-owned installations can be deleted
+from Store. Known applications use their project logos, while custom applications
+use the icon declared by their own web route and fall back to the Docker mark when
+they do not publish one. Databases, workers, agents, reverse proxies, and other
+internal dependency containers are not presented as standalone store applications.
 
 ## Operations
 
