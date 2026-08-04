@@ -94,7 +94,7 @@ without changing FoxOS behavior.
 ### Milestone 4 progress: Secrets, persistence and recovery gate
 
 - [x] Create owner-only local encryption state and authenticated AES-256-GCM
-  envelopes for secret revisions and backup archives.
+  envelopes for secret revisions, backup-adapter credentials and archives.
 - [x] Separate ordinary environment values from encrypted, revision-pinned
   secret references and inject values only while creating the target runtime.
 - [x] Keep secret values out of registry snapshots, manifests, plans, operation

@@ -303,7 +303,8 @@ docker compose exec -T foxos node /app/recoveryCli.js configure-s3 \
 
 The credential JSON has exactly two fields: `accessKeyId` and
 `secretAccessKey`. Keep that input file owner-only and remove it after the
-configuration is stored.
+configuration is stored. FoxOS persists the adapter credential itself only as
+an authenticated encrypted envelope; it is not written to the config file.
 
 `DATA_ROOT/security/master-key` is the local encryption root. Losing it makes
 encrypted secrets and archives unreadable, so it must be protected separately
