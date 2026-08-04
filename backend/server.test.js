@@ -375,6 +375,10 @@ test('health is public while management APIs require a session', async () => {
   assert.equal(adoptionsResponse.status, 401);
   const routesResponse = await fetch(baseUrl() + '/api/routes');
   assert.equal(routesResponse.status, 401);
+  const secretsResponse = await fetch(baseUrl() + '/api/secrets');
+  assert.equal(secretsResponse.status, 401);
+  const recoveryResponse = await fetch(baseUrl() + '/api/recovery/status');
+  assert.equal(recoveryResponse.status, 401);
 });
 
 test('setup creates an authenticated session and unlocks the workspace', async () => {
@@ -416,6 +420,39 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   });
   assert.equal(terminalResponse.status, 200);
   assert.equal((await terminalResponse.json()).output, 'foxos-ok');
+
+  const secretResponse = await fetch(baseUrl() + '/api/secrets', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'server-test-token', value: 'server-test-sensitive-value' })
+  });
+  assert.equal(secretResponse.status, 201);
+  const secretPayload = await secretResponse.json();
+  assert.equal(secretPayload.secret.valueIncluded, false);
+  assert.equal(JSON.stringify(secretPayload).includes('server-test-sensitive-value'), false);
+
+  const testResourceId = 'res_' + '5'.repeat(32);
+  const environmentResponse = await fetch(baseUrl() + '/api/resources/' + testResourceId + '/environment-revisions', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      ordinary: { FOXOS_MODE: 'test' },
+      secretRefs: { FOXOS_API_TOKEN: 'server-test-token' }
+    })
+  });
+  assert.equal(environmentResponse.status, 201);
+  const environmentPayload = await environmentResponse.json();
+  assert.equal(environmentPayload.environment.secretValuesIncluded, false);
+  assert.equal(JSON.stringify(environmentPayload).includes('server-test-sensitive-value'), false);
+
+  const recoveryResponse = await fetch(baseUrl() + '/api/recovery/status', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(recoveryResponse.status, 200);
+  const recoveryPayload = await recoveryResponse.json();
+  assert.equal(recoveryPayload.encryption.initialized, true);
+  assert.equal(recoveryPayload.backup.ready, false);
+  assert.equal(recoveryPayload.backup.credentialsIncluded, false);
 
   const initialAppsResponse = await fetch(baseUrl() + '/api/apps', {
     headers: { Cookie: cookie }

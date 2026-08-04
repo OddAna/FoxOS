@@ -3,9 +3,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { atomicWriteJson } = require('./resourceRegistry');
 
-const MANIFEST_SCHEMA_VERSION = 2;
-const PLAN_SCHEMA_VERSION = 2;
-const OPERATION_SCHEMA_VERSION = 2;
+const MANIFEST_SCHEMA_VERSION = 3;
+const PLAN_SCHEMA_VERSION = 3;
+const OPERATION_SCHEMA_VERSION = 3;
 const PILOT_LABEL = 'com.foxos.adoption.disposable';
 const PILOT_NAME_PATTERN = /^foxos-adoption-lab(?:-[a-z0-9-]+)?$/;
 const ID_PATTERN = /^(plan|op)_[a-f0-9]{24,64}$/;
@@ -77,12 +77,23 @@ function envMap(entries = []) {
   }));
 }
 
-function unresolvedEnvironmentNames(containerEnv = [], imageEnv = []) {
+function environmentOverrides(containerEnv = [], imageEnv = []) {
   const imageValues = envMap(imageEnv);
   return Array.from(envMap(containerEnv).entries())
     .filter(([name, value]) => !imageValues.has(name) || imageValues.get(name) !== value)
+    .sort(([left], [right]) => left.localeCompare(right));
+}
+
+function unresolvedEnvironmentNames(containerEnv = [], imageEnv = []) {
+  return environmentOverrides(containerEnv, imageEnv)
     .map(([name]) => name)
     .sort();
+}
+
+function secretValuesEqual(left, right) {
+  const leftBuffer = Buffer.from(String(left), 'utf8');
+  const rightBuffer = Buffer.from(String(right), 'utf8');
+  return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer);
 }
 
 function arraysEqual(left, right) {
@@ -214,15 +225,17 @@ function createAdoptionManager({
   dockerArchiveRequest,
   resourceRegistry,
   routeManager,
+  secretManager,
+  backupManager,
   clock = () => new Date(),
   randomUUID = () => crypto.randomUUID(),
   wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))
 }) {
   if (
     !dataRoot || typeof dockerRequest !== 'function' || typeof dockerArchiveRequest !== 'function' ||
-    !resourceRegistry || !routeManager
+    !resourceRegistry || !routeManager || !secretManager || !backupManager
   ) {
-    throw new Error('Adoption manager requires data root, Docker clients, Resource Registry and Route Manager');
+    throw new Error('Adoption manager requires data root, Docker clients, registry, route, secret and backup managers');
   }
 
   const adoptionRoot = path.join(dataRoot, 'adoption');
@@ -258,7 +271,7 @@ function createAdoptionManager({
   function getOperation(operationId) {
     const operation = readJson(operationPath(operationId), null);
     if (!operation) throw new AdoptionError('Adoption operation was not found', 404, 'operation-not-found');
-    if (![1, OPERATION_SCHEMA_VERSION].includes(operation.schemaVersion)) {
+    if (![1, 2, OPERATION_SCHEMA_VERSION].includes(operation.schemaVersion)) {
       throw new AdoptionError('Unsupported adoption operation schema', 409, 'unsupported-operation-schema');
     }
     return operation;
@@ -320,10 +333,21 @@ function createAdoptionManager({
     const details = await dockerRequest('GET', '/containers/' + resource.runtime.containerId + '/json');
     const imageDetails = await dockerRequest('GET', '/images/' + encodeURIComponent(details.Image) + '/json');
     const imageDigests = (imageDetails.RepoDigests || []).filter((entry) => /@sha256:[a-f0-9]{64}$/i.test(entry)).sort();
-    const unresolvedEnv = unresolvedEnvironmentNames(
+    const overrideEntries = environmentOverrides(
       details.Config && details.Config.Env || [],
       imageDetails.Config && imageDetails.Config.Env || []
     );
+    const overrideValues = new Map(overrideEntries);
+    const environmentRevision = secretManager.getEnvironmentRevision(resourceId);
+    const classifiedOrdinary = environmentRevision ? environmentRevision.ordinary : [];
+    const classifiedSecretRefs = environmentRevision ? environmentRevision.secretRefs : [];
+    const classifiedNames = new Set([
+      ...classifiedOrdinary.map((entry) => entry.name),
+      ...classifiedSecretRefs.map((entry) => entry.name)
+    ]);
+    const unresolvedEnv = overrideEntries
+      .map(([name]) => name)
+      .filter((name) => !classifiedNames.has(name));
 
     const blockers = [];
     const warnings = [];
@@ -334,7 +358,35 @@ function createAdoptionManager({
     const hostConfig = details.HostConfig || {};
 
     if (!imageDigests.length) addBlocker('image-digest-missing', 'The local image has no immutable repository digest.');
-    if (unresolvedEnv.length) addBlocker('environment-unresolved', 'Container environment overrides require secret classification.');
+    if (unresolvedEnv.length) addBlocker('environment-unresolved', 'Container environment overrides require local classification.');
+    const extraClassifications = Array.from(classifiedNames).filter((name) => !overrideValues.has(name));
+    if (extraClassifications.length) {
+      addBlocker('environment-classification-stale', 'Environment revision classifies names that are not source overrides.');
+    }
+    for (const entry of classifiedOrdinary) {
+      if (overrideValues.has(entry.name) && overrideValues.get(entry.name) !== entry.value) {
+        addBlocker('ordinary-environment-mismatch', 'An ordinary environment value does not match the source container.');
+        break;
+      }
+    }
+    for (const entry of classifiedSecretRefs) {
+      if (!overrideValues.has(entry.name)) continue;
+      let value;
+      try {
+        value = secretManager.resolveSecret(entry.secretId, entry.revision);
+      } catch {
+        addBlocker('secret-reference-unavailable', 'An encrypted secret revision cannot be resolved.');
+        break;
+      }
+      if (!secretValuesEqual(value, overrideValues.get(entry.name))) {
+        addBlocker('secret-source-mismatch', 'An encrypted secret does not match the source container override.');
+        break;
+      }
+    }
+    const backupStatus = backupManager.status();
+    if (!backupStatus.ready || !backupStatus.offHost) {
+      addBlocker('off-host-backup-unconfigured', 'Encrypted off-host backup and restore verification are required.');
+    }
     if (!arraysEqual(details.Config && details.Config.Cmd, imageDetails.Config && imageDetails.Config.Cmd)) {
       addBlocker('command-override-unresolved', 'Container command override requires explicit review.');
     }
@@ -425,12 +477,20 @@ function createAdoptionManager({
           timeoutSeconds: 30
         },
         environment: {
-          ordinary: [],
-          secretRefs: [],
+          revision: environmentRevision ? environmentRevision.revision : null,
+          ordinary: classifiedOrdinary,
+          secretRefs: classifiedSecretRefs,
           unresolvedNames: unresolvedEnv
         },
         persistence: {
           consistency: 'filesystem-static',
+          backupPolicy: {
+            required: true,
+            encryptedBeforeUpload: true,
+            target: backupStatus.adapter,
+            offHost: backupStatus.offHost,
+            restoreVerificationRequired: true
+          },
           volumes: desiredMount ? [{
             name: desiredMount.name,
             destination: desiredMount.destination,
@@ -470,12 +530,15 @@ function createAdoptionManager({
       sourceSnapshotId: snapshot.snapshotId,
       sourceFingerprint,
       sourceContainerId: resource.runtime.containerId,
+      sourceEnvironmentFingerprint: secretManager.fingerprintEnvironment(overrideEntries.map(([name, value]) => `${name}=${value}`)),
       manifestRevision,
       status: blockers.length ? 'blocked' : 'ready',
       checks,
       actions: blockers.length ? [] : [
-        'archive-named-volume',
-        'verify-archive-restore-in-temporary-volume',
+        'archive-and-encrypt-named-volume',
+        'upload-encrypted-archive-off-host',
+        'download-and-authenticate-off-host-archive',
+        'verify-downloaded-archive-restore-in-temporary-volume',
         'stop-source-container',
         'preserve-source-as-rollback-container',
         'create-foxos-managed-container-from-manifest',
@@ -495,6 +558,8 @@ function createAdoptionManager({
       guarantees: {
         runtimeMutated: false,
         secretValuesIncluded: false,
+        offHostBackupRequired: true,
+        downloadedRestoreRequired: true,
         existingNonDisposableResourcesMutable: false,
         coolifyResourcesMutable: false
       }
@@ -511,7 +576,7 @@ function createAdoptionManager({
     return plan;
   }
 
-  function managedContainerPayload(plan) {
+  function managedContainerPayload(plan, environmentEntries) {
     const manifest = plan.manifest;
     const desired = manifest.desired;
     const exposedPorts = Object.fromEntries(
@@ -522,7 +587,7 @@ function createAdoptionManager({
       [{ HostIp: port.hostIp, HostPort: String(port.hostPort) }]
     ]));
     const healthUrl = `http://127.0.0.1:${desired.health.privatePort}${desired.health.path}`;
-    return {
+    const payload = {
       Image: desired.runtime.image.reference,
       Labels: {
         'com.foxos.managed': 'true',
@@ -554,6 +619,8 @@ function createAdoptionManager({
         NanoCpus: desired.resources.nanoCpus || 0
       }
     };
+    if (environmentEntries.length) payload.Env = environmentEntries;
+    return payload;
   }
 
   async function waitForContainer(containerId, { requireHealthy, timeoutSeconds = 30 }) {
@@ -634,7 +701,6 @@ function createAdoptionManager({
   }
 
   async function backupVolumes(plan, operationId) {
-    const operationBackupRoot = path.join(backupsRoot, operationId);
     const backups = [];
     for (const volume of plan.manifest.desired.persistence.volumes) {
       const archive = await dockerArchiveRequest(
@@ -643,16 +709,23 @@ function createAdoptionManager({
         null
       );
       const contentDigest = tarContentDigest(archive);
-      const archiveName = 'volume-' + hash(volume.name, 24) + '.tar';
-      const archiveFile = path.join(operationBackupRoot, archiveName);
-      atomicWriteBuffer(archiveFile, archive);
-      const restoreProof = await verifyBackupRestore(plan, operationId, volume, archive, contentDigest);
-      backups.push({
+      const protectedBackup = await backupManager.protectArchive({
+        operationId,
+        resourceId: plan.resourceId,
         volumeName: volume.name,
+        archive,
+        contentDigest
+      });
+      const restoreProof = await verifyBackupRestore(
+        plan,
+        operationId,
+        volume,
+        protectedBackup.archive,
+        contentDigest
+      );
+      backups.push({
+        ...protectedBackup.record,
         destination: volume.destination,
-        archiveFile: path.relative(adoptionRoot, archiveFile),
-        archiveBytes: archive.length,
-        contentDigest,
         restoreProof
       });
     }
@@ -708,6 +781,7 @@ function createAdoptionManager({
       healthProof: null,
       route: plan.manifest.desired.routes[0] || null,
       routeProof: null,
+      environmentProof: null,
       rollback: { available: false, confirmation: rollbackConfirmation(operationId) },
       secretValuesIncluded: false
     };
@@ -730,6 +804,18 @@ function createAdoptionManager({
       }
 
       const sourceDetails = await dockerRequest('GET', '/containers/' + resource.runtime.containerId + '/json');
+      const sourceImage = await dockerRequest('GET', '/images/' + encodeURIComponent(sourceDetails.Image) + '/json');
+      const currentEnvironmentOverrides = environmentOverrides(
+        sourceDetails.Config && sourceDetails.Config.Env || [],
+        sourceImage.Config && sourceImage.Config.Env || []
+      );
+      const currentEnvironmentFingerprint = secretManager.fingerprintEnvironment(
+        currentEnvironmentOverrides.map(([name, value]) => `${name}=${value}`)
+      );
+      if (currentEnvironmentFingerprint !== plan.sourceEnvironmentFingerprint) {
+        throw new AdoptionError('Source environment drifted after planning', 409, 'environment-plan-stale');
+      }
+      const resolvedEnvironment = secretManager.resolveEnvironment(plan.manifest.desired.environment);
       sourceId = resource.runtime.containerId;
       sourceName = resource.name;
       sourceWasRunning = sourceDetails.State && sourceDetails.State.Status === 'running';
@@ -741,6 +827,18 @@ function createAdoptionManager({
         originalState: 'running'
       };
       operation.backups = await backupVolumes(plan, operationId);
+      operation.environmentProof = {
+        revision: plan.manifest.desired.environment.revision,
+        ordinaryNames: plan.manifest.desired.environment.ordinary.map((entry) => entry.name),
+        secretRefs: plan.manifest.desired.environment.secretRefs.map((entry) => ({
+          name: entry.name,
+          secretId: entry.secretId,
+          revision: entry.revision,
+          keyId: entry.keyId
+        })),
+        secretValuesIncluded: false,
+        resolvedAt: new Date(clock()).toISOString()
+      };
       atomicWriteJson(operationPath(operationId), operation);
 
       await dockerRequest('POST', '/containers/' + sourceId + '/stop?t=10');
@@ -750,7 +848,7 @@ function createAdoptionManager({
       const created = await dockerRequest(
         'POST',
         '/containers/create?name=' + encodeURIComponent(sourceName),
-        managedContainerPayload(plan)
+        managedContainerPayload(plan, resolvedEnvironment)
       );
       targetId = created.Id;
       await dockerRequest('POST', '/containers/' + targetId + '/start');
@@ -865,7 +963,9 @@ function createAdoptionManager({
       scope: 'disposable-pilot-only',
       plans: listJsonFiles(plansRoot),
       operations: listJsonFiles(operationsRoot),
-      routes: routeManager.status()
+      routes: routeManager.status(),
+      secrets: secretManager.status(),
+      recovery: backupManager.status()
     };
   }
 
@@ -892,5 +992,6 @@ module.exports = {
   resourceFingerprint,
   rollbackConfirmation,
   tarContentDigest,
+  environmentOverrides,
   unresolvedEnvironmentNames
 };

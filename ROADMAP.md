@@ -91,6 +91,21 @@ without changing FoxOS behavior.
 - [ ] Generalize the fixed pilot path into conflict-checked domain/path records
   for normal applications.
 
+### Milestone 4 progress: Secrets, persistence and recovery gate
+
+- [x] Create owner-only local encryption state and authenticated AES-256-GCM
+  envelopes for secret revisions and backup archives.
+- [x] Separate ordinary environment values from encrypted, revision-pinned
+  secret references and inject values only while creating the target runtime.
+- [x] Keep secret values out of registry snapshots, manifests, plans, operation
+  records, list/status APIs and CLI output.
+- [x] Require an off-host S3-compatible HTTPS target before a disposable plan
+  can become ready.
+- [x] Encrypt before local persistence/upload, then HEAD, download, digest-check,
+  authenticate, decrypt and restore the downloaded object before source stop.
+- [ ] Add scheduled retention, independently protected recovery-key export,
+  database-consistent snapshots and full-machine disaster restore.
+
 ## Stable release system
 
 - [x] Freeze public `main` separately from ongoing development.
@@ -126,12 +141,14 @@ without changing FoxOS behavior.
 
 ## Environment and secrets
 
-- [ ] Store secrets encrypted at rest with strict file permissions and scoped
+- [x] Store secrets encrypted at rest with strict file permissions and scoped
   runtime injection.
-- [ ] Mask secrets in the UI, API responses, logs, exports and diagnostics.
-- [ ] Separate ordinary environment variables from secrets and support safe
-  revision, rotation, import and backup boundaries.
-- [ ] Prevent secret leakage through container discovery or repository manifests.
+- [x] Mask secrets in API responses, local records, plans, exports and
+  diagnostics used by the disposable pilot.
+- [x] Separate ordinary environment variables from secrets and pin immutable
+  secret/environment revisions.
+- [ ] Add reviewed import/rotation controls to the existing FoxOS interface.
+- [x] Prevent secret leakage through container discovery or repository manifests.
 
 ## Domains, proxy and TLS
 
@@ -152,6 +169,8 @@ without changing FoxOS behavior.
 
 - [x] Inventory named volumes and bind mounts, including provider-owned paths.
 - [ ] Configure scheduled encrypted backups with retention and off-host targets.
+- [x] Require an encrypted off-host upload/download plus actual temporary-volume
+  restore proof for every disposable adoption operation.
 - [ ] Back up resource manifests, deployment metadata, environment configuration
   and proxy/TLS state without exposing secrets.
 - [ ] Provide per-resource restore and full-disaster restore workflows.

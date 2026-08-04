@@ -10,6 +10,9 @@ const {
   tarContentDigest,
   unresolvedEnvironmentNames
 } = require('./adoptionManager');
+const { createBackupManager } = require('./backupManager');
+const { createEncryptionStore } = require('./encryptionStore');
+const { createSecretManager } = require('./secretManager');
 
 const RESOURCE_ID = 'res_' + '1'.repeat(32);
 const SOURCE_ID = 'a'.repeat(64);
@@ -83,7 +86,7 @@ function resource(overrides = {}) {
   };
 }
 
-function sourceDetails(state = 'running') {
+function sourceDetails(state = 'running', environment = ['BASE=true']) {
   return {
     Image: IMAGE_ID,
     Config: {
@@ -93,7 +96,7 @@ function sourceDetails(state = 'running') {
         'com.docker.compose.project': 'foxos-adoption-lab',
         'com.docker.compose.service': 'web'
       },
-      Env: ['BASE=true'],
+      Env: environment,
       Cmd: ['hello'],
       Entrypoint: ['/entrypoint'],
       User: '65532',
@@ -113,12 +116,12 @@ function sourceDetails(state = 'running') {
   };
 }
 
-function imageDetails() {
+function imageDetails(environment = ['BASE=true']) {
   return {
     Id: IMAGE_ID,
     RepoDigests: [IMAGE_DIGEST],
     Config: {
-      Env: ['BASE=true'],
+      Env: environment,
       Cmd: ['hello'],
       Entrypoint: ['/entrypoint'],
       User: '65532',
@@ -127,7 +130,14 @@ function imageDetails() {
   };
 }
 
-function createHarness({ resourceOverride = {}, failTargetHealth = false, failRouteActivation = false } = {}) {
+function createHarness({
+  resourceOverride = {},
+  failTargetHealth = false,
+  failRouteActivation = false,
+  sourceEnvironment = ['BASE=true'],
+  imageEnvironment = ['BASE=true'],
+  backupReady = true
+} = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-adoption-test-'));
   const calls = [];
   const archive = tarArchive('data/example.txt', 'foxos disposable backup\n');
@@ -181,10 +191,10 @@ function createHarness({ resourceOverride = {}, failTargetHealth = false, failRo
   async function dockerRequest(method, requestPath, payload = null) {
     calls.push({ method, requestPath, payload });
     if (method === 'GET' && requestPath === '/containers/' + SOURCE_ID + '/json') {
-      return sourceDetails(currentSourceState);
+      return sourceDetails(currentSourceState, sourceEnvironment);
     }
     if (method === 'GET' && requestPath === '/images/' + encodeURIComponent(IMAGE_ID) + '/json') {
-      return imageDetails();
+      return imageDetails(imageEnvironment);
     }
     if (method === 'POST' && requestPath === '/volumes/create') return { Name: payload.Name };
     if (method === 'DELETE' && requestPath.startsWith('/volumes/foxos-adoption-verify-')) return null;
@@ -232,12 +242,50 @@ function createHarness({ resourceOverride = {}, failTargetHealth = false, failRo
     throw new Error('Unexpected Docker archive request: ' + method + ' ' + requestPath);
   }
 
+  const encryptionStore = createEncryptionStore({ dataRoot: root });
+  const secretManager = createSecretManager({
+    dataRoot: root,
+    encryptionStore,
+    clock: () => new Date('2026-08-04T12:00:00.000Z'),
+    randomUUID: () => '00000000-0000-4000-8000-000000000088'
+  });
+  const storedObjects = new Map();
+  const backupManager = backupReady ? createBackupManager({
+    dataRoot: root,
+    encryptionStore,
+    objectStore: {
+      putObject: async ({ key, body, metadata }) => {
+        storedObjects.set(key, { body: Buffer.from(body), metadata: { ...metadata } });
+        return { etag: 'test-etag' };
+      },
+      headObject: async ({ key }) => {
+        const stored = storedObjects.get(key);
+        return { bytes: stored.body.length, etag: 'test-etag', metadata: stored.metadata };
+      },
+      getObject: async ({ key }) => Buffer.from(storedObjects.get(key).body)
+    },
+    objectStoreConfig: {
+      schemaVersion: 1,
+      adapter: 's3-compatible',
+      endpoint: 'https://objects.example.test',
+      bucket: 'foxos-backups',
+      prefix: 'foxos'
+    },
+    clock: () => new Date('2026-08-04T12:00:00.000Z')
+  }) : {
+    status: () => ({ ready: false, offHost: false, adapter: null }),
+    protectArchive: async () => {
+      throw new Error('Backup should not run when the plan is blocked');
+    }
+  };
   const manager = createAdoptionManager({
     dataRoot: root,
     dockerRequest,
     dockerArchiveRequest,
     resourceRegistry: registry,
     routeManager,
+    secretManager,
+    backupManager,
     clock: () => new Date('2026-08-04T12:00:00.000Z'),
     randomUUID: () => '00000000-0000-4000-8000-000000000099',
     wait: async () => {}
@@ -247,6 +295,7 @@ function createHarness({ resourceOverride = {}, failTargetHealth = false, failRo
     calls,
     currentResource,
     manager,
+    secretManager,
     routeCalls,
     root,
     runtime: () => ({ currentSourceState, sourceName, targetExists, targetPayload, routeActive })
@@ -272,10 +321,11 @@ test('manifest planning is deterministic, read-only and persists no secret value
     assert.equal(first.planId, second.planId);
     assert.equal(first.manifest.revision, second.manifest.revision);
     assert.equal(first.manifest.desired.runtime.image.reference, IMAGE_DIGEST);
-    assert.equal(first.manifest.schemaVersion, 2);
+    assert.equal(first.manifest.schemaVersion, 3);
     assert.equal(first.manifest.desired.routes[0].owner, 'foxos');
     assert.equal(first.manifest.desired.routes[0].publicPath, '/_foxos/apps/foxos-adoption-lab/');
     assert.deepEqual(first.manifest.desired.environment, {
+      revision: null,
       ordinary: [],
       secretRefs: [],
       unresolvedNames: []
@@ -334,8 +384,10 @@ test('apply proves backup restore and rollback restores the original source', as
     assert.equal(harness.runtime().targetPayload.Image, IMAGE_DIGEST);
     assert.equal(harness.runtime().targetPayload.Labels['com.foxos.resource.id'], RESOURCE_ID);
     assert.deepEqual(harness.runtime().targetPayload.HostConfig.SecurityOpt, ['no-new-privileges:true']);
-    const backupFile = path.join(harness.manager.paths.adoptionRoot, operation.backups[0].archiveFile);
+    const backupFile = path.join(harness.root, operation.backups[0].encryptedArchiveFile);
     assert.equal(fs.statSync(backupFile).mode & 0o777, 0o600);
+    assert.equal(operation.backups[0].plaintextArchiveStored, false);
+    assert.equal(operation.backups[0].remote.downloaded, true);
 
     const rolledBack = await harness.manager.rollbackOperation(operation.operationId, operation.rollback.confirmation);
     assert.equal(rolledBack.status, 'rolled-back');
@@ -408,7 +460,66 @@ test('environment comparison stores names only and backup digest rejects unsafe 
   );
 });
 
-test('schema 1 operation records remain readable for live rollback compatibility', () => {
+test('classified ordinary and encrypted secret overrides are pinned and injected without persistence leakage', async () => {
+  const harness = createHarness({
+    sourceEnvironment: [
+      'BASE=true',
+      'FOXOS_PILOT_MODE=disposable',
+      'FOXOS_PILOT_TOKEN=highly-sensitive-pilot-value'
+    ]
+  });
+  try {
+    harness.secretManager.putSecret('pilot-token', 'highly-sensitive-pilot-value');
+    const revision = harness.secretManager.createEnvironmentRevision(RESOURCE_ID, {
+      ordinary: { FOXOS_PILOT_MODE: 'disposable' },
+      secretRefs: { FOXOS_PILOT_TOKEN: 'pilot-token' }
+    });
+    const plan = await harness.manager.createPlan(RESOURCE_ID, {
+      confirmation: planDraftConfirmation(RESOURCE_ID),
+      healthPrivatePort: 80,
+      healthPath: '/'
+    });
+    assert.equal(plan.status, 'ready');
+    assert.equal(plan.manifest.desired.environment.revision, revision.revision);
+    const persistedPlan = fs.readFileSync(
+      path.join(harness.manager.paths.plansRoot, plan.planId + '.json'),
+      'utf8'
+    );
+    assert.equal(persistedPlan.includes('highly-sensitive-pilot-value'), false);
+
+    const operation = await harness.manager.applyPlan(plan.planId, plan.confirmation);
+    assert.deepEqual(harness.runtime().targetPayload.Env, [
+      'FOXOS_PILOT_MODE=disposable',
+      'FOXOS_PILOT_TOKEN=highly-sensitive-pilot-value'
+    ]);
+    const persistedOperation = fs.readFileSync(
+      path.join(harness.manager.paths.operationsRoot, operation.operationId + '.json'),
+      'utf8'
+    );
+    assert.equal(persistedOperation.includes('highly-sensitive-pilot-value'), false);
+    assert.equal(operation.environmentProof.secretValuesIncluded, false);
+  } finally {
+    fs.rmSync(harness.root, { recursive: true, force: true });
+  }
+});
+
+test('adoption stays blocked until an off-host backup adapter is configured', async () => {
+  const harness = createHarness({ backupReady: false });
+  try {
+    const plan = await harness.manager.createPlan(RESOURCE_ID, {
+      confirmation: planDraftConfirmation(RESOURCE_ID),
+      healthPrivatePort: 80,
+      healthPath: '/'
+    });
+    assert.equal(plan.status, 'blocked');
+    assert.equal(plan.checks.some((check) => check.code === 'off-host-backup-unconfigured'), true);
+    assert.deepEqual(plan.actions, []);
+  } finally {
+    fs.rmSync(harness.root, { recursive: true, force: true });
+  }
+});
+
+test('schema 1 and 2 operation records remain readable for live rollback compatibility', () => {
   const harness = createHarness();
   try {
     const operationId = 'op_' + '7'.repeat(32);
@@ -418,6 +529,12 @@ test('schema 1 operation records remain readable for live rollback compatibility
       JSON.stringify({ schemaVersion: 1, operationId, status: 'applied' })
     );
     assert.equal(harness.manager.getOperation(operationId).schemaVersion, 1);
+    const operationId2 = 'op_' + '8'.repeat(32);
+    fs.writeFileSync(
+      path.join(harness.manager.paths.operationsRoot, operationId2 + '.json'),
+      JSON.stringify({ schemaVersion: 2, operationId: operationId2, status: 'applied' })
+    );
+    assert.equal(harness.manager.getOperation(operationId2).schemaVersion, 2);
   } finally {
     fs.rmSync(harness.root, { recursive: true, force: true });
   }

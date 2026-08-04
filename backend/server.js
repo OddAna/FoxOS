@@ -5,8 +5,11 @@ const path = require('path');
 const { execFile } = require('child_process');
 const express = require('express');
 const { AdoptionError, createAdoptionManager } = require('./adoptionManager');
+const { createBackupManager } = require('./backupManager');
 const { createDockerClient } = require('./dockerClient');
+const { createEncryptionStore } = require('./encryptionStore');
 const { createRouteManager } = require('./routeManager');
+const { createSecretManager } = require('./secretManager');
 const { APP_CATALOG, getCatalogApp } = require('./appCatalog');
 const { resolveAppIcon } = require('./appIcon');
 const { SCHEMA_VERSION: RESOURCE_SCHEMA_VERSION, createResourceRegistry } = require('./resourceRegistry');
@@ -375,12 +378,23 @@ const routeManager = createRouteManager({
   networkName: process.env.FOXOS_ROUTE_NETWORK || 'foxos-routing',
   gatewayHost: process.env.FOXOS_ROUTE_GATEWAY_HOST || 'foxos-gateway'
 });
+const encryptionStore = createEncryptionStore({ dataRoot: DATA_ROOT });
+const secretManager = createSecretManager({
+  dataRoot: DATA_ROOT,
+  encryptionStore
+});
+const backupManager = createBackupManager({
+  dataRoot: DATA_ROOT,
+  encryptionStore
+});
 const adoptionManager = createAdoptionManager({
   dataRoot: DATA_ROOT,
   dockerRequest,
   dockerArchiveRequest: dockerClient.requestBuffer,
   resourceRegistry,
-  routeManager
+  routeManager,
+  secretManager,
+  backupManager
 });
 
 function sendAdoptionError(res, error, action) {
@@ -817,6 +831,50 @@ app.post('/api/resources/:resourceId/adoption-plan', async (req, res) => {
     res.status(201).json({ plan });
   } catch (error) {
     sendAdoptionError(res, error, 'Could not create adoption plan');
+  }
+});
+
+app.get('/api/secrets', (req, res) => {
+  try {
+    res.json({ ...secretManager.status(), secrets: secretManager.listSecrets() });
+  } catch (error) {
+    sendAdoptionError(res, error, 'Could not read encrypted secret metadata');
+  }
+});
+
+app.post('/api/secrets', (req, res) => {
+  try {
+    const secret = secretManager.putSecret(req.body && req.body.name, req.body && req.body.value);
+    res.status(201).json({ secret });
+  } catch (error) {
+    sendAdoptionError(res, error, 'Could not store encrypted secret');
+  }
+});
+
+app.get('/api/resources/:resourceId/environment-revision', (req, res) => {
+  try {
+    const environment = secretManager.getEnvironmentRevision(req.params.resourceId);
+    if (!environment) return res.status(404).json({ error: 'Environment revision was not found' });
+    res.json({ environment });
+  } catch (error) {
+    sendAdoptionError(res, error, 'Could not read environment revision');
+  }
+});
+
+app.post('/api/resources/:resourceId/environment-revisions', (req, res) => {
+  try {
+    const environment = secretManager.createEnvironmentRevision(req.params.resourceId, req.body || {});
+    res.status(201).json({ environment });
+  } catch (error) {
+    sendAdoptionError(res, error, 'Could not store environment revision');
+  }
+});
+
+app.get('/api/recovery/status', (req, res) => {
+  try {
+    res.json({ encryption: encryptionStore.status(), backup: backupManager.status() });
+  } catch (error) {
+    sendAdoptionError(res, error, 'Could not read recovery status');
   }
 });
 
