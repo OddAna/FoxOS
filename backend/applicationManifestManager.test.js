@@ -43,7 +43,7 @@ function resource(overrides = {}) {
         nanoCpus: 500000000,
         pidsLimit: 128
       },
-      environmentVariableCount: 0,
+      environmentVariableCount: 1,
       inspection: 'complete'
     },
     ports: [{ privatePort: 80, protocol: 'tcp', hostIp: '127.0.0.1', hostPort: 49152 }],
@@ -65,6 +65,7 @@ function imageProof(currentResource = resource()) {
     verifiedAt: '2026-08-04T20:00:00.000Z'
   };
   return {
+    guarantees: { environmentSupported: false },
     current: {
       resourceId: currentResource.id,
       operationId: 'iop_' + '3'.repeat(32),
@@ -126,6 +127,9 @@ test('a fully evidenced FoxOS resource finalizes into an owner-only server manif
   assert.equal(draft.gates.runtimeMutationIncluded, false);
   assert.equal(draft.desired.source.immutableReference, 'traefik/whoami@' + IMAGE_DIGEST);
   assert.equal(draft.desired.environment.valuesIncluded, false);
+  assert.equal(draft.desired.environment.observedVariableCount, 1);
+  assert.equal(draft.desired.environment.sourceDefaultVariableCount, 1);
+  assert.equal(draft.desired.environment.managedVariableCount, 0);
   assert.equal(draft.confirmation, applicationManifestConfirmation(draft.draftId));
 
   const manifest = manager.finalizeDraft(draft.draftId, draft.confirmation);

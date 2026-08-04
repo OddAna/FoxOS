@@ -187,12 +187,17 @@ function createApplicationManifestManager({
       route.resourceId === resourceId && route.owner === 'foxos' && route.status === 'active'
     ));
     const environmentCount = resource.runtime.environmentVariableCount;
+    const currentUpdate = updateState.current && updateState.current.resourceId === resourceId &&
+      updateState.current.containerId === resource.runtime.containerId ? updateState.current : null;
+    const imageDefaultEnvironmentOnly = Boolean(
+      currentUpdate && updateState.guarantees && updateState.guarantees.environmentSupported === false
+    );
+    const managedEnvironmentCount = imageDefaultEnvironmentOnly ? 0 : environmentCount;
+    const sourceDefaultEnvironmentCount = imageDefaultEnvironmentOnly ? environmentCount : 0;
     const classifiedCount = environment
       ? (environment.ordinary || []).length + (environment.secretRefs || []).length
       : 0;
     const persistenceRequired = (resource.mounts || []).length > 0;
-    const currentUpdate = updateState.current && updateState.current.resourceId === resourceId &&
-      updateState.current.containerId === resource.runtime.containerId ? updateState.current : null;
     const rollbackOperation = currentUpdate && (updateState.operations || []).find((operation) => (
       operation.status === 'rolled-back' && operation.previous &&
       operation.previous.operationId === currentUpdate.operationId &&
@@ -211,9 +216,9 @@ function createApplicationManifestManager({
     }
     if (environmentCount === null || environmentCount === undefined) {
       addBlocker(blockers, 'environment-count-unknown', 'environment', 'The observed environment could not be counted safely.');
-    } else if (environmentCount > 0 && !environment) {
+    } else if (managedEnvironmentCount > 0 && !environment) {
       addBlocker(blockers, 'environment-revision-missing', 'environment', 'Classify ordinary values and encrypted secret references into a local revision.');
-    } else if (environment && classifiedCount !== environmentCount) {
+    } else if (environment && classifiedCount !== managedEnvironmentCount) {
       addBlocker(blockers, 'environment-revision-mismatch', 'environment', 'The local environment revision does not cover the observed variable count.');
     }
     if ((resource.routes || []).length > 0 && ownedRoutes.length === 0) {
@@ -284,6 +289,8 @@ function createApplicationManifestManager({
           keyId: entry.keyId
         })).sort((left, right) => left.name.localeCompare(right.name)) : [],
         observedVariableCount: environmentCount,
+        sourceDefaultVariableCount: sourceDefaultEnvironmentCount,
+        managedVariableCount: managedEnvironmentCount,
         valuesIncluded: false
       },
       persistence: {
