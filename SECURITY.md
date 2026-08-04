@@ -41,6 +41,8 @@ discovered workload. The registry excludes environment values, arbitrary labels,
 proxy middleware values and health-check commands because they may contain
 credentials. Only explicitly allowed identity and grouping labels are retained,
 and long token-like route path segments are stored only as redacted fingerprints.
+Production runs one asynchronous read-only scan at startup unless
+`FOXOS_RESOURCE_SCAN_ON_STARTUP=false` is explicitly configured.
 
 Registry files live under `.foxos-data/registry/` with owner-only directory and
 file permissions. They still contain operational metadata such as application

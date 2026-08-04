@@ -1060,6 +1060,19 @@ if (require.main === module) {
     console.log('FoxOS is listening on port ' + PORT);
     console.log('Host execution mode: ' + HOST_EXECUTION);
     console.log('Host filesystem mount: ' + HOST_ROOT);
+
+    if (process.env.FOXOS_RESOURCE_SCAN_ON_STARTUP !== 'false') {
+      resourceRegistry.scan()
+        .then((snapshot) => {
+          console.log(
+            'Resource Registry snapshot ' + snapshot.snapshotId +
+            ' recorded ' + snapshot.summary.resources + ' resources using Docker GET requests only'
+          );
+        })
+        .catch((error) => {
+          console.error('Initial Resource Registry scan failed:', error.message);
+        });
+    }
   });
 }
 

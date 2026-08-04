@@ -175,6 +175,11 @@ networks, volumes, mounts, ports, routes, health and restart state through
 Docker `GET` requests only. It does not recreate, label, start, stop or adopt a
 resource.
 
+The production agent performs this same read-only scan asynchronously at
+startup so the server has a current snapshot after a FoxOS restart. Set
+`FOXOS_RESOURCE_SCAN_ON_STARTUP=false` only when an operator intentionally wants
+to disable that observation; authenticated manual scans remain available.
+
 The authenticated API exposes:
 
 | Endpoint | Purpose |
