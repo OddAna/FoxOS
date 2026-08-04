@@ -8,6 +8,8 @@ const PLAN_APPLICATION_MANIFEST_CONFIRMATION = 'PLAN APPLICATION MANIFEST';
 const MAX_DRAFTS = 100;
 const RESOURCE_ID_PATTERN = /^res_[a-f0-9]{32}$/;
 const RECORD_ID_PATTERN = /^(adraft|app|arev)_[a-f0-9]{24,64}$/;
+const SHA256_PATTERN = /^sha256:[a-f0-9]{64}$/;
+const GIT_COMMIT_PATTERN = /^[a-f0-9]{40,64}$/;
 
 class ApplicationManifestError extends Error {
   constructor(message, statusCode = 400, code = 'application-manifest-error') {
@@ -106,9 +108,148 @@ function relatedRelationships(snapshot, resourceId) {
       relationshipId: relationship.id,
       type: relationship.type,
       resourceIds: Array.from(new Set(resourceIds)).sort(),
-      required: relationship.type !== 'provider-project'
+      required: false,
+      observed: true
     };
   }).sort((left, right) => left.relationshipId.localeCompare(right.relationshipId));
+}
+
+function rolledBackOperation(state, currentOperationId) {
+  if (!currentOperationId) return null;
+  return (state.operations || []).find((operation) => (
+    operation.status === 'rolled-back' && operation.previous &&
+    operation.previous.operationId === currentOperationId &&
+    operation.rollback && operation.rollback.proof && operation.rollback.proof.verified
+  )) || null;
+}
+
+function revisionPlan(state, revisionId) {
+  return (state.plans || []).find((plan) => plan.revisionId === revisionId) || null;
+}
+
+function validPublicGitSource(source) {
+  if (
+    !source || source.adapter !== 'public-git-https' ||
+    !GIT_COMMIT_PATTERN.test(String(source.commit || ''))
+  ) return false;
+  try {
+    const repository = new URL(source.repository);
+    return repository.protocol === 'https:' && !repository.username && !repository.password;
+  } catch {
+    return false;
+  }
+}
+
+function sourceBuildDescriptor(current, plan, observedImageId) {
+  if (
+    !current || !plan || !validPublicGitSource(plan.source) ||
+    canonicalJson(current.source) !== canonicalJson(plan.source) ||
+    !/^drev_[a-f0-9]{24,64}$/.test(String(current.revisionId || '')) ||
+    !/^dop_[a-f0-9]{24,64}$/.test(String(current.operationId || '')) ||
+    !SHA256_PATTERN.test(String(current.imageId || '')) || current.imageId !== observedImageId ||
+    !SHA256_PATTERN.test(String(plan.source.contextDigest || '')) ||
+    !SHA256_PATTERN.test(String(plan.source.dockerfileDigest || '')) ||
+    !String(plan.source.contextPath || '') || !String(plan.source.dockerfile || '')
+  ) return null;
+  return {
+    type: 'foxos-source-build-revision',
+    revisionId: current.revisionId,
+    operationId: current.operationId,
+    adapter: plan.source.adapter,
+    repository: plan.source.repository,
+    requestedRef: plan.source.ref,
+    commit: plan.source.commit,
+    context: {
+      path: plan.source.contextPath,
+      digest: plan.source.contextDigest,
+      fileCount: plan.source.fileCount,
+      totalBytes: plan.source.totalBytes
+    },
+    dockerfile: {
+      path: plan.source.dockerfile,
+      digest: plan.source.dockerfileDigest
+    },
+    build: {
+      method: 'dockerfile',
+      imageId: current.imageId,
+      network: 'none',
+      secretValuesIncluded: false
+    }
+  };
+}
+
+function composeBuildDescriptor(current, plan, currentService, observedImageId) {
+  if (
+    !current || !plan || !validPublicGitSource(plan.source) || !plan.workflow || !currentService ||
+    canonicalJson(current.source) !== canonicalJson(plan.source) ||
+    !RESOURCE_ID_PATTERN.test(String(current.resourceId || '')) ||
+    !/^crev_[a-f0-9]{24,64}$/.test(String(current.revisionId || '')) ||
+    !/^cop_[a-f0-9]{24,64}$/.test(String(current.operationId || '')) ||
+    !SHA256_PATTERN.test(String(plan.source.manifestDigest || '')) ||
+    !SHA256_PATTERN.test(String(plan.workflow.graphDigest || '')) ||
+    currentService.imageId !== observedImageId
+  ) return null;
+  const graph = plan.workflow.graph;
+  if (!graph || !Array.isArray(graph.services) || !Array.isArray(graph.startOrder)) return null;
+  const images = new Map((current.services || []).map((service) => [service.name, service.imageId]));
+  if (
+    images.size !== graph.services.length ||
+    graph.startOrder.length !== graph.services.length ||
+    new Set(graph.startOrder).size !== graph.services.length ||
+    graph.services.some((service) => (
+      !images.has(service.name) || !SHA256_PATTERN.test(String(images.get(service.name) || '')) ||
+      !SHA256_PATTERN.test(String(service.contextDigest || '')) ||
+      !SHA256_PATTERN.test(String(service.dockerfileDigest || '')) ||
+      !service.build || !String(service.build.contextPath || '') || !String(service.build.dockerfile || '') ||
+      !Array.isArray(service.dependsOn)
+    )) ||
+    graph.startOrder.some((name) => !images.has(name))
+  ) return null;
+  return {
+    type: 'foxos-compose-deployment-revision',
+    revisionId: current.revisionId,
+    operationId: current.operationId,
+    groupResourceId: current.resourceId,
+    adapter: plan.source.adapter,
+    repository: plan.source.repository,
+    requestedRef: plan.source.ref,
+    commit: plan.source.commit,
+    manifest: {
+      path: plan.source.manifestPath,
+      digest: plan.source.manifestDigest,
+      bytes: plan.source.manifestBytes
+    },
+    graph: {
+      digest: plan.workflow.graphDigest,
+      ingressService: graph.ingressService,
+      startOrder: [...graph.startOrder],
+      services: graph.services.map((service) => ({
+        name: service.name,
+        dependsOn: [...service.dependsOn],
+        privatePort: service.privatePort,
+        context: {
+          path: service.build.contextPath,
+          digest: service.contextDigest,
+          fileCount: service.fileCount,
+          totalBytes: service.totalBytes
+        },
+        dockerfile: {
+          path: service.build.dockerfile,
+          digest: service.dockerfileDigest
+        },
+        imageId: images.get(service.name) || null
+      }))
+    },
+    service: {
+      name: currentService.name,
+      imageId: currentService.imageId
+    },
+    build: {
+      method: 'compose-graph',
+      network: 'none',
+      secretValuesIncluded: false
+    }
+  };
 }
 
 function resourceFingerprint(resource, relationships) {
@@ -121,6 +262,8 @@ function createApplicationManifestManager({
   getEnvironmentRevision = () => null,
   routeStatus = () => ({ configured: false, routes: [] }),
   backupStatus = () => ({ configured: false, ready: false, adapter: null, offHost: false }),
+  sourceDeploymentStatus = () => ({ current: null, plans: [], operations: [], guarantees: {} }),
+  composeDeploymentStatus = () => ({ current: null, plans: [], operations: [], guarantees: {} }),
   imageUpdateStatus = () => ({ current: null, operations: [] }),
   clock = () => new Date(),
   randomUUID = () => crypto.randomUUID()
@@ -128,7 +271,14 @@ function createApplicationManifestManager({
   if (!dataRoot || !resourceRegistry || typeof resourceRegistry.getLatest !== 'function') {
     throw new Error('Application manifest manager requires a data root and resource registry');
   }
-  for (const dependency of [getEnvironmentRevision, routeStatus, backupStatus, imageUpdateStatus]) {
+  for (const dependency of [
+    getEnvironmentRevision,
+    routeStatus,
+    backupStatus,
+    sourceDeploymentStatus,
+    composeDeploymentStatus,
+    imageUpdateStatus
+  ]) {
     if (typeof dependency !== 'function') throw new Error('Application manifest state adapters must be functions');
   }
 
@@ -181,16 +331,135 @@ function createApplicationManifestManager({
     const environment = getEnvironmentRevision(resourceId);
     const routeState = routeStatus();
     const recoveryState = backupStatus();
+    const sourceDeploymentState = sourceDeploymentStatus();
+    const composeDeploymentState = composeDeploymentStatus();
     const updateState = imageUpdateStatus();
-    const immutableReference = immutableImageFor(resource, snapshot);
     const ownedRoutes = (routeState.routes || []).filter((route) => (
       route.resourceId === resourceId && route.owner === 'foxos' && route.status === 'active'
     ));
     const environmentCount = resource.runtime.environmentVariableCount;
+    const currentSourceDeployment = sourceDeploymentState.current &&
+      sourceDeploymentState.current.resourceId === resourceId &&
+      sourceDeploymentState.current.containerId === resource.runtime.containerId
+      ? sourceDeploymentState.current : null;
+    const currentComposeService = composeDeploymentState.current &&
+      (composeDeploymentState.current.services || []).find((service) => (
+        service.containerId === resource.runtime.containerId
+      ));
+    const currentComposeDeployment = currentComposeService ? composeDeploymentState.current : null;
     const currentUpdate = updateState.current && updateState.current.resourceId === resourceId &&
       updateState.current.containerId === resource.runtime.containerId ? updateState.current : null;
+    const sourcePlan = currentSourceDeployment
+      ? revisionPlan(sourceDeploymentState, currentSourceDeployment.revisionId) : null;
+    const composePlan = currentComposeDeployment
+      ? revisionPlan(composeDeploymentState, currentComposeDeployment.revisionId) : null;
+    let source = null;
+    let sourceAuthority = 'oci-image';
+    let healthProof = null;
+    let rollbackOperation = null;
+    let sourceGuarantees = {};
+    const sourceBlockers = [];
+    const composeDependencies = [];
+
+    if (currentComposeDeployment) {
+      sourceAuthority = 'foxos-compose-deployment';
+      source = composeBuildDescriptor(
+        currentComposeDeployment,
+        composePlan,
+        currentComposeService,
+        resource.runtime.imageId
+      );
+      healthProof = currentComposeDeployment.healthProof || null;
+      rollbackOperation = rolledBackOperation(composeDeploymentState, currentComposeDeployment.operationId);
+      sourceGuarantees = composeDeploymentState.guarantees || {};
+      if (!source) {
+        sourceBlockers.push({
+          code: 'foxos-compose-revision-missing',
+          section: 'source',
+          message: 'The active Compose service has no complete immutable FoxOS graph revision.'
+        });
+      } else {
+        const servicePlan = source.graph.services.find((service) => service.name === currentComposeService.name);
+        for (const dependencyName of servicePlan ? servicePlan.dependsOn : []) {
+          const dependencyService = (currentComposeDeployment.services || []).find((service) => (
+            service.name === dependencyName
+          ));
+          const dependencyResource = dependencyService && (snapshot.resources || []).find((candidate) => (
+            candidate.runtime.containerId === dependencyService.containerId
+          ));
+          if (!dependencyResource) {
+            sourceBlockers.push({
+              code: 'compose-dependency-resource-missing:' + dependencyName,
+              section: 'dependencies',
+              message: 'A Compose graph dependency has no current FoxOS resource identity.'
+            });
+            continue;
+          }
+          composeDependencies.push({
+            relationshipId: 'mrel_' + hash(
+              currentComposeDeployment.revisionId + ':' + resourceId + ':' + dependencyResource.id,
+              24
+            ),
+            type: 'compose-depends-on',
+            sourceResourceId: resourceId,
+            targetResourceId: dependencyResource.id,
+            resourceIds: [resourceId, dependencyResource.id].sort(),
+            required: true,
+            observed: false
+          });
+        }
+      }
+    } else if (currentSourceDeployment) {
+      sourceAuthority = 'foxos-source-deployment';
+      source = sourceBuildDescriptor(currentSourceDeployment, sourcePlan, resource.runtime.imageId);
+      healthProof = currentSourceDeployment.healthProof || null;
+      rollbackOperation = rolledBackOperation(sourceDeploymentState, currentSourceDeployment.operationId);
+      sourceGuarantees = sourceDeploymentState.guarantees || {};
+      if (!source) {
+        sourceBlockers.push({
+          code: 'foxos-source-revision-missing',
+          section: 'source',
+          message: 'The active source deployment has no complete immutable FoxOS build revision.'
+        });
+      }
+    } else if (currentUpdate) {
+      sourceAuthority = 'foxos-image-update';
+      const immutableReference = immutableImageFor(resource, snapshot);
+      source = {
+        type: 'oci-image',
+        requestedReference: resource.runtime.image,
+        immutableReference,
+        imageId: resource.runtime.imageId || null
+      };
+      healthProof = currentUpdate.healthProof || null;
+      rollbackOperation = rolledBackOperation(updateState, currentUpdate.operationId);
+      sourceGuarantees = updateState.guarantees || {};
+      if (!immutableReference) {
+        sourceBlockers.push({
+          code: 'immutable-image-missing',
+          section: 'source',
+          message: 'No repository digest can reconstruct this image immutably.'
+        });
+      }
+    } else {
+      const immutableReference = immutableImageFor(resource, snapshot);
+      source = {
+        type: 'oci-image',
+        requestedReference: resource.runtime.image,
+        immutableReference,
+        imageId: resource.runtime.imageId || null
+      };
+      if (!immutableReference) {
+        sourceBlockers.push({
+          code: 'immutable-image-missing',
+          section: 'source',
+          message: 'No repository digest can reconstruct this image immutably.'
+        });
+      }
+    }
     const imageDefaultEnvironmentOnly = Boolean(
-      currentUpdate && updateState.guarantees && updateState.guarantees.environmentSupported === false
+      (currentUpdate || currentSourceDeployment || currentComposeDeployment) &&
+      sourceGuarantees.environmentSupported === false
     );
     const managedEnvironmentCount = imageDefaultEnvironmentOnly ? 0 : environmentCount;
     const sourceDefaultEnvironmentCount = imageDefaultEnvironmentOnly ? environmentCount : 0;
@@ -198,11 +467,9 @@ function createApplicationManifestManager({
       ? (environment.ordinary || []).length + (environment.secretRefs || []).length
       : 0;
     const persistenceRequired = (resource.mounts || []).length > 0;
-    const rollbackOperation = currentUpdate && (updateState.operations || []).find((operation) => (
-      operation.status === 'rolled-back' && operation.previous &&
-      operation.previous.operationId === currentUpdate.operationId &&
-      operation.rollback && operation.rollback.proof && operation.rollback.proof.verified
-    ));
+    for (const blocker of sourceBlockers) {
+      addBlocker(blockers, blocker.code, blocker.section, blocker.message);
+    }
 
     if (resource.protected) addBlocker(blockers, 'foxos-core-protected', 'ownership', 'FoxOS core resources cannot become application manifests.');
     if (resource.provider !== 'foxos' || resource.ownership !== 'foxos-managed') {
@@ -210,9 +477,6 @@ function createApplicationManifestManager({
     }
     if (resource.runtime.inspection !== 'complete') {
       addBlocker(blockers, 'inspection-incomplete', 'runtime', 'Complete Docker inspection is required.');
-    }
-    if (!immutableReference) {
-      addBlocker(blockers, 'immutable-image-missing', 'source', 'No repository digest can reconstruct this image immutably.');
     }
     if (environmentCount === null || environmentCount === undefined) {
       addBlocker(blockers, 'environment-count-unknown', 'environment', 'The observed environment could not be counted safely.');
@@ -230,14 +494,34 @@ function createApplicationManifestManager({
       }
       addBlocker(blockers, 'restore-proof-missing', 'recovery', 'Persistent data requires a resource-scoped tested restore proof.');
     }
-    for (const relationship of relationships.filter((candidate) => candidate.required)) {
+    const dependencies = [...relationships, ...composeDependencies].sort((left, right) => (
+      left.relationshipId.localeCompare(right.relationshipId)
+    ));
+    for (const relationship of dependencies.filter((candidate) => candidate.required)) {
       for (const dependencyId of relationship.resourceIds.filter((candidate) => candidate !== resourceId)) {
-        if (!getCurrent(dependencyId)) {
+        const dependencyManifest = getCurrent(dependencyId);
+        if (!dependencyManifest) {
           addBlocker(
             blockers,
             'dependency-manifest-missing:' + dependencyId,
             'dependencies',
             'A related resource has no finalized FoxOS application manifest.'
+          );
+          continue;
+        }
+        const dependencyResource = (snapshot.resources || []).find((candidate) => candidate.id === dependencyId);
+        const dependencyRelationships = dependencyResource
+          ? relatedRelationships(snapshot, dependencyId) : [];
+        if (
+          !dependencyResource ||
+          dependencyManifest.evidence.resourceFingerprint !==
+            resourceFingerprint(dependencyResource, dependencyRelationships)
+        ) {
+          addBlocker(
+            blockers,
+            'dependency-manifest-stale:' + dependencyId,
+            'dependencies',
+            'A related resource manifest no longer matches the latest observed resource.'
           );
         }
       }
@@ -252,7 +536,7 @@ function createApplicationManifestManager({
     if (constraints.privileged) {
       addBlocker(blockers, 'privileged-runtime', 'runtime', 'Privileged application runtimes cannot be finalized.');
     }
-    if (!currentUpdate || !currentUpdate.healthProof || !currentUpdate.healthProof.verified) {
+    if (!healthProof || !healthProof.verified) {
       addBlocker(blockers, 'foxos-health-proof-missing', 'health', 'A FoxOS-owned current health proof is required.');
     }
     if (!rollbackOperation) {
@@ -261,12 +545,7 @@ function createApplicationManifestManager({
 
     const desired = {
       identity: { resourceId, name: resource.name, kind: resource.kind, role: resource.role },
-      source: {
-        type: 'oci-image',
-        requestedReference: resource.runtime.image,
-        immutableReference,
-        imageId: resource.runtime.imageId || null
-      },
+      source,
       runtime: {
         engine: resource.runtime.engine,
         desiredState: resource.runtime.state === 'running' ? 'running' : 'stopped',
@@ -311,7 +590,7 @@ function createApplicationManifestManager({
         tls: route.tls,
         upstream: route.upstream
       })),
-      dependencies: relationships.filter((relationship) => relationship.required),
+      dependencies,
       recovery: {
         required: persistenceRequired,
         adapter: persistenceRequired ? recoveryState.adapter || null : null,
@@ -327,7 +606,15 @@ function createApplicationManifestManager({
       observedContainerId: resource.runtime.containerId,
       environmentRevision: environment && environment.revision || null,
       routeIds: ownedRoutes.map((route) => route.routeId).sort(),
-      healthProof: currentUpdate && currentUpdate.healthProof || null,
+      sourceAuthority,
+      sourceRevision: source && source.type !== 'oci-image' ? {
+        type: source.type,
+        revisionId: source.revisionId,
+        operationId: source.operationId,
+        groupResourceId: source.groupResourceId || null,
+        serviceName: source.service && source.service.name || null
+      } : null,
+      healthProof,
       updateRollbackProof: rollbackOperation ? {
         operationId: rollbackOperation.operationId,
         verified: true,
@@ -439,7 +726,14 @@ function createApplicationManifestManager({
         runtimeMutated: false,
         providerDetached: false,
         secretValuesIncluded: false,
-        externalProviderRequired: false
+        externalProviderRequired: false,
+        sourceTypes: [
+          'oci-image',
+          'foxos-source-build-revision',
+          'foxos-compose-deployment-revision'
+        ],
+        composeDependencies: 'directed-depends-on-only',
+        sharedNetworkImpliesDependency: false
       }
     };
   }

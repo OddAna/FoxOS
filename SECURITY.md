@@ -82,6 +82,14 @@ rechecks the observed fingerprint and fails closed while any safety gate is
 blocking. It stores desired state only; it does not adopt a workload, detach a
 provider or authorize destructive provider cleanup.
 
+FoxOS source-build and Compose manifest inputs contain only credential-free
+repository metadata, immutable commits/context/Dockerfile/manifest/graph
+digests, local FoxOS revision IDs and immutable image IDs. No build secret or
+runtime environment value is copied. Compose `depends_on` is normalized into a
+directed manifest dependency; a shared Docker network is retained only as
+private observational metadata and cannot create an ownership or dependency
+claim.
+
 ## Disposable source deployment pilot
 
 Treat every Git repository and Dockerfile as untrusted code. The implemented

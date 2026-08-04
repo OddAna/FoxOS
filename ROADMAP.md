@@ -159,7 +159,7 @@ target blocks only adoption/migration operations that require restore proof.
 - [x] Compile the existing Docker/Compose/Coolify resource graph into redacted,
   provider-neutral import drafts without copying secret values, mutating the
   runtime or taking ownership.
-- [ ] Extend the manifest source model from immutable OCI images to FoxOS-owned
+- [x] Extend the manifest source model from immutable OCI images to FoxOS-owned
   source-build and Compose deployment revisions.
 - [ ] Distinguish applications, databases, workers, agents, proxies and internal
   dependencies while keeping every manageable instance addressable.

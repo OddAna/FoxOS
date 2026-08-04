@@ -427,20 +427,23 @@ routes and recovery policy can participate in the same transaction.
 
 Every manageable instance can now receive a server-owned, provider-neutral
 application manifest. FoxOS compiles it from the latest read-only resource
-registry snapshot and its own environment, route, recovery and image-operation
-records. The manifest keeps one stable resource identity and describes:
+registry snapshot and its own environment, route, recovery, image-operation,
+source-deployment and Compose-deployment records. The manifest keeps one stable
+resource identity and describes:
 
-- immutable OCI image input and desired runtime state;
+- immutable OCI image, FoxOS public-Git build revision or strict Compose graph
+  revision plus desired runtime state;
 - ports, restart behavior and CPU/memory/PID/security constraints;
 - a local environment revision plus encrypted secret references, never values;
 - volumes or bind mounts and their backup/restore requirements;
 - FoxOS-owned route records and TLS policy;
-- related resource manifests and health/update/rollback evidence.
+- directed Compose dependencies, informational observed relationships and
+  health/update/rollback evidence.
 
 An observed Docker, Compose or Coolify workload may produce an `import-draft`,
 but planning changes no container, network, route or provider state. The draft
 lists every blocking gate. External provider authority, an unclassified
-environment, missing immutable image, unresolved dependency, provider-only
+environment, missing immutable source, unresolved directed dependency, provider-only
 route, persistent data without tested restore, missing limits, health evidence
 or update/rollback proof prevents finalization. Provider labels remain lookup
 provenance only and are never required to reconstruct the desired resource.
@@ -450,6 +453,13 @@ FoxOS-owned evidence. It stores an immutable revision and current pointer; it
 does not detach a provider or recreate the runtime. Those are later, separately
 confirmed transactions. Secret values are never written to the manifest or
 returned by its API.
+
+The two existing source-build pilots now participate without expanding their
+scope. `foxos-deployment-lab` points to its pinned Git commit, context and
+Dockerfile revision. Each `foxos-compose-lab` service remains independently
+addressable while sharing the same pinned manifest/graph revision; only explicit
+`depends_on` edges require another finalized manifest. Merely sharing a Docker
+network is observational evidence, not a dependency or ownership claim.
 
 After an authenticated resource scan, inspect the resource ID and use the CLI:
 
@@ -642,7 +652,9 @@ Do not copy its contents into Git or logs.
   fixed disposable canary; normal Store and imported applications are not
   eligible yet
 - Application Manifest v1 can describe and audit imported application state,
-  but it does not yet adopt, reconcile or detach normal production resources
+  and can bind the fixed FoxOS OCI/source-build/Compose canaries to immutable
+  local revisions, but it does not yet adopt, reconcile or detach normal
+  production resources
 - App Store images are maintained by their respective third-party projects, not
   by FoxOS
 - The included FoxOS-owned HTTPS gateway currently ships one DNS-01 adapter for

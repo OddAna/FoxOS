@@ -272,3 +272,91 @@ jobs:
           manifest_current=$(docker compose exec -T foxos node /app/applicationManifestCli.js current "$image_resource_id")
           test "$(printf '%s' "$manifest_current" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).revisionId))')" = \
             "$(printf '%s' "$application_manifest" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).revisionId))')"
+
+          finalize_manifest() {
+            manifest_resource_id="$1"
+            expected_source_type="$2"
+            source_draft=$(docker compose exec -T foxos node /app/applicationManifestCli.js draft "$manifest_resource_id" \
+              --confirm "PLAN APPLICATION MANIFEST")
+            source_draft_id=$(printf '%s' "$source_draft" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).draftId))')
+            printf '%s' "$source_draft" | MANIFEST_RESOURCE_ID="$manifest_resource_id" node -e '
+              let s="";
+              process.stdin.on("data",c=>s+=c);
+              process.stdin.on("end",()=>{
+                const draft=JSON.parse(s);
+                if(draft.gates.status!=="ready") {
+                  const codes=(draft.gates.blockers || []).map(blocker=>blocker.code).join(",");
+                  console.error(`manifest draft ${process.env.MANIFEST_RESOURCE_ID} blocked: ${codes}`);
+                  process.exit(1);
+                }
+              });
+            '
+            source_manifest=$(docker compose exec -T foxos node /app/applicationManifestCli.js finalize "$source_draft_id" \
+              --confirm "FINALIZE APPLICATION MANIFEST $source_draft_id")
+            printf '%s' "$source_manifest" | EXPECTED_SOURCE_TYPE="$expected_source_type" node -e '
+              let s="";
+              process.stdin.on("data",c=>s+=c);
+              process.stdin.on("end",()=>{
+                const manifest=JSON.parse(s);
+                const failures=[];
+                if(manifest.lifecycle!=="foxos-managed" || manifest.gates.status!=="ready") failures.push("not-ready");
+                if(manifest.desired.source.type!==process.env.EXPECTED_SOURCE_TYPE) failures.push(`source:${manifest.desired.source.type}`);
+                if(manifest.desired.environment.valuesIncluded || manifest.desired.environment.managedVariableCount!==0) failures.push("environment-not-redacted");
+                if(!manifest.evidence.healthProof?.verified || !manifest.evidence.updateRollbackProof?.verified) failures.push("proof-missing");
+                if(failures.length) {
+                  console.error(`finalized manifest ${manifest.resourceId} invalid: ${failures.join(",")}`);
+                  process.exit(1);
+                }
+              });
+            '
+          }
+
+          source_resource_id=$(printf '%s' "$deployment_status" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).current.resourceId))')
+          finalize_manifest "$source_resource_id" "foxos-source-build-revision"
+
+          compose_start_order=$(printf '%s' "$compose_status" | node -e '
+            let s="";
+            process.stdin.on("data",c=>s+=c);
+            process.stdin.on("end",()=>{
+              const current=JSON.parse(s).current;
+              const services=new Set(current.services.map(service=>service.name));
+              if(current.startOrder.length!==services.size || current.startOrder.some(name=>!services.has(name))) process.exit(1);
+              process.stdout.write(current.startOrder.join(" "));
+            });
+          ')
+          for compose_service_name in $compose_start_order; do
+            compose_container_id=$(printf '%s' "$compose_status" | COMPOSE_SERVICE_NAME="$compose_service_name" node -e '
+              let s="";
+              process.stdin.on("data",c=>s+=c);
+              process.stdin.on("end",()=>{
+                const current=JSON.parse(s).current;
+                const service=current.services.find(candidate=>candidate.name===process.env.COMPOSE_SERVICE_NAME);
+                if(!service || !service.containerId) process.exit(1);
+                process.stdout.write(service.containerId);
+              });
+            ')
+            test -n "$compose_container_id"
+            compose_resource_id=$(docker inspect --format '{{ index .Config.Labels "com.foxos.resource.id" }}' "$compose_container_id")
+            finalize_manifest "$compose_resource_id" "foxos-compose-deployment-revision"
+          done
+
+          manifest_status=$(docker compose exec -T foxos node /app/applicationManifestCli.js status)
+          printf '%s' "$manifest_status" | node -e '
+            let s="";
+            process.stdin.on("data",c=>s+=c);
+            process.stdin.on("end",()=>{
+              const status=JSON.parse(s);
+              const sources=status.current.map(manifest=>manifest.desired.source.type).sort();
+              const compose=status.current.filter(manifest=>manifest.desired.source.type==="foxos-compose-deployment-revision");
+              const failures=[];
+              if(status.summary.finalized!==4 || status.summary.blockedDrafts!==0) failures.push(`summary:${JSON.stringify(status.summary)}`);
+              if(sources.filter(type=>type==="foxos-compose-deployment-revision").length!==2) failures.push(`compose-count:${sources.join(",")}`);
+              if(!sources.includes("foxos-source-build-revision") || !sources.includes("oci-image")) failures.push(`source-types:${sources.join(",")}`);
+              if(!compose.some(manifest=>manifest.desired.dependencies.some(dependency=>dependency.type==="compose-depends-on" && dependency.required))) failures.push("directed-dependency-missing");
+              if(compose.some(manifest=>manifest.desired.dependencies.some(dependency=>dependency.type==="shared-network" && dependency.required))) failures.push("shared-network-required");
+              if(failures.length) {
+                console.error(`application manifest integration failed: ${failures.join(";")}`);
+                process.exit(1);
+              }
+            });
+          '
