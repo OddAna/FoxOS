@@ -216,14 +216,45 @@ The authenticated API exposes:
 | `POST /api/resources/scan` | Run a read-only inventory and atomically store a new snapshot |
 | `GET /api/resources` | Read the latest stored snapshot, ownership status, relationships, conflicts and adoption blockers |
 | `GET /api/resources/export` | Download a redacted provider-neutral migration plan |
+| `POST /api/resources/:resourceId/adoption-plan` | Create a deterministic import draft for the strictly disposable pilot |
+| `GET /api/adoptions` | Read locally stored plans and operations |
+| `POST /api/adoptions/plans/:planId/apply` | Apply an explicitly confirmed disposable plan |
+| `POST /api/adoptions/:operationId/rollback` | Restore the preserved source container for an applied pilot operation |
 
 Environment values, arbitrary provider labels, middleware credentials and
 secret-bearing health-check commands are never copied into registry snapshots
 or exports; long token-like route path segments are replaced by stable redacted
 fingerprints. Stable FoxOS resource IDs survive normal container recreation by
 using locally stored, hashed identity aliases. Existing external resources stay
-in the `observed` stage; this registry version intentionally provides no
-adoption or provider-detach action yet.
+in the `observed` stage unless an operator uses the narrowly gated disposable
+adoption pilot described below.
+
+## Disposable adoption pilot
+
+FoxOS now has the first provider-neutral import draft, dry-run plan, apply and
+rollback engine. It is intentionally **not a general migration button** and is
+not exposed in the Store UI yet. The engine accepts only a resource whose name
+starts with `foxos-adoption-lab`, whose
+`com.foxos.adoption.disposable=true` label was deliberately set, and whose
+runtime passes every pilot safety gate. Coolify-managed resources are rejected.
+
+The included `pilot/docker-compose.adoption-lab.yml` creates the isolated test
+resource. It publishes only on `127.0.0.1:18088`, uses one read-only named
+volume and has no real domain route or dependency. Before runtime mutation,
+FoxOS writes a versioned manifest, pins the image digest, archives the volume
+and restores that archive into a temporary volume to prove it can be read back.
+Only then does it stop and preserve the source container, create the
+FoxOS-managed target and require a healthy result. An exact confirmation string
+is required for both apply and rollback. If target verification fails, FoxOS
+attempts to restore the source automatically.
+
+The old source container is retained stopped under a distinct rollback name;
+it is not shown as a second Store application. Rolling back deletes only the
+FoxOS-managed target, keeps the named volume, restores the source name, starts
+it if it was previously running and verifies its runtime. Pilot manifests,
+plans, operation records and backup archives live under
+`.foxos-data/adoption/` with owner-only permissions. See
+[`pilot/README.md`](pilot/README.md) for the operator procedure.
 
 ## Operations
 

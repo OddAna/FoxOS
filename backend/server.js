@@ -1,10 +1,11 @@
 const crypto = require('crypto');
 const fs = require('fs');
-const http = require('http');
 const os = require('os');
 const path = require('path');
 const { execFile } = require('child_process');
 const express = require('express');
+const { AdoptionError, createAdoptionManager } = require('./adoptionManager');
+const { createDockerClient } = require('./dockerClient');
 const { APP_CATALOG, getCatalogApp } = require('./appCatalog');
 const { resolveAppIcon } = require('./appIcon');
 const { SCHEMA_VERSION: RESOURCE_SCHEMA_VERSION, createResourceRegistry } = require('./resourceRegistry');
@@ -359,66 +360,28 @@ function runHostCommand(command, cwd = '/') {
   });
 }
 
-function dockerRequest(method, requestPath, payload = null) {
-  return new Promise((resolve, reject) => {
-    if (!fs.existsSync(DOCKER_SOCKET)) {
-      return reject(new Error('Docker socket is not available'));
-    }
-
-    const serializedPayload = payload === null ? null : JSON.stringify(payload);
-    const headers = { 'Content-Type': 'application/json' };
-    if (serializedPayload !== null) {
-      headers['Content-Length'] = Buffer.byteLength(serializedPayload);
-    }
-
-    const request = http.request(
-      {
-        socketPath: DOCKER_SOCKET,
-        path: requestPath,
-        method,
-        headers
-      },
-      (response) => {
-        const chunks = [];
-        response.on('data', (chunk) => chunks.push(chunk));
-        response.on('end', () => {
-          const body = Buffer.concat(chunks).toString('utf8');
-          if ((response.statusCode >= 200 && response.statusCode < 300) || response.statusCode === 304) {
-            if (!body) {
-              return resolve(null);
-            }
-            try {
-              return resolve(JSON.parse(body));
-            } catch {
-              return resolve(body);
-            }
-          }
-
-          let message = 'Docker API returned HTTP ' + response.statusCode;
-          try {
-            message = JSON.parse(body).message || message;
-          } catch {
-            if (body) {
-              message = body;
-            }
-          }
-          reject(new Error(message));
-        });
-      }
-    );
-
-    request.on('error', reject);
-    if (serializedPayload !== null) {
-      request.write(serializedPayload);
-    }
-    request.end();
-  });
-}
+const dockerClient = createDockerClient(DOCKER_SOCKET);
+const dockerRequest = dockerClient.request;
 
 const resourceRegistry = createResourceRegistry({
   dataRoot: DATA_ROOT,
   dockerRequest
 });
+const adoptionManager = createAdoptionManager({
+  dataRoot: DATA_ROOT,
+  dockerRequest,
+  dockerArchiveRequest: dockerClient.requestBuffer,
+  resourceRegistry
+});
+
+function sendAdoptionError(res, error, action) {
+  const status = error instanceof AdoptionError ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof AdoptionError) ? 'Adoption operation failed' : error.message,
+    code: error.code || 'adoption-error'
+  });
+}
 
 function containerSettingsFromDetails(details) {
   const hostConfig = details.HostConfig || {};
@@ -836,6 +799,52 @@ app.get('/api/resources/export', (req, res) => {
   } catch (error) {
     console.error('Could not export the resource migration plan:', error.message);
     res.status(500).json({ error: 'Could not export the resource migration plan' });
+  }
+});
+
+app.post('/api/resources/:resourceId/adoption-plan', async (req, res) => {
+  try {
+    const plan = await adoptionManager.createPlan(req.params.resourceId, req.body || {});
+    res.status(201).json({ plan });
+  } catch (error) {
+    sendAdoptionError(res, error, 'Could not create adoption plan');
+  }
+});
+
+app.get('/api/adoptions', (req, res) => {
+  try {
+    res.json(adoptionManager.status());
+  } catch (error) {
+    sendAdoptionError(res, error, 'Could not read adoption state');
+  }
+});
+
+app.get('/api/adoptions/plans/:planId', (req, res) => {
+  try {
+    res.json({ plan: adoptionManager.getPlan(req.params.planId) });
+  } catch (error) {
+    sendAdoptionError(res, error, 'Could not read adoption plan');
+  }
+});
+
+app.post('/api/adoptions/plans/:planId/apply', async (req, res) => {
+  try {
+    const operation = await adoptionManager.applyPlan(req.params.planId, req.body && req.body.confirmation);
+    res.status(201).json({ operation });
+  } catch (error) {
+    sendAdoptionError(res, error, 'Could not apply adoption plan');
+  }
+});
+
+app.post('/api/adoptions/:operationId/rollback', async (req, res) => {
+  try {
+    const operation = await adoptionManager.rollbackOperation(
+      req.params.operationId,
+      req.body && req.body.confirmation
+    );
+    res.json({ operation });
+  } catch (error) {
+    sendAdoptionError(res, error, 'Could not roll back adoption operation');
   }
 });
 

@@ -52,10 +52,31 @@ without changing FoxOS behavior.
   health-check commands and token-like route segments from snapshots/exports.
 - [x] Report ownership stage, adoption blockers, resource relationships and
   route/port/storage conflicts through authenticated scan/read/export APIs.
-- [ ] Define the separate desired-state manifest and import-draft schema used by
-  an adoption plan. Resource Registry v1 records observed state only.
+- [x] Define the separate desired-state manifest and import-draft schema used by
+  an adoption plan, with immutable image input and provider-neutral desired
+  runtime state.
 - [ ] Expose the audit in the existing FoxOS interface without changing its
   visual language.
+
+### Milestone 2 progress: Disposable Adoption v1
+
+- [x] Require an explicitly named and labeled disposable resource; reject
+  Coolify-managed and protected resources.
+- [x] Produce a deterministic, versioned manifest and dry-run plan using Docker
+  reads only, without persisting environment or secret values.
+- [x] Reject drift, unresolved environment/command overrides, routes,
+  relationships, conflicts, dangerous runtime access and unsupported storage.
+- [x] Pin the adopted runtime to the observed repository digest.
+- [x] Archive the pilot named volume and verify an actual restore before runtime
+  mutation.
+- [x] Preserve the source container, health-gate the FoxOS target and provide an
+  exact-confirmation rollback to the original source.
+- [x] Attempt automatic source restoration when target health verification
+  fails.
+- [ ] Add the reviewed adoption flow to the existing FoxOS interface without
+  changing its visual language.
+- [ ] Expand beyond the disposable static-volume policy only after encrypted
+  secrets, database-aware consistency and route/TLS cutover exist.
 
 ## Stable release system
 
@@ -68,15 +89,16 @@ without changing FoxOS behavior.
 
 ## Declarative resources and migration
 
-- [ ] Define a versioned FoxOS application/service manifest covering image or
-  source, build method, ports, domains, health checks, environment, mounts,
-  dependencies, restart policy and resource limits.
+- [ ] Expand the versioned FoxOS application manifest beyond the implemented
+  disposable image/port/health/mount/restart/resource-limit subset to source
+  builds, domains, TLS, classified environment, secrets and dependencies.
 - [ ] Import the existing Coolify resource graph without copying secrets into
   logs or taking ownership before explicit migration.
 - [ ] Distinguish applications, databases, workers, agents, proxies and internal
   dependencies while keeping every manageable instance addressable.
-- [ ] Provide migration dry-run, conflict detection, per-resource cutover,
-  verification and reversible rollback.
+- [ ] Expand the implemented disposable dry-run, conflict detection, verified
+  cutover and reversible rollback to real application classes one safety gate at
+  a time.
 
 ## Git source, build and deployment
 
@@ -114,13 +136,14 @@ without changing FoxOS behavior.
 
 ## Persistence, backups and restore
 
-- [ ] Inventory named volumes and bind mounts, including provider-owned paths.
+- [x] Inventory named volumes and bind mounts, including provider-owned paths.
 - [ ] Configure scheduled encrypted backups with retention and off-host targets.
 - [ ] Back up resource manifests, deployment metadata, environment configuration
   and proxy/TLS state without exposing secrets.
 - [ ] Provide per-resource restore and full-disaster restore workflows.
-- [ ] Require automated restore verification; a backup without a tested restore is
-  not considered complete.
+- [ ] Expand the implemented per-operation disposable volume restore proof into
+  scheduled and off-host automated restore verification; a backup without a
+  tested restore is not considered complete.
 
 ## Operations and safety
 

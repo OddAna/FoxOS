@@ -5,6 +5,7 @@ const path = require('node:path');
 const test = require('node:test');
 const {
   createResourceRegistry,
+  identityAliases,
   parseTraefikRoutes,
   roleFor,
   safeLabels
@@ -232,9 +233,30 @@ test('route and label normalization keeps only migration-safe fields', () => {
 test('FoxOS gateway stays protected while being classified as the FoxOS proxy', () => {
   const labels = {
     'com.foxos.core': 'true',
-    'com.foxos.gateway': 'true'
+    'com.foxos.gateway': 'true',
+    'com.foxos.adoption.disposable': 'true'
   };
 
   assert.equal(roleFor(labels, 'foxos-gateway:0.0.1', 'foxos-gateway', [], []), 'proxy');
   assert.deepEqual(safeLabels(labels), labels);
+});
+
+test('a preserved rollback container cannot claim the adopted resource identity', () => {
+  const labels = {
+    'com.foxos.resource.id': 'res_' + '1'.repeat(32),
+    'com.docker.compose.project': 'foxos-adoption-lab',
+    'com.docker.compose.service': 'web',
+    'com.docker.compose.container-number': '1'
+  };
+  const adoptedAliases = identityAliases({
+    Id: 'a'.repeat(64),
+    Names: ['/foxos-adoption-lab']
+  }, labels);
+  const rollbackAliases = identityAliases({
+    Id: 'b'.repeat(64),
+    Names: ['/foxos-adoption-lab-foxos-rollback-1234abcd']
+  }, labels);
+
+  assert.equal(adoptedAliases.includes('foxos:' + labels['com.foxos.resource.id']), true);
+  assert.deepEqual(rollbackAliases, ['rollback-container:' + 'b'.repeat(64)]);
 });
