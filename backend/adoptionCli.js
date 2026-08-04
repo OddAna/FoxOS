@@ -7,6 +7,7 @@ const {
 } = require('./adoptionManager');
 const { createDockerClient } = require('./dockerClient');
 const { createResourceRegistry } = require('./resourceRegistry');
+const { createRouteManager } = require('./routeManager');
 
 function flagValue(args, name, fallback = null) {
   const index = args.indexOf(name);
@@ -24,11 +25,19 @@ async function main() {
   const socketPath = process.env.DOCKER_SOCKET || '/var/run/docker.sock';
   const docker = createDockerClient(socketPath);
   const registry = createResourceRegistry({ dataRoot, dockerRequest: docker.request });
+  const routeManager = createRouteManager({
+    dataRoot,
+    dockerRequest: docker.request,
+    publicBaseUrl: process.env.FOXOS_ROUTE_BASE_URL,
+    networkName: process.env.FOXOS_ROUTE_NETWORK || 'foxos-routing',
+    gatewayHost: process.env.FOXOS_ROUTE_GATEWAY_HOST || 'foxos-gateway'
+  });
   const manager = createAdoptionManager({
     dataRoot,
     dockerRequest: docker.request,
     dockerArchiveRequest: docker.requestBuffer,
-    resourceRegistry: registry
+    resourceRegistry: registry,
+    routeManager
   });
 
   if (command === 'status') {

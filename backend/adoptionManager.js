@@ -3,9 +3,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { atomicWriteJson } = require('./resourceRegistry');
 
-const MANIFEST_SCHEMA_VERSION = 1;
-const PLAN_SCHEMA_VERSION = 1;
-const OPERATION_SCHEMA_VERSION = 1;
+const MANIFEST_SCHEMA_VERSION = 2;
+const PLAN_SCHEMA_VERSION = 2;
+const OPERATION_SCHEMA_VERSION = 2;
 const PILOT_LABEL = 'com.foxos.adoption.disposable';
 const PILOT_NAME_PATTERN = /^foxos-adoption-lab(?:-[a-z0-9-]+)?$/;
 const ID_PATTERN = /^(plan|op)_[a-f0-9]{24,64}$/;
@@ -213,12 +213,16 @@ function createAdoptionManager({
   dockerRequest,
   dockerArchiveRequest,
   resourceRegistry,
+  routeManager,
   clock = () => new Date(),
   randomUUID = () => crypto.randomUUID(),
   wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))
 }) {
-  if (!dataRoot || typeof dockerRequest !== 'function' || typeof dockerArchiveRequest !== 'function' || !resourceRegistry) {
-    throw new Error('Adoption manager requires data root, Docker clients and Resource Registry');
+  if (
+    !dataRoot || typeof dockerRequest !== 'function' || typeof dockerArchiveRequest !== 'function' ||
+    !resourceRegistry || !routeManager
+  ) {
+    throw new Error('Adoption manager requires data root, Docker clients, Resource Registry and Route Manager');
   }
 
   const adoptionRoot = path.join(dataRoot, 'adoption');
@@ -254,7 +258,7 @@ function createAdoptionManager({
   function getOperation(operationId) {
     const operation = readJson(operationPath(operationId), null);
     if (!operation) throw new AdoptionError('Adoption operation was not found', 404, 'operation-not-found');
-    if (operation.schemaVersion !== OPERATION_SCHEMA_VERSION) {
+    if (![1, OPERATION_SCHEMA_VERSION].includes(operation.schemaVersion)) {
       throw new AdoptionError('Unsupported adoption operation schema', 409, 'unsupported-operation-schema');
     }
     return operation;
@@ -380,6 +384,10 @@ function createAdoptionManager({
     }
     addWarning('network-provider-detached', 'The FoxOS-managed target will use the Docker bridge instead of the provider network.');
 
+    const desiredRoute = Number.isSafeInteger(healthPrivatePort) && healthPrivatePort > 0
+      ? routeManager.planRoute(resourceId, resource.name, healthPrivatePort)
+      : null;
+
     const desiredPort = publishedPorts[0] || null;
     const desiredMount = mounts[0] || null;
     const manifestCore = {
@@ -431,7 +439,7 @@ function createAdoptionManager({
             restoreVerificationRequired: true
           }] : []
         },
-        routes: [],
+        routes: desiredRoute ? [desiredRoute] : [],
         dependencies: [],
         resources: {
           memoryBytes: hostConfig.Memory || null,
@@ -471,9 +479,13 @@ function createAdoptionManager({
         'stop-source-container',
         'preserve-source-as-rollback-container',
         'create-foxos-managed-container-from-manifest',
-        'verify-docker-health'
+        'verify-docker-health',
+        'activate-foxos-caddy-route',
+        'verify-https-route'
       ],
       rollbackActions: blockers.length ? [] : [
+        'deactivate-foxos-caddy-route',
+        'verify-https-route-unavailable',
         'remove-foxos-managed-container',
         'restore-source-container-name',
         'restart-source-container',
@@ -694,6 +706,8 @@ function createAdoptionManager({
       target: null,
       backups: [],
       healthProof: null,
+      route: plan.manifest.desired.routes[0] || null,
+      routeProof: null,
       rollback: { available: false, confirmation: rollbackConfirmation(operationId) },
       secretValuesIncluded: false
     };
@@ -704,6 +718,7 @@ function createAdoptionManager({
     let rollbackName = null;
     let sourceWasRunning = false;
     let targetId = null;
+    let routeActivated = false;
     try {
       const snapshot = await resourceRegistry.scan();
       const resource = snapshot.resources.find((candidate) => candidate.id === plan.resourceId);
@@ -749,6 +764,9 @@ function createAdoptionManager({
         image: plan.manifest.desired.runtime.image.reference,
         ownership: 'foxos-managed'
       };
+      const routeRecord = await routeManager.activate(operation.route, targetId);
+      routeActivated = true;
+      operation.routeProof = routeRecord.proof;
       operation.source.rollbackName = rollbackName;
       operation.status = 'applied';
       operation.completedAt = new Date(clock()).toISOString();
@@ -758,6 +776,13 @@ function createAdoptionManager({
       await resourceRegistry.scan();
       return operation;
     } catch (error) {
+      if (routeActivated && operation.route && targetId) {
+        try {
+          await routeManager.deactivate(operation.route, targetId);
+        } catch {
+          // Preserve the primary apply failure; the operation remains visibly failed.
+        }
+      }
       await restoreSourceAfterFailure({ sourceId, sourceName, rollbackName, sourceWasRunning, targetId });
       operation = {
         ...operation,
@@ -797,6 +822,11 @@ function createAdoptionManager({
       if (labels['com.foxos.resource.id'] !== operation.resourceId || labels['com.foxos.managed'] !== 'true') {
         throw new AdoptionError('Rollback target identity does not match the operation', 409, 'rollback-target-mismatch');
       }
+      let routeProof = null;
+      if (operation.schemaVersion >= 2 && operation.route) {
+        const routeRecord = await routeManager.deactivate(operation.route, operation.target.containerId);
+        routeProof = routeRecord.proof;
+      }
       await dockerRequest('DELETE', '/containers/' + operation.target.containerId + '?force=1&v=0');
       await dockerRequest(
         'POST',
@@ -817,7 +847,8 @@ function createAdoptionManager({
         rollback: {
           ...operation.rollback,
           available: false,
-          proof: sourceProof
+          proof: sourceProof,
+          routeProof
         }
       };
       atomicWriteJson(operationPath(operationId), updated);
@@ -833,7 +864,8 @@ function createAdoptionManager({
       schemaVersion: OPERATION_SCHEMA_VERSION,
       scope: 'disposable-pilot-only',
       plans: listJsonFiles(plansRoot),
-      operations: listJsonFiles(operationsRoot)
+      operations: listJsonFiles(operationsRoot),
+      routes: routeManager.status()
     };
   }
 

@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "check": "node --check server.js && node --check appCatalog.js && node --check appManager.js && node --check dockerClient.js && node --check resourceRegistry.js && node --check adoptionManager.js && node --check adoptionCli.js",
+    "check": "node --check server.js && node --check appCatalog.js && node --check appManager.js && node --check dockerClient.js && node --check resourceRegistry.js && node --check routeManager.js && node --check adoptionManager.js && node --check adoptionCli.js",
     "test": "node --test *.test.js"
   },
   "dependencies": {

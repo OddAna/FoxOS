@@ -3,6 +3,9 @@ services:
     environment:
       FOXOS_SECURE_COOKIE: "true"
       FOXOS_TRUST_PROXY: "1"
+      FOXOS_ROUTE_BASE_URL: "https://${FOXOS_DOMAIN}:${FOXOS_HTTPS_PORT:-8443}"
+      FOXOS_ROUTE_NETWORK: "${FOXOS_ROUTE_NETWORK:-foxos-routing}"
+      FOXOS_ROUTE_GATEWAY_HOST: "foxos-gateway"
 
   foxos-gateway:
     build:
@@ -18,6 +21,9 @@ services:
     environment:
       FOXOS_DOMAIN: "${FOXOS_DOMAIN:?Set FOXOS_DOMAIN in .env}"
       FOXOS_ACME_EMAIL: "${FOXOS_ACME_EMAIL:?Set FOXOS_ACME_EMAIL in .env}"
+    networks:
+      - default
+      - foxos-routing
     secrets:
       - cloudflare_api_token
     volumes:
@@ -54,3 +60,11 @@ services:
 secrets:
   cloudflare_api_token:
     file: ./.foxos-data/gateway/secrets/cloudflare-api-token
+
+networks:
+  foxos-routing:
+    name: "${FOXOS_ROUTE_NETWORK:-foxos-routing}"
+    internal: true
+    labels:
+      com.foxos.core: "true"
+      com.foxos.routing: "true"

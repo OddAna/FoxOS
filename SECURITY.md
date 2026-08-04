@@ -81,10 +81,18 @@ treated as sensitive.
 
 The preserved source container is stopped and renamed, not deleted. A rollback
 verifies that the active target carries the expected FoxOS resource identity,
-removes only that target without deleting its named volume, restores the source
-name and state, and verifies health when the source defines a health check. The
-pilot is not evidence that databases, live write-heavy volumes, routes, TLS or
-secrets are safe to migrate.
+disconnects it from the FoxOS-owned internal routing network, verifies that the
+public HTTPS pilot path no longer serves the app, removes only that target
+without deleting its named volume, restores the source name and state, and
+verifies health when the source defines a health check.
+
+The fixed pilot route uses only `foxos-gateway`, the `foxos-routing` internal
+network and owner-only route records under `.foxos-data/routes/`. The target is
+connected with a fixed alias only after Docker health succeeds. FoxOS accepts
+the cutover only after a browser-trusted TLS request returns the expected route
+identity. Neither apply nor rollback joins or edits a provider proxy or network.
+This narrow proof is not evidence that arbitrary domains, databases, live
+write-heavy volumes or secrets are safe to migrate.
 
 ## Reporting a vulnerability
 

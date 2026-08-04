@@ -6,6 +6,7 @@ const { execFile } = require('child_process');
 const express = require('express');
 const { AdoptionError, createAdoptionManager } = require('./adoptionManager');
 const { createDockerClient } = require('./dockerClient');
+const { createRouteManager } = require('./routeManager');
 const { APP_CATALOG, getCatalogApp } = require('./appCatalog');
 const { resolveAppIcon } = require('./appIcon');
 const { SCHEMA_VERSION: RESOURCE_SCHEMA_VERSION, createResourceRegistry } = require('./resourceRegistry');
@@ -367,15 +368,23 @@ const resourceRegistry = createResourceRegistry({
   dataRoot: DATA_ROOT,
   dockerRequest
 });
+const routeManager = createRouteManager({
+  dataRoot: DATA_ROOT,
+  dockerRequest,
+  publicBaseUrl: process.env.FOXOS_ROUTE_BASE_URL,
+  networkName: process.env.FOXOS_ROUTE_NETWORK || 'foxos-routing',
+  gatewayHost: process.env.FOXOS_ROUTE_GATEWAY_HOST || 'foxos-gateway'
+});
 const adoptionManager = createAdoptionManager({
   dataRoot: DATA_ROOT,
   dockerRequest,
   dockerArchiveRequest: dockerClient.requestBuffer,
-  resourceRegistry
+  resourceRegistry,
+  routeManager
 });
 
 function sendAdoptionError(res, error, action) {
-  const status = error instanceof AdoptionError ? error.statusCode : 500;
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
   if (status >= 500) console.error(action + ':', error.message);
   res.status(status).json({
     error: status >= 500 && !(error instanceof AdoptionError) ? 'Adoption operation failed' : error.message,
@@ -816,6 +825,14 @@ app.get('/api/adoptions', (req, res) => {
     res.json(adoptionManager.status());
   } catch (error) {
     sendAdoptionError(res, error, 'Could not read adoption state');
+  }
+});
+
+app.get('/api/routes', (req, res) => {
+  try {
+    res.json(routeManager.status());
+  } catch (error) {
+    sendAdoptionError(res, error, 'Could not read FoxOS routes');
   }
 });
 
