@@ -5,6 +5,7 @@ const path = require('node:path');
 const test = require('node:test');
 const {
   createResourceRegistry,
+  detectConflicts,
   identityAliases,
   parseTraefikRoutes,
   roleFor,
@@ -259,4 +260,21 @@ test('a preserved rollback container cannot claim the adopted resource identity'
 
   assert.equal(adoptedAliases.includes('foxos:' + labels['com.foxos.resource.id']), true);
   assert.deepEqual(rollbackAliases, ['rollback-container:' + 'b'.repeat(64)]);
+});
+
+test('a preserved rollback container does not create a false active host-port conflict', () => {
+  const port = { privatePort: 80, protocol: 'tcp', hostIp: '127.0.0.1', hostPort: 18088 };
+  const mount = { type: 'volume', name: 'foxos-adoption-lab-data' };
+  const conflicts = detectConflicts([
+    { id: 'res_target', name: 'foxos-adoption-lab', ports: [port], routes: [], mounts: [mount] },
+    {
+      id: 'res_source',
+      name: 'foxos-adoption-lab-foxos-rollback-1234abcd',
+      ports: [port],
+      routes: [],
+      mounts: [mount]
+    }
+  ]);
+  assert.equal(conflicts.some((conflict) => conflict.type === 'host-port'), false);
+  assert.equal(conflicts.some((conflict) => conflict.type === 'shared-volume'), true);
 });
