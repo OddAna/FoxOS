@@ -13,6 +13,9 @@ write to the host filesystem, and control the Docker daemon.
 - Use a unique password of at least 10 characters.
 - Keep the server, Docker Engine, and FoxOS image up to date.
 - Back up files before using terminal or file-management write actions.
+- Base `install.sh` must never create a provider account, bucket, subscription,
+  DNS record or other remote/billable resource. External adapters require a
+  separate explicit operator action.
 
 When an HTTPS reverse proxy is in place, set `FOXOS_SECURE_COOKIE=true`.
 
@@ -26,6 +29,7 @@ directly to the FoxOS-owned gateway.
 The DNS credential must be limited to `Zone:Read` and `DNS:Edit` for the single
 FoxOS zone. `install-gateway.sh` writes it to an owner-only Docker secret file;
 never place it in Git, `.env`, the Caddyfile, command output, or issue reports.
+This optional gateway is not invoked by the base installer.
 
 ## App Store deployments
 

@@ -3,7 +3,11 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { createBackupManager, endpointIsOffHost } = require('./backupManager');
+const {
+  CLEAR_CONFIGURATION_CONFIRMATION,
+  createBackupManager,
+  endpointIsOffHost
+} = require('./backupManager');
 const { createEncryptionStore } = require('./encryptionStore');
 
 test('encrypted backup is uploaded, downloaded, authenticated and never persisted as plaintext', async () => {
@@ -59,6 +63,34 @@ test('off-host gate rejects loopback and non-TLS endpoints', () => {
   assert.equal(endpointIsOffHost('https://objects.example.test'), true);
   assert.equal(endpointIsOffHost('http://objects.example.test'), false);
   assert.equal(endpointIsOffHost('https://127.0.0.1:9000'), false);
+});
+
+test('fresh FoxOS data starts without any external backup provider', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-backup-test-'));
+  try {
+    const manager = createBackupManager({
+      dataRoot: root,
+      encryptionStore: createEncryptionStore({ dataRoot: root })
+    });
+
+    assert.deepEqual(manager.status(), {
+      schemaVersion: 1,
+      adapter: null,
+      configured: false,
+      ready: false,
+      offHost: false,
+      endpointHost: null,
+      bucket: null,
+      prefix: null,
+      credentialsIncluded: false,
+      encryptedBeforeUpload: true,
+      restoreVerificationRequired: true
+    });
+    assert.equal(fs.existsSync(manager.paths.configFile), false);
+    assert.equal(fs.existsSync(manager.paths.credentialsFile), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('downloaded ciphertext tampering fails before restore', async () => {
@@ -133,6 +165,44 @@ test('S3 configuration encrypts credentials separately with owner-only permissio
     const config = fs.readFileSync(manager.paths.configFile, 'utf8');
     assert.equal(config.includes('scoped-access-key'), false);
     assert.equal(config.includes('scoped-secret-key'), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('external backup configuration can be removed without deleting local recovery evidence', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-backup-test-'));
+  try {
+    const encryptionStore = createEncryptionStore({ dataRoot: root });
+    const manager = createBackupManager({ dataRoot: root, encryptionStore });
+    manager.configureS3({
+      endpoint: 'https://objects.example.test',
+      bucket: 'foxos-backups',
+      prefix: 'foxos',
+      region: 'auto',
+      accessKeyId: 'scoped-access-key',
+      secretAccessKey: 'scoped-secret-key'
+    });
+    const archiveDirectory = path.join(manager.paths.archivesRoot, 'op-test');
+    const archiveFile = path.join(archiveDirectory, 'volume.foxosenc');
+    fs.mkdirSync(archiveDirectory, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(archiveFile, 'encrypted-test-evidence', { mode: 0o600 });
+    const masterKeyFile = encryptionStore.paths.keyFile;
+
+    assert.throws(
+      () => manager.clearConfiguration('REMOVE SOMETHING ELSE'),
+      (error) => error.code === 'confirmation-required'
+    );
+    const result = manager.clearConfiguration(CLEAR_CONFIGURATION_CONFIRMATION);
+
+    assert.equal(result.configRemoved, true);
+    assert.equal(result.encryptedCredentialsRemoved, true);
+    assert.equal(result.backup.configured, false);
+    assert.equal(result.backup.ready, false);
+    assert.equal(fs.existsSync(manager.paths.configFile), false);
+    assert.equal(fs.existsSync(manager.paths.credentialsFile), false);
+    assert.equal(fs.readFileSync(archiveFile, 'utf8'), 'encrypted-test-evidence');
+    assert.equal(fs.existsSync(masterKeyFile), true);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

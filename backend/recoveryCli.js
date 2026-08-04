@@ -2,7 +2,10 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { createBackupManager } = require('./backupManager');
+const {
+  CLEAR_CONFIGURATION_CONFIRMATION,
+  createBackupManager
+} = require('./backupManager');
 const { createEncryptionStore } = require('./encryptionStore');
 
 function flagValue(args, name, fallback = null) {
@@ -72,7 +75,16 @@ function main() {
     return;
   }
 
-  throw new Error('Usage: recoveryCli.js <status|configure-s3>');
+  if (command === 'clear-configuration') {
+    const result = manager.clearConfiguration(flagValue(args, '--confirm'));
+    process.stdout.write(JSON.stringify(result, null, 2) + '\n');
+    return;
+  }
+
+  throw new Error(
+    'Usage: recoveryCli.js <status|configure-s3|clear-configuration> ' +
+    `[--confirm "${CLEAR_CONFIGURATION_CONFIRMATION}"]`
+  );
 }
 
 try {
