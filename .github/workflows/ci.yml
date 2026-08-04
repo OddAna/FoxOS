@@ -323,7 +323,7 @@ jobs:
               process.stdout.write(current.startOrder.map(name=>services.get(name)).join("\n"));
             });
           ')
-          while IFS= read -r compose_container_id; do
+          while IFS= read -r compose_container_id || [ -n "$compose_container_id" ]; do
             test -n "$compose_container_id"
             compose_resource_id=$(docker inspect --format '{{ index .Config.Labels "com.foxos.resource.id" }}' "$compose_container_id")
             finalize_manifest "$compose_resource_id" "foxos-compose-deployment-revision"
