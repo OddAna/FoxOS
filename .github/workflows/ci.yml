@@ -58,3 +58,9 @@ jobs:
           FOXOS_DOMAIN=foxos.example.com \
           FOXOS_ACME_EMAIL=admin@example.com \
           docker compose -f docker-compose.yml -f docker-compose.gateway.yml config --quiet
+          docker build --tag foxos-gateway-ci gateway
+          docker run --rm --entrypoint caddy \
+            -e FOXOS_DOMAIN=foxos.example.com \
+            -e FOXOS_ACME_EMAIL=admin@example.com \
+            -e CLOUDFLARE_API_TOKEN=0000000000000000000000000000000000000000 \
+            foxos-gateway-ci validate --config /etc/caddy/Caddyfile --adapter caddyfile

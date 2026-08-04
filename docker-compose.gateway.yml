@@ -15,17 +15,12 @@ services:
         condition: service_healthy
     ports:
       - "${FOXOS_HTTPS_BIND_ADDRESS:-0.0.0.0}:${FOXOS_HTTPS_PORT:-8443}:443/tcp"
-      - "${FOXOS_HTTPS_BIND_ADDRESS:-0.0.0.0}:${FOXOS_HTTPS_PORT:-8443}:443/udp"
     environment:
       FOXOS_DOMAIN: "${FOXOS_DOMAIN:?Set FOXOS_DOMAIN in .env}"
       FOXOS_ACME_EMAIL: "${FOXOS_ACME_EMAIL:?Set FOXOS_ACME_EMAIL in .env}"
     secrets:
       - cloudflare_api_token
     volumes:
-      - type: bind
-        source: ./gateway/Caddyfile
-        target: /etc/caddy/Caddyfile
-        read_only: true
       - type: bind
         source: ./.foxos-data/gateway/caddy-data
         target: /data

@@ -2,6 +2,10 @@
 	admin off
 	auto_https disable_redirects
 	email {$FOXOS_ACME_EMAIL}
+	skip_install_trust
+	servers {
+		protocols h1 h2
+	}
 }
 
 {$FOXOS_DOMAIN} {
