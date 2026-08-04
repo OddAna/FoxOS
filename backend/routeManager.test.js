@@ -2,8 +2,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { EventEmitter } = require('node:events');
 const test = require('node:test');
-const { createRouteManager } = require('./routeManager');
+const { createRouteManager, defaultHttpsProbe } = require('./routeManager');
 
 const RESOURCE_ID = 'res_' + '1'.repeat(32);
 const TARGET_ID = 'b'.repeat(64);
@@ -132,4 +133,34 @@ test('route activation rejects networks that are not FoxOS-owned', async () => {
   } finally {
     fs.rmSync(harness.root, { recursive: true, force: true });
   }
+});
+
+test('HTTPS proof retains TLS authorization after Node releases the response socket', async () => {
+  const route = {
+    publicUrl: 'https://foxos.example.test:8443/_foxos/apps/foxos-adoption-lab/'
+  };
+  const proof = await defaultHttpsProbe({
+    gatewayHost: 'foxos-gateway',
+    route,
+    expectedAvailable: true,
+    timeoutMs: 100,
+    httpsRequest: (_options, onResponse) => {
+      const request = new EventEmitter();
+      request.end = () => {
+        const response = new EventEmitter();
+        response.statusCode = 200;
+        response.headers = { 'x-foxos-route': 'foxos-adoption-lab' };
+        response.socket = { authorized: true };
+        onResponse(response);
+        process.nextTick(() => {
+          response.socket = null;
+          response.emit('end');
+        });
+      };
+      request.destroy = (error) => request.emit('error', error);
+      return request;
+    }
+  });
+  assert.equal(proof.verified, true);
+  assert.equal(proof.authorizedTls, true);
 });
