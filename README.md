@@ -37,8 +37,8 @@ not use the host package manager for its own runtime.
   `.foxos-data/` and survive rebuilds
 - **Server-side authentication** — salted scrypt password hashing, HTTP-only
   session cookies, protected management APIs, and basic login rate limiting
-- **Single production service** — the React UI is built once and served by the
-  Node.js agent on port `8080`
+- **Independent HTTPS gateway** — the optional FoxOS-owned Caddy service issues
+  and renews its own certificate without the Coolify proxy or network
 
 FoxOS is currently an **alpha**. See [Current limitations](#current-limitations)
 before exposing it to other users.
@@ -98,11 +98,40 @@ docker compose up -d
 Do not publish FoxOS directly to the public internet. Read
 [SECURITY.md](SECURITY.md) first.
 
+### 3. Optional independent public HTTPS
+
+FoxOS can publish its own HTTPS endpoint without Coolify. The first gateway
+adapter uses Caddy and Cloudflare **DNS only** for ACME DNS-01 validation; web
+traffic goes directly from the browser to the FoxOS gateway.
+
+1. Create a DNS-only `A` record for the chosen FoxOS hostname pointing to the
+   server.
+2. Create a Cloudflare API token limited to the one zone with only
+   `Zone:Read` and `DNS:Edit`.
+3. Run:
+
+```bash
+chmod +x install-gateway.sh
+./install-gateway.sh
+```
+
+The installer asks for the hostname, ACME contact email and token without
+printing the token. It binds the direct agent port to `127.0.0.1`, enables
+secure session cookies, writes the credential to an owner-only Docker secret,
+and starts the isolated `foxos-gateway` service.
+
+The gateway uses host port `8443` by default so it can coexist with another
+process already using `443`. Open `https://your-foxos-domain:8443`. Set
+`FOXOS_HTTPS_PORT=443` when standard HTTPS port `443` is free.
+
 ## How it controls the host
 
 ```text
 Browser
-  │  authenticated, same-origin HTTP
+  │  authenticated, same-origin HTTPS
+  ▼
+FoxOS-owned gateway (optional Caddy + DNS-01 TLS)
+  │  private Compose network
   ▼
 FoxOS agent container (Node.js + built React UI)
   ├── host PID/mount/network namespaces via nsenter
@@ -205,6 +234,14 @@ docker compose ps
 # Logs
 docker compose logs -f foxos
 
+# Gateway status and logs
+docker compose -f docker-compose.yml -f docker-compose.gateway.yml ps
+docker compose -f docker-compose.yml -f docker-compose.gateway.yml logs -f foxos-gateway
+
+# Restart or stop a gateway installation
+docker compose -f docker-compose.yml -f docker-compose.gateway.yml restart
+docker compose -f docker-compose.yml -f docker-compose.gateway.yml down
+
 # Restart
 docker compose restart foxos
 
@@ -214,6 +251,10 @@ docker compose down
 # Update after pulling new code
 git pull
 ./install.sh
+
+# Update a gateway installation; the owner-only DNS secret is reused
+git pull
+./install-gateway.sh
 ```
 
 ### Change the port
@@ -260,7 +301,8 @@ authentication record, FoxOS desktop files, and trash.
   files and untrusted install scripts are not accepted through the UI
 - App Store images are maintained by their respective third-party projects, not
   by FoxOS
-- HTTPS must be provided by a reverse proxy or private access layer
+- The included FoxOS-owned HTTPS gateway currently ships one DNS-01 adapter for
+  Cloudflare-managed zones; additional DNS providers are not yet packaged
 
 ## Development
 
@@ -291,7 +333,10 @@ ships a single runtime service.
 FoxOS/
 ├── Dockerfile                 # Multi-stage production image
 ├── docker-compose.yml         # Privileged Linux host integration
+├── docker-compose.gateway.yml # Optional independent HTTPS gateway
 ├── install.sh                 # Environment checks and startup
+├── install-gateway.sh         # Owner-only DNS secret and HTTPS startup
+├── gateway/                   # Caddy build, config, and secret entrypoint
 ├── SECURITY.md                # Deployment and disclosure guidance
 ├── backend/
 │   ├── server.js              # Auth, files, host terminal, metrics, Docker API

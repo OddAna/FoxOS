@@ -11,6 +11,7 @@ const SAFE_LABEL_KEYS = new Set([
   'com.foxos.app.id',
   'com.foxos.app.name',
   'com.foxos.core',
+  'com.foxos.gateway',
   'com.foxos.resource.id',
   'com.docker.compose.project',
   'com.docker.compose.service',
@@ -219,6 +220,7 @@ function roleFor(labels, image, name, ports, routes) {
   const subtype = String(labels['coolify.service.subType'] || labels['coolify.type'] || '').toLowerCase();
   const identity = `${image} ${name} ${labels['coolify.service.subName'] || ''} ${labels['coolify.serviceName'] || ''}`.toLowerCase();
 
+  if (isTrue(labels['com.foxos.gateway'])) return 'proxy';
   if (isTrue(labels['com.foxos.core'])) return 'core';
   if (/(^|[/_.-])(traefik|caddy|nginx|haproxy)(:|[/_.-]|$)/.test(identity) || name === 'coolify-proxy') return 'proxy';
   if (subtype === 'database' || /(postgres|mysql|mariadb|mongo|redis|qdrant|clickhouse|cassandra|elasticsearch|opensearch|influxdb)/.test(identity)) return 'database';
@@ -682,5 +684,6 @@ module.exports = {
   createResourceRegistry,
   detectConflicts,
   parseTraefikRoutes,
+  roleFor,
   safeLabels
 };

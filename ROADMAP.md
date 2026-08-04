@@ -14,6 +14,10 @@ removal of Coolify or any other imported provider. Providers may discover,
 import, export or apply information, but they must never remain the only source
 of truth after adoption. See `ARCHITECTURE.md`.
 
+FoxOS core and its public HTTPS path have zero Coolify dependency. Optional
+Coolify discovery exists only to rescue legacy workloads and must be removable
+without changing FoxOS behavior.
+
 ## Ordered implementation milestones
 
 1. **Resource registry and ownership audit** — create the provider-neutral,
@@ -96,6 +100,10 @@ of truth after adoption. See `ARCHITECTURE.md`.
 
 ## Domains, proxy and TLS
 
+- [x] Add the first FoxOS-owned control-panel gateway: an isolated Caddy service,
+  DNS-01 certificate issuance/renewal, owner-only persistent TLS state, secure
+  cookies and a loopback-only direct agent port. It does not use the Coolify
+  proxy, API, network, labels or certificate store.
 - [ ] Manage domains and routes through a FoxOS-owned Traefik, Caddy or NGINX layer.
 - [ ] Detect domain and port collisions before deployment.
 - [ ] Support HTTP-to-HTTPS redirects, WebSockets, path routes and reviewed middleware.

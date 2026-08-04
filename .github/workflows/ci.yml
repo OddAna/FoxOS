@@ -51,3 +51,10 @@ jobs:
         run: |
           docker compose config --quiet
           bash -n install.sh
+          bash -n install-gateway.sh
+          sh -n gateway/entrypoint.sh
+          mkdir -p .foxos-data/gateway/secrets .foxos-data/gateway/caddy-data .foxos-data/gateway/caddy-config
+          touch .foxos-data/gateway/secrets/cloudflare-api-token
+          FOXOS_DOMAIN=foxos.example.com \
+          FOXOS_ACME_EMAIL=admin@example.com \
+          docker compose -f docker-compose.yml -f docker-compose.gateway.yml config --quiet

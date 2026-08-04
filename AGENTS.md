@@ -31,9 +31,14 @@
   relationships, deployment revisions, domains, routes, TLS policy,
   environment configuration, secret references, persistence, backups and
   recovery metadata.
-- Coolify and similar control panels are import providers only. Their labels,
-  databases, APIs and proxy configuration may be read to build a migration
-  plan, but FoxOS must not require that provider after a resource is adopted.
+- FoxOS has zero Coolify runtime dependency. A clean installation and normal
+  host management, authentication, deployment, routing, TLS, storage, backup
+  and recovery path must not require Coolify APIs, databases, proxy, networks,
+  files or containers.
+- Coolify and similar control panels are optional migration readers only. Their
+  labels, databases, APIs and proxy configuration may be read to rescue an
+  existing resource, but this integration must be removable and disabled by
+  default. It is never part of the FoxOS core or HTTPS path.
 - Provider imports must produce a provider-neutral FoxOS manifest stored on the
   server. Preserve import provenance for audit and rollback, not as the active
   authority.

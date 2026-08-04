@@ -10,6 +10,13 @@ Coolify and similar products are migration inputs. FoxOS may inspect their
 labels, APIs, databases and proxy configuration, but an adopted resource must
 remain fully understandable and recoverable after that provider disappears.
 
+FoxOS itself has zero Coolify runtime dependency. A clean installation and its
+normal host management, authentication, deployment, routing, TLS, storage,
+backup and recovery paths must not call or join Coolify APIs, databases, proxy,
+networks, files or containers. Coolify support is an optional, removable
+migration reader for rescuing legacy workloads; it is disabled when absent and
+is never the FoxOS gateway.
+
 ## Authority model
 
 | Concern | FoxOS-owned authority | Replaceable input or adapter |

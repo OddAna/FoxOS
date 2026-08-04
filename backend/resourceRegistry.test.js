@@ -6,6 +6,7 @@ const test = require('node:test');
 const {
   createResourceRegistry,
   parseTraefikRoutes,
+  roleFor,
   safeLabels
 } = require('./resourceRegistry');
 
@@ -226,4 +227,14 @@ test('route and label normalization keeps only migration-safe fields', () => {
   });
   assert.equal(secretPathRoutes[0].path.startsWith('/webhook/:redacted-'), true);
   assert.equal(secretPathRoutes[0].path.includes('abcdefghijklmnopqrstuvwxyz123456'), false);
+});
+
+test('FoxOS gateway stays protected while being classified as the FoxOS proxy', () => {
+  const labels = {
+    'com.foxos.core': 'true',
+    'com.foxos.gateway': 'true'
+  };
+
+  assert.equal(roleFor(labels, 'foxos-gateway:0.0.1', 'foxos-gateway', [], []), 'proxy');
+  assert.deepEqual(safeLabels(labels), labels);
 });

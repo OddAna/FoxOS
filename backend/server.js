@@ -38,6 +38,10 @@ const loginAttempts = new Map();
 const appInstallOperations = new Set();
 const containerPortCache = new Map();
 
+if (process.env.FOXOS_TRUST_PROXY === '1') {
+  app.set('trust proxy', 1);
+}
+
 function ensureDirectory(directory) {
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
 }
@@ -203,7 +207,7 @@ function passwordMatches(password, authRecord) {
 }
 
 function loginKey(req) {
-  return req.socket.remoteAddress || 'unknown';
+  return req.ip || req.socket.remoteAddress || 'unknown';
 }
 
 function checkLoginRateLimit(req) {
