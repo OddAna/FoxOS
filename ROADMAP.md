@@ -152,11 +152,15 @@ target blocks only adoption/migration operations that require restore proof.
 
 ## Declarative resources and migration
 
-- [ ] Expand the versioned FoxOS application manifest beyond the implemented
-  disposable image/port/health/mount/restart/resource-limit subset to source
-  builds, domains, TLS, classified environment, secrets and dependencies.
-- [ ] Import the existing Coolify resource graph without copying secrets into
-  logs or taking ownership before explicit migration.
+- [x] Add Application Manifest v1 with immutable OCI input, runtime constraints,
+  domains/TLS route references, classified environment revision, encrypted
+  secret references, persistence/recovery policy, dependencies, health evidence
+  and update/rollback proof.
+- [x] Compile the existing Docker/Compose/Coolify resource graph into redacted,
+  provider-neutral import drafts without copying secret values, mutating the
+  runtime or taking ownership.
+- [ ] Extend the manifest source model from immutable OCI images to FoxOS-owned
+  source-build and Compose deployment revisions.
 - [ ] Distinguish applications, databases, workers, agents, proxies and internal
   dependencies while keeping every manageable instance addressable.
 - [ ] Expand the implemented disposable dry-run, conflict detection, verified

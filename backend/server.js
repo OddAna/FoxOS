@@ -5,6 +5,10 @@ const path = require('path');
 const { execFile } = require('child_process');
 const express = require('express');
 const { AdoptionError, createAdoptionManager } = require('./adoptionManager');
+const {
+  ApplicationManifestError,
+  createApplicationManifestManager
+} = require('./applicationManifestManager');
 const { createBackupManager } = require('./backupManager');
 const { createDockerClient } = require('./dockerClient');
 const { createEncryptionStore } = require('./encryptionStore');
@@ -422,6 +426,14 @@ const imageUpdateManager = createImageUpdateManager({
   dataRoot: DATA_ROOT,
   dockerRequest
 });
+const applicationManifestManager = createApplicationManifestManager({
+  dataRoot: DATA_ROOT,
+  resourceRegistry,
+  getEnvironmentRevision: (resourceId) => secretManager.getEnvironmentRevision(resourceId),
+  routeStatus: () => routeManager.status(),
+  backupStatus: () => backupManager.status(),
+  imageUpdateStatus: () => imageUpdateManager.status()
+});
 
 function sendAdoptionError(res, error, action) {
   const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
@@ -458,6 +470,17 @@ function sendImageUpdateError(res, error, action) {
   res.status(status).json({
     error: status >= 500 && !(error instanceof ImageUpdateError) ? 'Image-update operation failed' : error.message,
     code: error.code || 'image-update-error'
+  });
+}
+
+function sendApplicationManifestError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof ApplicationManifestError)
+      ? 'Application manifest operation failed'
+      : error.message,
+    code: error.code || 'application-manifest-error'
   });
 }
 
@@ -1091,6 +1114,53 @@ app.post('/api/image-updates/:operationId/rollback', async (req, res) => {
     res.json({ operation });
   } catch (error) {
     sendImageUpdateError(res, error, 'Could not roll back image update');
+  }
+});
+
+app.get('/api/application-manifests', (req, res) => {
+  try {
+    res.json(applicationManifestManager.status());
+  } catch (error) {
+    sendApplicationManifestError(res, error, 'Could not read application manifests');
+  }
+});
+
+app.post('/api/application-manifests/drafts', (req, res) => {
+  try {
+    const draft = applicationManifestManager.createDraft(req.body || {});
+    res.status(201).json({ draft });
+  } catch (error) {
+    sendApplicationManifestError(res, error, 'Could not create application manifest draft');
+  }
+});
+
+app.get('/api/application-manifests/drafts/:draftId', (req, res) => {
+  try {
+    res.json({ draft: applicationManifestManager.getDraft(req.params.draftId) });
+  } catch (error) {
+    sendApplicationManifestError(res, error, 'Could not read application manifest draft');
+  }
+});
+
+app.post('/api/application-manifests/drafts/:draftId/finalize', (req, res) => {
+  try {
+    const manifest = applicationManifestManager.finalizeDraft(
+      req.params.draftId,
+      req.body && req.body.confirmation
+    );
+    res.status(201).json({ manifest });
+  } catch (error) {
+    sendApplicationManifestError(res, error, 'Could not finalize application manifest');
+  }
+});
+
+app.get('/api/application-manifests/resources/:resourceId/current', (req, res) => {
+  try {
+    const manifest = applicationManifestManager.getCurrent(req.params.resourceId);
+    if (!manifest) return res.status(404).json({ error: 'Application manifest was not found' });
+    res.json({ manifest });
+  } catch (error) {
+    sendApplicationManifestError(res, error, 'Could not read current application manifest');
   }
 });
 

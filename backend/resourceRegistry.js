@@ -303,7 +303,9 @@ function identityAliases(container, labels) {
   const coolifyResource = labels['coolify.resourceName'];
   const coolifyService = labels['coolify.serviceName'] || labels['coolify.service.subName'];
 
-  if (foxosId) aliases.push(`foxos:${foxosId}`);
+  if (foxosId && /^res_[a-f0-9]{32}$/.test(foxosId) && (
+    isTrue(labels['com.foxos.managed']) || isTrue(labels['com.foxos.core'])
+  )) aliases.push(`foxos:${foxosId}`);
   if (composeProject && composeService) aliases.push(`compose:${composeProject}:${composeService}:${composeNumber}`);
   if (coolifyResource) aliases.push(`coolify-resource:${coolifyResource}:${coolifyService || ''}:${name}`);
   aliases.push(`container-name:${name}`);
@@ -313,9 +315,13 @@ function identityAliases(container, labels) {
 
 function resolveResourceId(identityState, aliases, observedAt, randomUUID) {
   const aliasHashes = aliases.map((alias) => hash(alias, 64));
+  const claimedFoxosId = aliases.map((alias) => alias.match(/^foxos:(res_[a-f0-9]{32})$/))
+    .find(Boolean);
   const existing = aliasHashes.map((aliasHash) => identityState.aliases[aliasHash])
     .find((candidate) => candidate && candidate.resourceId);
-  const resourceId = existing ? existing.resourceId : 'res_' + randomUUID().replace(/-/g, '');
+  const resourceId = claimedFoxosId
+    ? claimedFoxosId[1]
+    : existing ? existing.resourceId : 'res_' + randomUUID().replace(/-/g, '');
 
   for (const aliasHash of aliasHashes) {
     const record = identityState.aliases[aliasHash];
@@ -365,6 +371,22 @@ function normalizeResource(container, details, resourceId, inspectionFailed) {
       health: {
         configured: Boolean(healthConfig && Array.isArray(healthConfig.Test) && healthConfig.Test.length),
         status: healthState && healthState.Status || null
+      },
+      constraints: {
+        user: details && details.Config && details.Config.User || null,
+        privileged: Boolean(details && details.HostConfig && details.HostConfig.Privileged),
+        readOnlyRootFilesystem: Boolean(details && details.HostConfig && details.HostConfig.ReadonlyRootfs),
+        noNewPrivileges: Boolean(
+          details && details.HostConfig && Array.isArray(details.HostConfig.SecurityOpt) &&
+          details.HostConfig.SecurityOpt.includes('no-new-privileges:true')
+        ),
+        allCapabilitiesDropped: Boolean(
+          details && details.HostConfig && Array.isArray(details.HostConfig.CapDrop) &&
+          details.HostConfig.CapDrop.includes('ALL')
+        ),
+        memoryBytes: details && details.HostConfig && Number(details.HostConfig.Memory) || null,
+        nanoCpus: details && details.HostConfig && Number(details.HostConfig.NanoCpus) || null,
+        pidsLimit: details && details.HostConfig && Number(details.HostConfig.PidsLimit) || null
       },
       environmentVariableCount: details && details.Config && Array.isArray(details.Config.Env)
         ? details.Config.Env.length
@@ -710,6 +732,7 @@ module.exports = {
   detectConflicts,
   identityAliases,
   parseTraefikRoutes,
+  resolveResourceId,
   roleFor,
   safeLabels
 };
