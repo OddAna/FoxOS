@@ -10,6 +10,34 @@ function flagValue(args, name, fallback = null) {
   return index === -1 ? fallback : args[index + 1];
 }
 
+function credentialsInput(args) {
+  const accessKeyFile = flagValue(args, '--access-key-file');
+  const secretKeyFile = flagValue(args, '--secret-key-file');
+  const fromStdin = args.includes('--credentials-stdin');
+  if (fromStdin && (accessKeyFile || secretKeyFile)) {
+    throw new Error('Choose credentials stdin or credential files, not both');
+  }
+  if (fromStdin) {
+    let parsed;
+    try {
+      parsed = JSON.parse(fs.readFileSync(0, 'utf8'));
+    } catch {
+      throw new Error('Credentials stdin must be a JSON object');
+    }
+    return {
+      accessKeyId: parsed && parsed.accessKeyId,
+      secretAccessKey: parsed && parsed.secretAccessKey
+    };
+  }
+  if (!accessKeyFile || !secretKeyFile) {
+    throw new Error('Both --access-key-file and --secret-key-file are required');
+  }
+  return {
+    accessKeyId: fs.readFileSync(path.resolve(accessKeyFile), 'utf8'),
+    secretAccessKey: fs.readFileSync(path.resolve(secretKeyFile), 'utf8')
+  };
+}
+
 function main() {
   const args = process.argv.slice(2);
   const command = args[0];
@@ -23,23 +51,22 @@ function main() {
   }
 
   if (command === 'configure-s3') {
-    const accessKeyFile = flagValue(args, '--access-key-file');
-    const secretKeyFile = flagValue(args, '--secret-key-file');
     const endpoint = flagValue(args, '--endpoint');
     const bucket = flagValue(args, '--bucket');
-    if (!accessKeyFile || !secretKeyFile || !endpoint || !bucket) {
+    if (!endpoint || !bucket) {
       throw new Error(
         'Usage: recoveryCli.js configure-s3 --endpoint <https-url> --bucket <name> ' +
-        '--access-key-file <path> --secret-key-file <path> [--region auto] [--prefix foxos]'
+        '(--credentials-stdin | --access-key-file <path> --secret-key-file <path>) ' +
+        '[--region auto] [--prefix foxos]'
       );
     }
+    const credentials = credentialsInput(args);
     const result = manager.configureS3({
       endpoint,
       bucket,
       region: flagValue(args, '--region', 'auto'),
       prefix: flagValue(args, '--prefix', 'foxos'),
-      accessKeyId: fs.readFileSync(path.resolve(accessKeyFile), 'utf8'),
-      secretAccessKey: fs.readFileSync(path.resolve(secretKeyFile), 'utf8')
+      ...credentials
     });
     process.stdout.write(JSON.stringify(result, null, 2) + '\n');
     return;

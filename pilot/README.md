@@ -40,10 +40,10 @@ that resource. Values are read from the temporary file but are never returned
 by the secret CLI.
 
 ```bash
-DATA_ROOT=.foxos-data node backend/secretCli.js put pilot-token \
-  --value-file /tmp/foxos-pilot-token
+docker compose exec -T foxos node /app/secretCli.js put pilot-token \
+  --value-stdin < /tmp/foxos-pilot-token
 
-DATA_ROOT=.foxos-data node backend/secretCli.js environment RESOURCE_ID \
+docker compose exec -T foxos node /app/secretCli.js environment RESOURCE_ID \
   --ordinary FOXOS_PILOT_MODE=disposable \
   --secret FOXOS_PILOT_TOKEN=pilot-token
 
@@ -57,18 +57,18 @@ bucket. Planning remains blocked until this target is ready.
 
 ## Plan, apply and roll back
 
-Run these commands from the FoxOS repository. The CLI uses the same local
-manager and data root as the authenticated API; inside the FoxOS container its
-data root is `/data`.
+Run these commands from the FoxOS repository. They execute inside the running
+agent so route verification uses the FoxOS-owned internal network and the same
+`/data` state as the authenticated API.
 
 ```bash
-DATA_ROOT=.foxos-data node backend/adoptionCli.js plan foxos-adoption-lab \
+docker compose exec -T foxos node /app/adoptionCli.js plan foxos-adoption-lab \
   --confirm-disposable --health-port 80 --health-path /
 
-DATA_ROOT=.foxos-data node backend/adoptionCli.js apply PLAN_ID \
+docker compose exec -T foxos node /app/adoptionCli.js apply PLAN_ID \
   --confirm "ADOPT DISPOSABLE RESOURCE_ID"
 
-DATA_ROOT=.foxos-data node backend/adoptionCli.js rollback OPERATION_ID \
+docker compose exec -T foxos node /app/adoptionCli.js rollback OPERATION_ID \
   --confirm "ROLLBACK OPERATION_ID"
 ```
 
