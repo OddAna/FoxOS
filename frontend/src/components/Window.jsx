@@ -1,9 +1,37 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useWindowManager } from '../contexts/WindowContext';
 
 const Window = ({ win, children }) => {
   const { closeWindow, minimizeWindow, maximizeWindow, focusWindow, updateWindowPosition, updateWindowDimensions, focusedWindowId } = useWindowManager();
   const isFocused = focusedWindowId === win.id;
+  const [contextMenu, setContextMenu] = useState(null);
+
+  useEffect(() => {
+    const closeContextMenu = () => setContextMenu(null);
+    window.addEventListener('click', closeContextMenu);
+    window.addEventListener('contextmenu', closeContextMenu, { capture: true });
+    return () => {
+      window.removeEventListener('click', closeContextMenu);
+      window.removeEventListener('contextmenu', closeContextMenu, { capture: true });
+    };
+  }, []);
+
+  const handleContextMenu = (event) => {
+    if (event.target.closest('[data-foxos-context-menu]')) return;
+    event.preventDefault();
+    event.stopPropagation();
+    focusWindow(win.id);
+    setContextMenu({
+      x: Math.min(event.clientX, window.innerWidth - 190),
+      y: Math.min(event.clientY, window.innerHeight - 120)
+    });
+  };
+
+  const runContextAction = (action) => {
+    setContextMenu(null);
+    action(win.id);
+  };
 
   const handlePointerDown = (e) => {
     if (e.target.closest('.window-controls')) return;
@@ -105,7 +133,13 @@ const Window = ({ win, children }) => {
   };
 
   return (
-    <div className={`window glass ${isFocused ? 'focused' : ''}`} style={style} onMouseDown={() => focusWindow(win.id)}>
+    <>
+    <div
+      className={`window glass ${isFocused ? 'focused' : ''}`}
+      style={style}
+      onMouseDown={() => { if (!isFocused) focusWindow(win.id); }}
+      onContextMenu={handleContextMenu}
+    >
       <div 
         className="window-header" 
         onPointerDown={handlePointerDown}
@@ -147,6 +181,35 @@ const Window = ({ win, children }) => {
         </>
       )}
     </div>
+    {contextMenu && createPortal(
+      <div
+        data-foxos-context-menu
+        style={{
+          position: 'fixed',
+          left: contextMenu.x,
+          top: contextMenu.y,
+          background: 'rgba(30, 30, 30, 0.8)',
+          backdropFilter: 'blur(10px)',
+          border: '1px solid rgba(255,255,255,0.1)',
+          borderRadius: '8px',
+          padding: '4px',
+          minWidth: '180px',
+          zIndex: 999999,
+          boxShadow: '0 10px 30px rgba(0,0,0,0.5)',
+          fontSize: '13px',
+          color: '#fff'
+        }}
+        onClick={(event) => event.stopPropagation()}
+        onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); }}
+      >
+        <div className="context-item" onClick={() => runContextAction(minimizeWindow)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>Simge Durumuna Küçült</div>
+        <div className="context-item" onClick={() => runContextAction(maximizeWindow)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>{win.isMaximized ? 'Önceki Boyut' : 'Tam Ekran'}</div>
+        <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '4px 0' }} />
+        <div className="context-item" onClick={() => runContextAction(closeWindow)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>Kapat</div>
+      </div>,
+      document.body
+    )}
+    </>
   );
 };
 

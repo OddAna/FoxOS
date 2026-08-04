@@ -131,10 +131,15 @@ to compromised root access.
   [Dozzle](https://github.com/amir20/dozzle),
   [IT-Tools](https://github.com/CorentinTh/it-tools), and
   [Stirling PDF](https://github.com/Stirling-Tools/Stirling-PDF).
+- Use an installed application's three-dot menu to open, start, stop, restart,
+  or inspect that exact instance.
 - Open **Terminal** to execute commands on the host.
 - Open **Dosyalar**, then **Sunucu**, to browse the host filesystem.
 - Use **Masaüstü** for FoxOS-only workspace files that should persist without
   cluttering the host root.
+- Right-clicks stay inside FoxOS instead of opening the browser menu. Desktop
+  and Files keep their item menus; application windows provide minimize,
+  maximize/restore, and close actions.
 
 The FoxOS core container is marked as protected and cannot stop or restart itself
 from the container list.

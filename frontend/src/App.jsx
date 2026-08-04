@@ -737,6 +737,12 @@ const Desktop = () => {
 function App() {
   const { authState } = useAuth();
 
+  useEffect(() => {
+    const preventBrowserContextMenu = (event) => event.preventDefault();
+    document.addEventListener('contextmenu', preventBrowserContextMenu);
+    return () => document.removeEventListener('contextmenu', preventBrowserContextMenu);
+  }, []);
+
   if (authState === 'loading') return <div style={{ background: '#000', width: '100vw', height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>Loading...</div>;
   if (authState === 'needs_setup') return <SetupScreen />;
   if (authState === 'locked') return <LockScreen />;
