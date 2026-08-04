@@ -284,23 +284,26 @@ pilot workflow yet.
 
 ```bash
 # Store or rotate a secret. The returned metadata never contains the value.
-DATA_ROOT=.foxos-data node backend/secretCli.js put pilot-token \
-  --value-file /owner-only/path/pilot-token
+docker compose exec -T foxos node /app/secretCli.js put pilot-token \
+  --value-stdin < /owner-only/path/pilot-token
 
 # Pin the source resource's complete override set to an environment revision.
-DATA_ROOT=.foxos-data node backend/secretCli.js environment RESOURCE_ID \
+docker compose exec -T foxos node /app/secretCli.js environment RESOURCE_ID \
   --ordinary FOXOS_PILOT_MODE=disposable \
   --secret FOXOS_PILOT_TOKEN=pilot-token
 
 # Configure an off-host S3-compatible HTTPS target with scoped credentials.
-DATA_ROOT=.foxos-data node backend/recoveryCli.js configure-s3 \
+docker compose exec -T foxos node /app/recoveryCli.js configure-s3 \
   --endpoint https://your-s3-endpoint \
   --bucket your-foxos-backup-bucket \
   --region auto \
   --prefix foxos \
-  --access-key-file /owner-only/path/access-key-id \
-  --secret-key-file /owner-only/path/secret-access-key
+  --credentials-stdin < /owner-only/path/s3-credentials.json
 ```
+
+The credential JSON has exactly two fields: `accessKeyId` and
+`secretAccessKey`. Keep that input file owner-only and remove it after the
+configuration is stored.
 
 `DATA_ROOT/security/master-key` is the local encryption root. Losing it makes
 encrypted secrets and archives unreadable, so it must be protected separately
