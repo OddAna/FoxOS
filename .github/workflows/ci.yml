@@ -314,20 +314,31 @@ jobs:
           source_resource_id=$(printf '%s' "$deployment_status" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).current.resourceId))')
           finalize_manifest "$source_resource_id" "foxos-source-build-revision"
 
-          compose_container_ids=$(printf '%s' "$compose_status" | node -e '
+          compose_start_order=$(printf '%s' "$compose_status" | node -e '
             let s="";
             process.stdin.on("data",c=>s+=c);
             process.stdin.on("end",()=>{
               const current=JSON.parse(s).current;
-              const services=new Map(current.services.map(service=>[service.name,service.containerId]));
-              process.stdout.write(current.startOrder.map(name=>services.get(name)).join("\n"));
+              const services=new Set(current.services.map(service=>service.name));
+              if(current.startOrder.length!==services.size || current.startOrder.some(name=>!services.has(name))) process.exit(1);
+              process.stdout.write(current.startOrder.join(" "));
             });
           ')
-          while IFS= read -r compose_container_id || [ -n "$compose_container_id" ]; do
+          for compose_service_name in $compose_start_order; do
+            compose_container_id=$(printf '%s' "$compose_status" | COMPOSE_SERVICE_NAME="$compose_service_name" node -e '
+              let s="";
+              process.stdin.on("data",c=>s+=c);
+              process.stdin.on("end",()=>{
+                const current=JSON.parse(s).current;
+                const service=current.services.find(candidate=>candidate.name===process.env.COMPOSE_SERVICE_NAME);
+                if(!service || !service.containerId) process.exit(1);
+                process.stdout.write(service.containerId);
+              });
+            ')
             test -n "$compose_container_id"
             compose_resource_id=$(docker inspect --format '{{ index .Config.Labels "com.foxos.resource.id" }}' "$compose_container_id")
             finalize_manifest "$compose_resource_id" "foxos-compose-deployment-revision"
-          done <<< "$compose_container_ids"
+          done
 
           manifest_status=$(docker compose exec -T foxos node /app/applicationManifestCli.js status)
           printf '%s' "$manifest_status" | node -e '
