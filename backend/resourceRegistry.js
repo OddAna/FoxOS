@@ -396,9 +396,12 @@ function detectConflicts(resources) {
   const domains = new Map();
   const volumes = new Map();
   for (const resource of resources) {
-    for (const port of resource.ports.filter((candidate) => candidate.hostPort)) {
-      const key = `${port.hostIp || '0.0.0.0'}:${port.hostPort}/${port.protocol}`;
-      hostPorts.set(key, [...(hostPorts.get(key) || []), resource.id]);
+    const preservedRollback = /-foxos-rollback-[a-f0-9]{8,32}$/.test(resource.name);
+    if (!preservedRollback) {
+      for (const port of resource.ports.filter((candidate) => candidate.hostPort)) {
+        const key = `${port.hostIp || '0.0.0.0'}:${port.hostPort}/${port.protocol}`;
+        hostPorts.set(key, [...(hostPorts.get(key) || []), resource.id]);
+      }
     }
     for (const route of resource.routes) {
       const key = `${route.domain}${route.path}`;
