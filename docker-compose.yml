@@ -1,0 +1,32 @@
+services:
+  foxos:
+    build:
+      context: .
+    container_name: foxos
+    privileged: true
+    pid: host
+    ports:
+      - "${FOXOS_BIND_ADDRESS:-127.0.0.1}:${FOXOS_PORT:-8080}:8080"
+    volumes:
+      - type: bind
+        source: /
+        target: /host
+        bind:
+          propagation: rslave
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+      - type: bind
+        source: ./.foxos-data
+        target: /data
+    environment:
+      PORT: "8080"
+      DATA_ROOT: /data
+      DISK_ROOT: /data/files
+      HOST_ROOT: /host
+      HOST_EXECUTION: nsenter
+      DOCKER_SOCKET: /var/run/docker.sock
+      FOXOS_SECURE_COOKIE: "${FOXOS_SECURE_COOKIE:-false}"
+    labels:
+      com.foxos.core: "true"
+    restart: unless-stopped

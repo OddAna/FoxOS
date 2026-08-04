@@ -1,0 +1,124 @@
+:root {
+  --bg-dark: rgba(255, 255, 255, 0.05);
+  --bg-light: rgba(255, 255, 255, 0.2);
+  --border-glass: rgba(255, 255, 255, 0.1);
+  --text-primary: #ffffff;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body, html {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background-color: #000;
+  color: var(--text-primary);
+}
+
+.desktop {
+  width: 100vw;
+  height: 100vh;
+  background-image: url('./assets/fox-wallpaper.jpg');
+  background-size: cover;
+  background-position: center;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Glassmorphism Utilities */
+.glass {
+  background: var(--bg-dark);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--border-glass);
+}
+
+/* TopBar */
+.topbar {
+  height: 30px;
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 16px;
+  font-size: 13px;
+  font-weight: 500;
+  z-index: 9999;
+  background: transparent;
+}
+
+.topbar-left, .topbar-right {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+.topbar-item {
+  cursor: pointer;
+}
+
+.topbar-item.brand {
+  font-weight: 800;
+}
+
+/* Dock */
+.dock-container {
+  position: absolute;
+  bottom: 12px;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  z-index: 9999;
+}
+
+.dock {
+  display: flex;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 24px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+}
+
+.dock-item {
+  width: 44px;
+  height: 44px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  cursor: pointer;
+  transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.dock-item:hover {
+  transform: scale(1.2) translateY(-5px);
+}
+
+/* Keep app icons floating freely without colored tile backgrounds. */
+
+.dock-item-wrapper {
+  position: relative;
+  display: flex;
+  justify-content: center;
+}
+
+.dock-indicator {
+  position: absolute;
+  bottom: 2px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: white;
+  opacity: 0;
+  transition: opacity 0.2s;
+  box-shadow: 0 0 4px rgba(255,255,255,0.8);
+}
+
+.dock-indicator.active {
+  opacity: 1;
+}

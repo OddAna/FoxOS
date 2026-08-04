@@ -1,0 +1,734 @@
+const crypto = require('crypto');
+const fs = require('fs');
+const http = require('http');
+const os = require('os');
+const path = require('path');
+const { execFile } = require('child_process');
+const express = require('express');
+
+const app = express();
+
+const PORT = Number.parseInt(process.env.PORT || '8080', 10);
+const DATA_ROOT = path.resolve(process.env.DATA_ROOT || path.join(__dirname, '..', '.foxos-data'));
+const DISK_ROOT = path.resolve(process.env.DISK_ROOT || path.join(DATA_ROOT, 'files'));
+const HOST_ROOT = path.resolve(process.env.HOST_ROOT || path.parse(process.cwd()).root);
+const HOST_EXECUTION = process.env.HOST_EXECUTION || 'local';
+const DOCKER_SOCKET = process.env.DOCKER_SOCKET || '/var/run/docker.sock';
+const AUTH_FILE = path.join(DATA_ROOT, 'auth.json');
+const PUBLIC_DIR = path.resolve(process.env.PUBLIC_DIR || path.join(__dirname, 'public'));
+const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+const COMMAND_TIMEOUT_MS = Number.parseInt(process.env.COMMAND_TIMEOUT_MS || '120000', 10);
+const COMMAND_MAX_BUFFER = 2 * 1024 * 1024;
+
+const sessions = new Map();
+const loginAttempts = new Map();
+
+function ensureDirectory(directory) {
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+}
+
+function initializeDataDirectory() {
+  ensureDirectory(DATA_ROOT);
+  ensureDirectory(DISK_ROOT);
+  ensureDirectory(path.join(DISK_ROOT, 'Masaüstü'));
+  ensureDirectory(path.join(DISK_ROOT, 'İndirilenler'));
+  ensureDirectory(path.join(DISK_ROOT, 'Belgeler'));
+  ensureDirectory(path.join(DISK_ROOT, 'Resimler'));
+  ensureDirectory(path.join(DISK_ROOT, 'Çöp Kutusu'));
+
+  const serverLink = path.join(DISK_ROOT, 'Sunucu');
+  if (!fs.existsSync(serverLink)) {
+    try {
+      fs.symlinkSync(HOST_ROOT, serverLink, 'dir');
+    } catch (error) {
+      console.warn('Could not create the host filesystem shortcut:', error.message);
+    }
+  }
+}
+
+initializeDataDirectory();
+
+app.disable('x-powered-by');
+app.use(express.json({ limit: '1mb' }));
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'self'; img-src 'self' data: https:; media-src 'self' blob:; " +
+      "style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-src http: https:; frame-ancestors 'none'"
+  );
+  next();
+});
+
+app.use((req, res, next) => {
+  if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
+    return next();
+  }
+
+  const origin = req.get('origin');
+  if (!origin) {
+    return next();
+  }
+
+  try {
+    if (new URL(origin).host !== req.get('host')) {
+      return res.status(403).json({ error: 'Cross-origin request rejected' });
+    }
+  } catch {
+    return res.status(403).json({ error: 'Invalid request origin' });
+  }
+
+  next();
+});
+
+function parseCookies(header = '') {
+  return header.split(';').reduce((cookies, entry) => {
+    const separator = entry.indexOf('=');
+    if (separator === -1) {
+      return cookies;
+    }
+    const key = entry.slice(0, separator).trim();
+    const value = entry.slice(separator + 1).trim();
+    if (key) {
+      cookies[key] = decodeURIComponent(value);
+    }
+    return cookies;
+  }, {});
+}
+
+function pruneSessions() {
+  const now = Date.now();
+  for (const [token, session] of sessions.entries()) {
+    if (session.expiresAt <= now) {
+      sessions.delete(token);
+    }
+  }
+}
+
+function getSession(req) {
+  pruneSessions();
+  const token = parseCookies(req.headers.cookie).foxos_session;
+  if (!token) {
+    return null;
+  }
+  const session = sessions.get(token);
+  if (!session || session.expiresAt <= Date.now()) {
+    sessions.delete(token);
+    return null;
+  }
+  return { token, ...session };
+}
+
+function setSessionCookie(res, token) {
+  const secure = process.env.FOXOS_SECURE_COOKIE === 'true' ? '; Secure' : '';
+  res.setHeader(
+    'Set-Cookie',
+    'foxos_session=' + encodeURIComponent(token) +
+      '; HttpOnly; SameSite=Strict; Path=/; Max-Age=' + Math.floor(SESSION_TTL_MS / 1000) + secure
+  );
+}
+
+function createSession(res, username) {
+  const token = crypto.randomBytes(32).toString('base64url');
+  sessions.set(token, { username, expiresAt: Date.now() + SESSION_TTL_MS });
+  setSessionCookie(res, token);
+}
+
+function clearSession(req, res) {
+  const session = getSession(req);
+  if (session) {
+    sessions.delete(session.token);
+  }
+  const secure = process.env.FOXOS_SECURE_COOKIE === 'true' ? '; Secure' : '';
+  res.setHeader('Set-Cookie', 'foxos_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' + secure);
+}
+
+function requireAuth(req, res, next) {
+  const session = getSession(req);
+  if (!session) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  req.session = session;
+  next();
+}
+
+function readAuthRecord() {
+  if (!fs.existsSync(AUTH_FILE)) {
+    return null;
+  }
+  try {
+    return JSON.parse(fs.readFileSync(AUTH_FILE, 'utf8'));
+  } catch (error) {
+    console.error('Could not read authentication data:', error.message);
+    return null;
+  }
+}
+
+function writeAuthRecord(record) {
+  const temporaryFile = AUTH_FILE + '.tmp';
+  fs.writeFileSync(temporaryFile, JSON.stringify(record), { mode: 0o600 });
+  fs.renameSync(temporaryFile, AUTH_FILE);
+  fs.chmodSync(AUTH_FILE, 0o600);
+}
+
+function derivePassword(password, salt) {
+  return crypto.scryptSync(password, salt, 64).toString('hex');
+}
+
+function passwordMatches(password, authRecord) {
+  if (!authRecord || !authRecord.salt || !authRecord.passwordHash) {
+    return false;
+  }
+  const actual = Buffer.from(derivePassword(password, authRecord.salt), 'hex');
+  const expected = Buffer.from(authRecord.passwordHash, 'hex');
+  return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+}
+
+function loginKey(req) {
+  return req.socket.remoteAddress || 'unknown';
+}
+
+function checkLoginRateLimit(req) {
+  const key = loginKey(req);
+  const attempt = loginAttempts.get(key);
+  if (!attempt) {
+    return 0;
+  }
+  if (attempt.blockedUntil > Date.now()) {
+    return Math.ceil((attempt.blockedUntil - Date.now()) / 1000);
+  }
+  if (attempt.blockedUntil) {
+    loginAttempts.delete(key);
+  }
+  return 0;
+}
+
+function recordFailedLogin(req) {
+  const key = loginKey(req);
+  const current = loginAttempts.get(key) || { count: 0, blockedUntil: 0 };
+  current.count += 1;
+  if (current.count >= 5) {
+    current.count = 0;
+    current.blockedUntil = Date.now() + 5 * 60 * 1000;
+  }
+  loginAttempts.set(key, current);
+}
+
+function resolveWorkspacePath(userPath = '/') {
+  if (typeof userPath !== 'string' || userPath.includes('\0')) {
+    throw new Error('Invalid path');
+  }
+  const relativePath = userPath.replace(/^[/\\]+/, '');
+  const candidate = path.resolve(DISK_ROOT, relativePath);
+  if (candidate !== DISK_ROOT && !candidate.startsWith(DISK_ROOT + path.sep)) {
+    throw new Error('Path escapes the FoxOS workspace');
+  }
+  return candidate;
+}
+
+function validateEntryName(name) {
+  if (
+    typeof name !== 'string' ||
+    !name.trim() ||
+    name === '.' ||
+    name === '..' ||
+    name.includes('/') ||
+    name.includes('\\') ||
+    name.includes('\0')
+  ) {
+    throw new Error('Invalid file name');
+  }
+  return name.trim();
+}
+
+function movePath(source, target) {
+  try {
+    fs.renameSync(source, target);
+  } catch (error) {
+    if (error.code !== 'EXDEV') {
+      throw error;
+    }
+    fs.cpSync(source, target, { recursive: true, errorOnExist: true });
+    fs.rmSync(source, { recursive: true, force: false });
+  }
+}
+
+function isProtectedWorkspaceEntry(target) {
+  return [
+    path.join(DISK_ROOT, 'Masaüstü'),
+    path.join(DISK_ROOT, 'İndirilenler'),
+    path.join(DISK_ROOT, 'Belgeler'),
+    path.join(DISK_ROOT, 'Resimler'),
+    path.join(DISK_ROOT, 'Çöp Kutusu'),
+    path.join(DISK_ROOT, 'Sunucu')
+  ].includes(target);
+}
+
+function normalizeHostCwd(requestedCwd) {
+  const cwd = typeof requestedCwd === 'string' && requestedCwd.trim() ? requestedCwd.trim() : '/';
+  const absolute = path.posix.resolve('/', cwd.replace(/\\/g, '/'));
+  const mountedPath = path.resolve(HOST_ROOT, '.' + absolute);
+  if (mountedPath !== HOST_ROOT && !mountedPath.startsWith(HOST_ROOT + path.sep)) {
+    throw new Error('Invalid working directory');
+  }
+  if (!fs.existsSync(mountedPath) || !fs.statSync(mountedPath).isDirectory()) {
+    throw new Error('Working directory does not exist');
+  }
+  return absolute;
+}
+
+function hostCommandArgs(command, cwd) {
+  if (HOST_EXECUTION === 'nsenter') {
+    return {
+      executable: 'nsenter',
+      args: [
+        '--target', '1',
+        '--mount', '--uts', '--ipc', '--net', '--pid',
+        '--',
+        '/bin/sh', '-lc',
+        'cd "$1" && exec /bin/sh -lc "$2"',
+        'foxos',
+        cwd,
+        command
+      ]
+    };
+  }
+
+  return {
+    executable: '/bin/sh',
+    args: ['-lc', command]
+  };
+}
+
+function runHostCommand(command, cwd = '/') {
+  return new Promise((resolve) => {
+    let normalizedCwd;
+    try {
+      normalizedCwd = normalizeHostCwd(cwd);
+    } catch (error) {
+      return resolve({ success: false, exitCode: 1, output: error.message + '\n', cwd });
+    }
+
+    const invocation = hostCommandArgs(command, normalizedCwd);
+    const options = {
+      timeout: COMMAND_TIMEOUT_MS,
+      maxBuffer: COMMAND_MAX_BUFFER,
+      windowsHide: true
+    };
+    if (HOST_EXECUTION !== 'nsenter') {
+      options.cwd = path.resolve(HOST_ROOT, '.' + normalizedCwd);
+    }
+
+    execFile(invocation.executable, invocation.args, options, (error, stdout, stderr) => {
+      let output = stdout || '';
+      if (stderr) {
+        output += stderr;
+      }
+      if (error && !output) {
+        output = error.killed ? 'Command timed out.\n' : error.message + '\n';
+      }
+      resolve({
+        success: !error,
+        exitCode: error && Number.isInteger(error.code) ? error.code : error ? 1 : 0,
+        output,
+        cwd: normalizedCwd
+      });
+    });
+  });
+}
+
+function dockerRequest(method, requestPath) {
+  return new Promise((resolve, reject) => {
+    if (!fs.existsSync(DOCKER_SOCKET)) {
+      return reject(new Error('Docker socket is not available'));
+    }
+
+    const request = http.request(
+      {
+        socketPath: DOCKER_SOCKET,
+        path: requestPath,
+        method,
+        headers: { 'Content-Type': 'application/json' }
+      },
+      (response) => {
+        const chunks = [];
+        response.on('data', (chunk) => chunks.push(chunk));
+        response.on('end', () => {
+          const body = Buffer.concat(chunks).toString('utf8');
+          if (response.statusCode >= 200 && response.statusCode < 300) {
+            if (!body) {
+              return resolve(null);
+            }
+            try {
+              return resolve(JSON.parse(body));
+            } catch {
+              return resolve(body);
+            }
+          }
+
+          let message = 'Docker API returned HTTP ' + response.statusCode;
+          try {
+            message = JSON.parse(body).message || message;
+          } catch {
+            if (body) {
+              message = body;
+            }
+          }
+          reject(new Error(message));
+        });
+      }
+    );
+
+    request.on('error', reject);
+    request.end();
+  });
+}
+
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok' });
+});
+
+app.get('/api/auth/status', (req, res) => {
+  const authRecord = readAuthRecord();
+  const session = getSession(req);
+  res.json({
+    isSetup: Boolean(authRecord),
+    authenticated: Boolean(session),
+    username: session ? session.username : authRecord ? authRecord.username : null
+  });
+});
+
+app.post('/api/auth/setup', (req, res) => {
+  const username = typeof req.body.username === 'string' ? req.body.username.trim() : '';
+  const password = typeof req.body.password === 'string' ? req.body.password : '';
+  if (!username || password.length < 10) {
+    return res.status(400).json({ error: 'Use a username and a password of at least 10 characters' });
+  }
+  if (readAuthRecord()) {
+    return res.status(409).json({ error: 'FoxOS is already configured' });
+  }
+
+  const salt = crypto.randomBytes(16).toString('hex');
+  writeAuthRecord({
+    version: 2,
+    username,
+    salt,
+    passwordHash: derivePassword(password, salt),
+    createdAt: new Date().toISOString()
+  });
+  createSession(res, username);
+  res.status(201).json({ success: true, username });
+});
+
+app.post('/api/auth/login', (req, res) => {
+  const retryAfter = checkLoginRateLimit(req);
+  if (retryAfter) {
+    res.setHeader('Retry-After', String(retryAfter));
+    return res.status(429).json({ error: 'Too many login attempts. Try again later.' });
+  }
+
+  const authRecord = readAuthRecord();
+  if (!authRecord) {
+    return res.status(400).json({ error: 'FoxOS has not been configured' });
+  }
+
+  const password = typeof req.body.password === 'string' ? req.body.password : '';
+  if (!passwordMatches(password, authRecord)) {
+    recordFailedLogin(req);
+    return res.status(401).json({ error: 'Invalid password' });
+  }
+
+  loginAttempts.delete(loginKey(req));
+  createSession(res, authRecord.username);
+  res.json({ success: true, username: authRecord.username });
+});
+
+app.post('/api/auth/logout', requireAuth, (req, res) => {
+  clearSession(req, res);
+  res.status(204).end();
+});
+
+app.use('/api', requireAuth);
+
+app.use('/api/static', express.static(DISK_ROOT, { dotfiles: 'deny', fallthrough: false }));
+
+app.get('/api/files', (req, res) => {
+  try {
+    const requestedPath = req.query.path || '/';
+    const targetDirectory = resolveWorkspacePath(requestedPath);
+    if (!fs.existsSync(targetDirectory) || !fs.statSync(targetDirectory).isDirectory()) {
+      return res.status(404).json({ error: 'Directory not found' });
+    }
+
+    const items = fs.readdirSync(targetDirectory, { withFileTypes: true }).map((item) => {
+      const itemPath = path.join(targetDirectory, item.name);
+      let stats = null;
+      try {
+        stats = fs.statSync(itemPath);
+      } catch {
+        // Broken or inaccessible entries remain visible with minimal metadata.
+      }
+      return {
+        id: crypto.createHash('sha1').update(String(requestedPath) + '/' + item.name).digest('hex').slice(0, 16),
+        name: item.name,
+        type: stats ? (stats.isDirectory() ? 'folder' : 'file') : item.isDirectory() ? 'folder' : 'file',
+        ext: stats && stats.isDirectory() ? null : path.extname(item.name).toLowerCase(),
+        size: stats ? stats.size : 0,
+        mtime: stats ? stats.mtime : null,
+        symlink: item.isSymbolicLink()
+      };
+    });
+
+    items.sort((a, b) => {
+      if (a.type === b.type) {
+        return a.name.localeCompare(b.name);
+      }
+      return a.type === 'folder' ? -1 : 1;
+    });
+
+    res.json({ path: requestedPath, items });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/save', (req, res) => {
+  try {
+    const targetFile = resolveWorkspacePath(req.body.filePath);
+    if (fs.existsSync(targetFile) && fs.statSync(targetFile).isDirectory()) {
+      return res.status(400).json({ error: 'Target is a directory' });
+    }
+    fs.writeFileSync(targetFile, typeof req.body.content === 'string' ? req.body.content : '', 'utf8');
+    res.json({ success: true });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/delete', (req, res) => {
+  try {
+    const target = resolveWorkspacePath(req.body.filePath);
+    if (!fs.existsSync(target)) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+
+    const trashRoot = path.join(DISK_ROOT, 'Çöp Kutusu');
+    if (isProtectedWorkspaceEntry(target)) {
+      return res.status(400).json({ error: 'This FoxOS system entry cannot be deleted' });
+    }
+
+    if (target.startsWith(trashRoot + path.sep)) {
+      fs.rmSync(target, { recursive: true, force: false });
+    } else {
+      const destination = path.join(trashRoot, Date.now() + '_' + path.basename(target));
+      movePath(target, destination);
+    }
+    res.json({ success: true });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/rename', (req, res) => {
+  try {
+    const target = resolveWorkspacePath(req.body.filePath);
+    const name = validateEntryName(req.body.newName);
+    if (!fs.existsSync(target)) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+    if (isProtectedWorkspaceEntry(target)) {
+      return res.status(400).json({ error: 'This FoxOS system entry cannot be renamed' });
+    }
+    const destination = path.join(path.dirname(target), name);
+    if (fs.existsSync(destination)) {
+      return res.status(409).json({ error: 'A file with that name already exists' });
+    }
+    fs.renameSync(target, destination);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/move', (req, res) => {
+  try {
+    const source = resolveWorkspacePath(req.body.sourcePath);
+    const target = resolveWorkspacePath(req.body.targetPath);
+    if (!fs.existsSync(source)) {
+      return res.status(404).json({ error: 'Source file not found' });
+    }
+    if (isProtectedWorkspaceEntry(source)) {
+      return res.status(400).json({ error: 'This FoxOS system entry cannot be moved' });
+    }
+
+    const destination = fs.existsSync(target) && fs.statSync(target).isDirectory()
+      ? path.join(target, path.basename(source))
+      : target;
+    if (fs.existsSync(destination)) {
+      return res.status(409).json({ error: 'Destination already exists' });
+    }
+    movePath(source, destination);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/mkdir', (req, res) => {
+  try {
+    const parent = resolveWorkspacePath(req.body.path);
+    const name = validateEntryName(req.body.name);
+    const target = path.join(parent, name);
+    if (fs.existsSync(target)) {
+      return res.status(409).json({ error: 'Directory already exists' });
+    }
+    fs.mkdirSync(target);
+    res.status(201).json({ success: true });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/terminal', async (req, res) => {
+  const command = typeof req.body.command === 'string' ? req.body.command.trim() : '';
+  if (!command) {
+    return res.status(400).json({ error: 'No command provided' });
+  }
+  if (command.length > 32768) {
+    return res.status(413).json({ error: 'Command is too long' });
+  }
+
+  const currentCwd = req.body.cwd || '/';
+  if (/^cd(?:\s+|$)/.test(command)) {
+    const requested = command.replace(/^cd\s*/, '').trim() || '/';
+    const nextCwd = requested.startsWith('/')
+      ? requested
+      : path.posix.join(currentCwd || '/', requested);
+    try {
+      const normalized = normalizeHostCwd(nextCwd);
+      return res.json({ success: true, exitCode: 0, cwd: normalized, output: '' });
+    } catch (error) {
+      return res.json({ success: false, exitCode: 1, cwd: currentCwd, output: 'cd: ' + error.message + '\n' });
+    }
+  }
+
+  const result = await runHostCommand(command, currentCwd);
+  res.json(result);
+});
+
+app.get('/api/system', async (req, res) => {
+  const commands = [
+    'hostname',
+    'if [ -r /etc/os-release ]; then . /etc/os-release; if [ -n "$PRETTY_NAME" ]; then printf "%s" "$PRETTY_NAME"; else printf "%s" "$NAME"; fi; else uname -s; fi',
+    'uname -srmo',
+    "awk '{print int($1)}' /proc/uptime",
+    "awk '/MemTotal:/ {total=$2*1024} /MemAvailable:/ {available=$2*1024} END {printf \"%.0f %.0f\", total, total-available}' /proc/meminfo",
+    "df -Pk / | awk 'NR==2 {printf \"%.0f %.0f %.0f\", $2*1024, $3*1024, $4*1024}'",
+    "awk '{print $1 \" \" $2 \" \" $3}' /proc/loadavg"
+  ];
+
+  const results = await Promise.all(commands.map((command) => runHostCommand(command)));
+  if (results.some((result) => !result.success)) {
+    return res.status(502).json({ error: 'Could not read host system information' });
+  }
+
+  const memory = results[4].output.trim().split(/\s+/).map(Number);
+  const disk = results[5].output.trim().split(/\s+/).map(Number);
+  const load = results[6].output.trim().split(/\s+/).map(Number);
+  res.json({
+    hostname: results[0].output.trim(),
+    os: results[1].output.trim(),
+    kernel: results[2].output.trim(),
+    architecture: os.arch(),
+    uptimeSeconds: Number(results[3].output.trim()) || 0,
+    memory: { total: memory[0] || 0, used: memory[1] || 0 },
+    disk: { total: disk[0] || 0, used: disk[1] || 0, available: disk[2] || 0 },
+    loadAverage: load,
+    executionMode: HOST_EXECUTION,
+    dockerAvailable: fs.existsSync(DOCKER_SOCKET)
+  });
+});
+
+app.get('/api/containers', async (req, res) => {
+  try {
+    const containers = await dockerRequest('GET', '/containers/json?all=1');
+    res.json(
+      containers.map((container) => ({
+        id: container.Id,
+        shortId: container.Id.slice(0, 12),
+        name: (container.Names && container.Names[0] ? container.Names[0] : container.Id.slice(0, 12)).replace(/^\//, ''),
+        image: container.Image,
+        state: container.State,
+        status: container.Status,
+        ports: (container.Ports || []).map((port) => ({
+          private: port.PrivatePort,
+          public: port.PublicPort || null,
+          type: port.Type,
+          ip: port.IP || null
+        })),
+        protected: container.Labels && container.Labels['com.foxos.core'] === 'true'
+      }))
+    );
+  } catch (error) {
+    res.status(503).json({ error: error.message });
+  }
+});
+
+app.post('/api/containers/:id/:action', async (req, res) => {
+  const allowedActions = new Set(['start', 'stop', 'restart']);
+  const { id, action } = req.params;
+  if (!/^[a-f0-9]{12,64}$/.test(id) || !allowedActions.has(action)) {
+    return res.status(400).json({ error: 'Invalid container action' });
+  }
+
+  try {
+    const details = await dockerRequest('GET', '/containers/' + id + '/json');
+    if (details.Config && details.Config.Labels && details.Config.Labels['com.foxos.core'] === 'true') {
+      return res.status(409).json({ error: 'FoxOS cannot manage its own core container' });
+    }
+    await dockerRequest('POST', '/containers/' + id + '/' + action + '?t=10');
+    res.json({ success: true });
+  } catch (error) {
+    res.status(502).json({ error: error.message });
+  }
+});
+
+if (fs.existsSync(PUBLIC_DIR)) {
+  app.use(express.static(PUBLIC_DIR, { index: false }));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api/')) {
+      return next();
+    }
+    res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
+  });
+}
+
+app.use((req, res) => {
+  res.status(404).json({ error: 'Not found' });
+});
+
+app.use((error, req, res, next) => {
+  if (res.headersSent) {
+    return next(error);
+  }
+  const status = Number.isInteger(error.status) && error.status >= 400 && error.status < 600
+    ? error.status
+    : 500;
+  if (status >= 500) {
+    console.error(error);
+  }
+  res.status(status).json({ error: status === 404 ? 'Not found' : status < 500 ? error.message : 'Internal server error' });
+});
+
+if (require.main === module) {
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log('FoxOS is listening on port ' + PORT);
+    console.log('Host execution mode: ' + HOST_EXECUTION);
+    console.log('Host filesystem mount: ' + HOST_ROOT);
+  });
+}
+
+module.exports = app;

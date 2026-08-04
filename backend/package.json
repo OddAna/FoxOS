@@ -1,0 +1,14 @@
+{
+  "name": "foxos-backend",
+  "version": "0.0.1",
+  "description": "FoxOS privileged Linux host management agent",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js",
+    "test": "node --test server.test.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
