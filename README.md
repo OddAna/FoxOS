@@ -423,6 +423,52 @@ show the active or retained lab containers. General image-based application
 updates remain blocked until per-application manifests, persistence, secrets,
 routes and recovery policy can participate in the same transaction.
 
+## Application Manifest v1
+
+Every manageable instance can now receive a server-owned, provider-neutral
+application manifest. FoxOS compiles it from the latest read-only resource
+registry snapshot and its own environment, route, recovery and image-operation
+records. The manifest keeps one stable resource identity and describes:
+
+- immutable OCI image input and desired runtime state;
+- ports, restart behavior and CPU/memory/PID/security constraints;
+- a local environment revision plus encrypted secret references, never values;
+- volumes or bind mounts and their backup/restore requirements;
+- FoxOS-owned route records and TLS policy;
+- related resource manifests and health/update/rollback evidence.
+
+An observed Docker, Compose or Coolify workload may produce an `import-draft`,
+but planning changes no container, network, route or provider state. The draft
+lists every blocking gate. External provider authority, an unclassified
+environment, missing immutable image, unresolved dependency, provider-only
+route, persistent data without tested restore, missing limits, health evidence
+or update/rollback proof prevents finalization. Provider labels remain lookup
+provenance only and are never required to reconstruct the desired resource.
+
+Finalization is intentionally available only when every gate is satisfied by
+FoxOS-owned evidence. It stores an immutable revision and current pointer; it
+does not detach a provider or recreate the runtime. Those are later, separately
+confirmed transactions. Secret values are never written to the manifest or
+returned by its API.
+
+After an authenticated resource scan, inspect the resource ID and use the CLI:
+
+```bash
+docker compose exec -T foxos node /app/applicationManifestCli.js draft RESOURCE_ID \
+  --confirm "PLAN APPLICATION MANIFEST"
+
+docker compose exec -T foxos node /app/applicationManifestCli.js finalize DRAFT_ID \
+  --confirm "FINALIZE APPLICATION MANIFEST DRAFT_ID"
+
+docker compose exec -T foxos node /app/applicationManifestCli.js current RESOURCE_ID
+docker compose exec -T foxos node /app/applicationManifestCli.js status
+```
+
+Authenticated clients can use `GET /api/application-manifests`, create drafts
+with `POST /api/application-manifests/drafts`, and finalize a reviewed draft at
+`POST /api/application-manifests/drafts/:draftId/finalize`. Owner-only state
+lives under `.foxos-data/application-manifests/`.
+
 ## Disposable adoption pilot
 
 FoxOS now has the first provider-neutral import draft, dry-run plan, apply and
@@ -595,6 +641,8 @@ Do not copy its contents into Git or logs.
 - Image update/rollback is currently limited to the two reviewed tags of the
   fixed disposable canary; normal Store and imported applications are not
   eligible yet
+- Application Manifest v1 can describe and audit imported application state,
+  but it does not yet adopt, reconcile or detach normal production resources
 - App Store images are maintained by their respective third-party projects, not
   by FoxOS
 - The included FoxOS-owned HTTPS gateway currently ships one DNS-01 adapter for
@@ -645,6 +693,7 @@ FoxOS/
 │   ├── sourceDeploymentManager.js # Public Git commit, Docker build, health gate and rollback pilot
 │   ├── composeDeploymentManager.js # Strict service graph, serial queue, group cutover and rollback
 │   ├── imageUpdateManager.js # Reviewed registry digest, candidate health and exact rollback
+│   ├── applicationManifestManager.js # Provider-neutral import drafts and desired revisions
 │   ├── adoptionManager.js     # Disposable plan/apply/rollback transaction
 │   └── package.json
 └── frontend/

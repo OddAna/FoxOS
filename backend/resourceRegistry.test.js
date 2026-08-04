@@ -75,6 +75,13 @@ test('resource registry scans with GET only, redacts secrets and preserves stabl
       },
       HostConfig: {
         RestartPolicy: { Name: 'unless-stopped', MaximumRetryCount: 0 },
+        Privileged: false,
+        ReadonlyRootfs: true,
+        SecurityOpt: ['no-new-privileges:true'],
+        CapDrop: ['ALL'],
+        Memory: 134217728,
+        NanoCpus: 500000000,
+        PidsLimit: 128,
         PortBindings: {
           '8080/tcp': [{ HostIp: '0.0.0.0', HostPort: '18080' }]
         }
@@ -167,6 +174,16 @@ test('resource registry scans with GET only, redacts secrets and preserves stabl
   assert.equal(first.relationships.some((relationship) => relationship.type === 'provider-project'), true);
   assert.equal(first.resources.every((resource) => resource.ownership === 'observed'), true);
   assert.equal(first.resources.every((resource) => resource.adoption.ready === false), true);
+  assert.deepEqual(first.resources[0].runtime.constraints, {
+    user: null,
+    privileged: false,
+    readOnlyRootFilesystem: true,
+    noNewPrivileges: true,
+    allCapabilitiesDropped: true,
+    memoryBytes: 134217728,
+    nanoCpus: 500000000,
+    pidsLimit: 128
+  });
   assert.equal(first.resources.find((resource) => resource.name === 'website').routes[0].domain, 'app.example.test');
 
   const serialized = JSON.stringify(first);

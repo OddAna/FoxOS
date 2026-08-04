@@ -243,3 +243,32 @@ jobs:
           test "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$image_active_id")" = "true"
           test "$(docker inspect --format '{{.HostConfig.Privileged}}' "$image_active_id")" = "false"
           test "$(docker inspect --format '{{len .Mounts}}' "$image_active_id")" -eq 0
+
+          docker compose exec -T foxos node -e '
+            const { createDockerClient } = require("/app/dockerClient");
+            const { createResourceRegistry } = require("/app/resourceRegistry");
+            const docker = createDockerClient(process.env.DOCKER_SOCKET);
+            createResourceRegistry({ dataRoot: process.env.DATA_ROOT, dockerRequest: docker.request })
+              .scan().catch((error) => { console.error(error.message); process.exit(1); });
+          '
+          image_resource_id=$(printf '%s' "$image_status" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).resourceId))')
+          manifest_draft=$(docker compose exec -T foxos node /app/applicationManifestCli.js draft "$image_resource_id" \
+            --confirm "PLAN APPLICATION MANIFEST")
+          manifest_draft_id=$(printf '%s' "$manifest_draft" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).draftId))')
+          manifest_draft_status=$(printf '%s' "$manifest_draft" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).gates.status))')
+          test "$manifest_draft_status" = "ready"
+          application_manifest=$(docker compose exec -T foxos node /app/applicationManifestCli.js finalize "$manifest_draft_id" \
+            --confirm "FINALIZE APPLICATION MANIFEST $manifest_draft_id")
+          printf '%s' "$application_manifest" | node -e '
+            let s="";
+            process.stdin.on("data",c=>s+=c);
+            process.stdin.on("end",()=>{
+              const manifest=JSON.parse(s);
+              if(manifest.lifecycle!=="foxos-managed" || manifest.gates.status!=="ready") process.exit(1);
+              if(manifest.gates.runtimeMutationIncluded || manifest.gates.providerDetachApproved) process.exit(1);
+              if(manifest.desired.environment.valuesIncluded) process.exit(1);
+            });
+          '
+          manifest_current=$(docker compose exec -T foxos node /app/applicationManifestCli.js current "$image_resource_id")
+          test "$(printf '%s' "$manifest_current" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).revisionId))')" = \
+            "$(printf '%s' "$application_manifest" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).revisionId))')"

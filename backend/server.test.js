@@ -385,6 +385,8 @@ test('health is public while management APIs require a session', async () => {
   assert.equal(composeDeploymentsResponse.status, 401);
   const imageUpdatesResponse = await fetch(baseUrl() + '/api/image-updates');
   assert.equal(imageUpdatesResponse.status, 401);
+  const applicationManifestsResponse = await fetch(baseUrl() + '/api/application-manifests');
+  assert.equal(applicationManifestsResponse.status, 401);
 });
 
 test('setup creates an authenticated session and unlocks the workspace', async () => {
@@ -459,6 +461,14 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   assert.equal(recoveryPayload.encryption.initialized, true);
   assert.equal(recoveryPayload.backup.ready, false);
   assert.equal(recoveryPayload.backup.credentialsIncluded, false);
+
+  const applicationManifestStatusResponse = await fetch(baseUrl() + '/api/application-manifests', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(applicationManifestStatusResponse.status, 200);
+  const applicationManifestStatus = await applicationManifestStatusResponse.json();
+  assert.equal(applicationManifestStatus.authority, 'server-owned-provider-neutral');
+  assert.equal(applicationManifestStatus.guarantees.externalProviderRequired, false);
 
   const initialAppsResponse = await fetch(baseUrl() + '/api/apps', {
     headers: { Cookie: cookie }
@@ -609,6 +619,22 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   assert.equal(scanPayload.snapshot.summary.resources, 1);
   assert.equal(scanPayload.snapshot.resources[0].provider, 'coolify');
   assert.equal(scanPayload.snapshot.resources[0].routes[0].domain, 'registry.example.test');
+
+  const manifestDraftResponse = await fetch(baseUrl() + '/api/application-manifests/drafts', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      resourceId: scanPayload.snapshot.resources[0].id,
+      confirmation: 'PLAN APPLICATION MANIFEST'
+    })
+  });
+  assert.equal(manifestDraftResponse.status, 201);
+  const manifestDraftPayload = await manifestDraftResponse.json();
+  assert.equal(manifestDraftPayload.draft.gates.status, 'blocked');
+  assert.equal(
+    manifestDraftPayload.draft.gates.blockers.some((blocker) => blocker.code === 'external-provider-authority'),
+    true
+  );
   assert.equal(scanPayload.snapshot.guarantees.runtimeMutated, false);
   assert.equal(dockerRequestLog.every((request) => request.method === 'GET'), true);
   assert.equal(JSON.stringify(scanPayload).includes(registrySecret), false);

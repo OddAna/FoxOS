@@ -65,6 +65,23 @@ names, image references, domains, ports and host storage paths. Protect and back
 up this directory as private server administration data. Review a migration-plan
 export before sharing it even though secret-bearing fields are excluded.
 
+## Application Manifest data
+
+Application manifest planning reads only the latest registry and existing
+FoxOS-owned records. It does not call a provider or mutate Docker. A draft may
+contain private operational metadata such as image references, domains, host
+mount paths, dependency identities and health fingerprints, so
+`.foxos-data/application-manifests/` and API responses must be treated as
+private server-administration data.
+
+Environment values are represented only by an owner-only environment revision
+reference and ordinary variable names. Secret values are represented only by
+encrypted secret IDs/revisions and never enter draft, revision, current-pointer,
+CLI or API output. Finalization requires an exact draft-specific confirmation,
+rechecks the observed fingerprint and fails closed while any safety gate is
+blocking. It stores desired state only; it does not adopt a workload, detach a
+provider or authorize destructive provider cleanup.
+
 ## Disposable source deployment pilot
 
 Treat every Git repository and Dockerfile as untrusted code. The implemented

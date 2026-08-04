@@ -366,6 +366,22 @@ function normalizeResource(container, details, resourceId, inspectionFailed) {
         configured: Boolean(healthConfig && Array.isArray(healthConfig.Test) && healthConfig.Test.length),
         status: healthState && healthState.Status || null
       },
+      constraints: {
+        user: details && details.Config && details.Config.User || null,
+        privileged: Boolean(details && details.HostConfig && details.HostConfig.Privileged),
+        readOnlyRootFilesystem: Boolean(details && details.HostConfig && details.HostConfig.ReadonlyRootfs),
+        noNewPrivileges: Boolean(
+          details && details.HostConfig && Array.isArray(details.HostConfig.SecurityOpt) &&
+          details.HostConfig.SecurityOpt.includes('no-new-privileges:true')
+        ),
+        allCapabilitiesDropped: Boolean(
+          details && details.HostConfig && Array.isArray(details.HostConfig.CapDrop) &&
+          details.HostConfig.CapDrop.includes('ALL')
+        ),
+        memoryBytes: details && details.HostConfig && Number(details.HostConfig.Memory) || null,
+        nanoCpus: details && details.HostConfig && Number(details.HostConfig.NanoCpus) || null,
+        pidsLimit: details && details.HostConfig && Number(details.HostConfig.PidsLimit) || null
+      },
       environmentVariableCount: details && details.Config && Array.isArray(details.Config.Env)
         ? details.Config.Env.length
         : null,

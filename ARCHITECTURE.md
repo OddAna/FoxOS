@@ -291,3 +291,28 @@ are stored under `.foxos-data/image-updates/`. The registry is replaceable input
 FoxOS state is the update and rollback authority. This fixed lab is not approval
 for arbitrary image repositories, credentials, persistent applications, routes,
 production workloads or Store update controls.
+
+### Implemented boundary: Application Manifest v1
+
+Application Manifest v1 joins the previously separate resource, environment,
+secret-reference, route, recovery and image-operation records into one local
+desired-state document per stable resource ID. Docker, Compose and Coolify data
+remain observed inputs and provenance; no provider identifier is required by
+the desired document.
+
+The compiler reads the latest registry snapshot and FoxOS-owned records. It
+persists an owner-only import draft containing an immutable OCI reference,
+runtime state and limits, environment revision reference, encrypted secret
+metadata, persistence policy, FoxOS route/TLS references, relationships and
+health/update/rollback evidence. Ordinary environment values remain in the
+environment revision; secret values remain encrypted and neither appears in
+the manifest API or files.
+
+Import drafting never writes to Docker or a provider. Finalization also makes
+no runtime change: it is allowed only for an already FoxOS-managed resource
+whose complete evidence passes every gate, then writes an immutable revision
+and current pointer under `.foxos-data/application-manifests/`. An external
+workload remains blocked on external authority plus any missing image,
+environment, dependency, route, persistence/restore, resource-limit, health or
+update/rollback evidence. Adoption, reconciliation and provider detachment are
+separate future transactions.
