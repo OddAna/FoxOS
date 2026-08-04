@@ -91,8 +91,39 @@ pointed at a production application.
   still reveal repository names, commits, build steps and image metadata.
 
 This is a transactional safety proof, not a general multi-tenant build service.
-Private Git, webhooks, arbitrary ports, Compose/build packs, persistence,
-domains and real workload updates remain unsupported.
+Private Git, webhooks, arbitrary ports, general Compose/build packs,
+persistence, domains and real workload updates remain unsupported.
+
+## Disposable Compose deployment pilot
+
+The separate `foxos-compose-lab` path is a strict service-graph proof, not a
+general Compose runner. FoxOS parses the YAML and creates Docker resources from
+its own normalized plan; it never executes the submitted manifest with the
+Compose CLI.
+
+- Only two or three source-built services are accepted. Every service must be
+  reachable from one ingress through an acyclic dependency graph.
+- Images, environment, secrets, build args, commands, entrypoints, published
+  ports, volumes, configs, custom/provider networks, host namespaces, devices,
+  capabilities and privilege settings are rejected.
+- Every service context passes the public-Git commit/context/Dockerfile drift
+  gates. Builds receive no network or secrets and require digest-pinned bases.
+- Candidate containers use a fresh isolated bridge, read-only root filesystem,
+  dropped capabilities, `no-new-privileges`, bounded tmpfs and CPU/memory/PID
+  limits. Only the ingress receives a dynamic `127.0.0.1` host port.
+- The project bridge is isolated from existing Docker/provider networks but it
+  permits ordinary outbound traffic. Do not treat this pilot as an egress
+  sandbox for untrusted code.
+- The persisted serial queue supports immediate queued cancellation and
+  cooperative running cancellation only before cutover. A process restart
+  marks a running job interrupted for inspection rather than replaying it.
+- Health-gated cutover preserves the complete previous group. Rollback verifies
+  fixed group/service labels and restores every service in dependency order.
+- `.foxos-data/compose-deployments/` is owner-only but contains repository,
+  commit, graph, image, operation, job and bounded build-log metadata.
+
+Private Git, environment/secrets, persistence, build packs, webhooks, parallel
+workers, arbitrary routes and real workloads remain outside this boundary.
 
 ## Disposable adoption pilot
 

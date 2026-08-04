@@ -126,9 +126,17 @@ target blocks only adoption/migration operations that require restore proof.
   exact-confirmation rollback.
 - [x] Keep the pilot fixed to `foxos-deployment-lab`; exclude its active and
   history containers from Store discovery and never touch Coolify/real workloads.
+- [x] Parse a second fixed `foxos-compose-lab` manifest into a strict connected
+  two-or-three-service DAG; build every service and keep provider networks,
+  volumes, environment, secrets and host access outside the accepted subset.
+- [x] Persist a serial deployment queue with queued cancellation, cooperative
+  pre-cutover cancellation, restart interruption records and bounded history.
+- [x] Start dependencies on a fresh isolated bridge, health-gate only the
+  loopback ingress, preserve the complete previous group and roll it back in
+  dependency order.
 - [ ] Add private Git through encrypted scoped deploy credentials.
-- [ ] Add webhook triggers, a cancellable queue and reviewed Compose/build-pack
-  workflows after the public Dockerfile transaction is stable.
+- [ ] Add webhook triggers and reviewed build-pack workflows; general Compose,
+  persistence and production workloads remain separate gates.
 
 ## Stable release system
 
@@ -158,10 +166,10 @@ target blocks only adoption/migration operations that require restore proof.
   adapter; private Git with scoped encrypted credentials remains open.
 - [x] Support exactly confirmed manual branch/tag deployments for the disposable
   canary; webhook-driven deployment remains open.
-- [x] Support the first restricted reviewed Dockerfile workflow; Docker Compose
-  and build-pack workflows remain open.
-- [x] Store bounded redacted logs, status and retained deployment history; a
-  cancellable multi-job queue remains open.
+- [x] Support the first restricted Dockerfile workflow and a separate strict
+  disposable Compose source-build graph; general Compose and build packs remain open.
+- [x] Store bounded redacted logs, status, retained history and a persistent
+  serial queue with safe cancellation checkpoints; parallel workers remain open.
 - [x] Health-gate candidate deployment and exact rollback to the previous healthy
   disposable revision; general rolling deployment remains open.
 - [ ] Add controlled image update, digest pinning and rollback for image-based apps.

@@ -378,7 +378,64 @@ function createGitSourceAdapter({ runCommand = runFile, resolveHost } = {}) {
     }
   }
 
-  return { inspect, archive };
+  async function read(source, maxBytes = 128 * 1024) {
+    const filePath = validateRelativePath(source.filePath);
+    const resolved = await resolve(source.repository, source.ref);
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-source-file-'));
+    const repositoryRoot = path.join(workspace, 'repository');
+    try {
+      await runCommand('git', gitArgs([
+        'clone', '--depth', '1', '--filter=blob:limit=8388608', '--single-branch', '--branch', source.ref,
+        source.repository, repositoryRoot
+      ]), {
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+        timeoutMs: 120000,
+        maxBuffer: 2 * 1024 * 1024
+      });
+      const head = await runCommand('git', gitArgs(['-C', repositoryRoot, 'rev-parse', 'HEAD']), {
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+        timeoutMs: 30000
+      });
+      const commit = head.stdout.trim().toLowerCase();
+      if (commit !== resolved.commit || (source.commit && commit !== source.commit)) {
+        throw new SourceDeploymentError('Git ref moved after planning; create a new plan', 409, 'source-plan-stale');
+      }
+      if (fs.existsSync(path.join(repositoryRoot, '.gitmodules'))) {
+        throw new SourceDeploymentError('Git submodules are outside the public source pilot', 409, 'submodules-blocked');
+      }
+      const target = path.resolve(repositoryRoot, filePath);
+      if (target !== repositoryRoot && !target.startsWith(repositoryRoot + path.sep)) {
+        throw new SourceDeploymentError('Source file escapes the repository', 400, 'invalid-source-file');
+      }
+      const realRepositoryRoot = fs.realpathSync(repositoryRoot);
+      const realTarget = fs.realpathSync(target);
+      if (realTarget !== realRepositoryRoot && !realTarget.startsWith(realRepositoryRoot + path.sep)) {
+        throw new SourceDeploymentError('Source file resolves outside the repository', 409, 'invalid-source-file');
+      }
+      const stats = fs.lstatSync(target);
+      if (stats.isSymbolicLink() || !stats.isFile() || stats.size < 1 || stats.size > maxBytes) {
+        throw new SourceDeploymentError('Source file is missing, linked or exceeds the safety limit', 409, 'invalid-source-file');
+      }
+      const content = fs.readFileSync(target);
+      return {
+        ...resolved,
+        commit,
+        filePath,
+        fileDigest: 'sha256:' + hash(content),
+        fileBytes: content.length,
+        content
+      };
+    } catch (error) {
+      if (error && error.code === 'ENOENT') {
+        throw new SourceDeploymentError('Source file was not found', 404, 'source-file-not-found');
+      }
+      throw error;
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  }
+
+  return { inspect, archive, read };
 }
 
 function parseBuildOutput(buffer) {
@@ -937,15 +994,23 @@ module.exports = {
   PLAN_CONFIRMATION,
   SourceDeploymentError,
   assertPublicRepositoryHost,
+  canonicalJson,
   createGitSourceAdapter,
   createSourceDeploymentManager,
+  defaultHostProbe,
   deploymentConfirmation,
+  ensureDirectory,
+  hash,
   inspectContext,
   isPrivateAddress,
   parseBuildOutput,
+  readJson,
   rollbackConfirmation,
   sanitizeBuildLog,
   validateDockerfile,
+  validateExpectedBody,
   validateGitRef,
+  validateHealthPath,
+  validateRelativePath,
   validateRepositoryUrl
 };

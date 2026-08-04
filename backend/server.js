@@ -14,6 +14,10 @@ const {
   SourceDeploymentError,
   createSourceDeploymentManager
 } = require('./sourceDeploymentManager');
+const {
+  ComposeDeploymentError,
+  createComposeDeploymentManager
+} = require('./composeDeploymentManager');
 const { APP_CATALOG, getCatalogApp } = require('./appCatalog');
 const { resolveAppIcon } = require('./appIcon');
 const { SCHEMA_VERSION: RESOURCE_SCHEMA_VERSION, createResourceRegistry } = require('./resourceRegistry');
@@ -405,6 +409,11 @@ const sourceDeploymentManager = createSourceDeploymentManager({
   dockerRequest,
   dockerBuildRequest: dockerClient.requestBuild
 });
+const composeDeploymentManager = createComposeDeploymentManager({
+  dataRoot: DATA_ROOT,
+  dockerRequest,
+  dockerBuildRequest: dockerClient.requestBuild
+});
 
 function sendAdoptionError(res, error, action) {
   const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
@@ -423,6 +432,15 @@ function sendSourceDeploymentError(res, error, action) {
       ? 'Source deployment operation failed'
       : error.message,
     code: error.code || 'source-deployment-error'
+  });
+}
+
+function sendComposeDeploymentError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof ComposeDeploymentError) ? 'Compose deployment operation failed' : error.message,
+    code: error.code || 'compose-deployment-error'
   });
 }
 
@@ -944,6 +962,69 @@ app.post('/api/deployments/:operationId/rollback', async (req, res) => {
     res.json({ operation });
   } catch (error) {
     sendSourceDeploymentError(res, error, 'Could not roll back source deployment');
+  }
+});
+
+app.get('/api/compose-deployments', (req, res) => {
+  try {
+    res.json(composeDeploymentManager.status());
+  } catch (error) {
+    sendComposeDeploymentError(res, error, 'Could not read Compose deployment state');
+  }
+});
+
+app.post('/api/compose-deployments/plans', async (req, res) => {
+  try {
+    const plan = await composeDeploymentManager.createPlan(req.body || {});
+    res.status(201).json({ plan });
+  } catch (error) {
+    sendComposeDeploymentError(res, error, 'Could not create Compose deployment plan');
+  }
+});
+
+app.get('/api/compose-deployments/plans/:planId', (req, res) => {
+  try {
+    res.json({ plan: composeDeploymentManager.getPlan(req.params.planId) });
+  } catch (error) {
+    sendComposeDeploymentError(res, error, 'Could not read Compose deployment plan');
+  }
+});
+
+app.post('/api/compose-deployments/plans/:planId/enqueue', (req, res) => {
+  try {
+    const job = composeDeploymentManager.enqueuePlan(req.params.planId, req.body && req.body.confirmation);
+    res.status(202).json({ job });
+  } catch (error) {
+    sendComposeDeploymentError(res, error, 'Could not queue Compose deployment');
+  }
+});
+
+app.get('/api/compose-deployments/jobs/:jobId', (req, res) => {
+  try {
+    res.json({ job: composeDeploymentManager.getJob(req.params.jobId) });
+  } catch (error) {
+    sendComposeDeploymentError(res, error, 'Could not read Compose deployment job');
+  }
+});
+
+app.post('/api/compose-deployments/jobs/:jobId/cancel', (req, res) => {
+  try {
+    const job = composeDeploymentManager.cancelJob(req.params.jobId, req.body && req.body.confirmation);
+    res.json({ job });
+  } catch (error) {
+    sendComposeDeploymentError(res, error, 'Could not cancel Compose deployment job');
+  }
+});
+
+app.post('/api/compose-deployments/:operationId/rollback', async (req, res) => {
+  try {
+    const operation = await composeDeploymentManager.rollbackOperation(
+      req.params.operationId,
+      req.body && req.body.confirmation
+    );
+    res.json({ operation });
+  } catch (error) {
+    sendComposeDeploymentError(res, error, 'Could not roll back Compose deployment');
   }
 });
 

@@ -68,8 +68,16 @@
   commit/context/Dockerfile pinning, digest-pinned base images, networkless and
   secretless build, dynamic loopback candidate, health-before-cutover and exact
   rollback gates. Do not widen it to private Git, arbitrary containers, ports,
-  build mounts, Compose/build packs, persistence or real workloads without
+  build mounts, general Compose/build packs, persistence or real workloads without
   Burak's explicit approval and the remaining roadmap gates.
+- The approved Compose extension is a second fixed disposable pilot. Preserve
+  the `foxos-compose-lab` identity, public-Git manifest/commit/context pinning,
+  two-or-three-service connected DAG, source-build-only services, no
+  environment/secrets/volumes/host access/provider networks, isolated project
+  bridge, loopback-only ingress, serial queue, safe cancellation checkpoints,
+  health-before-group-cutover and full-group rollback. Do not reinterpret this
+  as permission for arbitrary Compose, persistence, private Git, build packs,
+  real routes or production workloads.
 - Read `ARCHITECTURE.md` before changing discovery, deployment, domains,
   secrets, persistence, backup or migration behavior.
 

@@ -284,6 +284,30 @@ test('deployment history containers cannot claim the active deployment identity'
   assert.deepEqual(safeLabels(labels), labels);
 });
 
+test('Compose deployment history cannot claim a stable service identity', () => {
+  const labels = {
+    'com.foxos.managed': 'true',
+    'com.foxos.resource.id': 'res_' + '5'.repeat(32),
+    'com.foxos.compose-deployment.disposable': 'true',
+    'com.foxos.deployment.group.id': 'res_' + '6'.repeat(32),
+    'com.foxos.deployment.service': 'web',
+    'com.foxos.deployment.revision': 'crev_' + '7'.repeat(32),
+    'com.foxos.deployment.operation': 'cop_' + '8'.repeat(32)
+  };
+  const activeAliases = identityAliases({
+    Id: 'e'.repeat(64),
+    Names: ['/foxos-compose-lab-web']
+  }, labels);
+  const historyAliases = identityAliases({
+    Id: 'f'.repeat(64),
+    Names: ['/foxos-compose-lab-rollback-1234abcd-web']
+  }, labels);
+
+  assert.equal(activeAliases.includes('foxos:' + labels['com.foxos.resource.id']), true);
+  assert.deepEqual(historyAliases, ['compose-deployment-history-container:' + 'f'.repeat(64)]);
+  assert.deepEqual(safeLabels(labels), labels);
+});
+
 test('a preserved rollback container does not create a false active host-port conflict', () => {
   const port = { privatePort: 80, protocol: 'tcp', hostIp: '127.0.0.1', hostPort: 18088 };
   const mount = { type: 'volume', name: 'foxos-adoption-lab-data' };
