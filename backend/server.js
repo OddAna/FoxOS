@@ -18,6 +18,10 @@ const {
   ComposeDeploymentError,
   createComposeDeploymentManager
 } = require('./composeDeploymentManager');
+const {
+  ImageUpdateError,
+  createImageUpdateManager
+} = require('./imageUpdateManager');
 const { APP_CATALOG, getCatalogApp } = require('./appCatalog');
 const { resolveAppIcon } = require('./appIcon');
 const { SCHEMA_VERSION: RESOURCE_SCHEMA_VERSION, createResourceRegistry } = require('./resourceRegistry');
@@ -414,6 +418,10 @@ const composeDeploymentManager = createComposeDeploymentManager({
   dockerRequest,
   dockerBuildRequest: dockerClient.requestBuild
 });
+const imageUpdateManager = createImageUpdateManager({
+  dataRoot: DATA_ROOT,
+  dockerRequest
+});
 
 function sendAdoptionError(res, error, action) {
   const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
@@ -441,6 +449,15 @@ function sendComposeDeploymentError(res, error, action) {
   res.status(status).json({
     error: status >= 500 && !(error instanceof ComposeDeploymentError) ? 'Compose deployment operation failed' : error.message,
     code: error.code || 'compose-deployment-error'
+  });
+}
+
+function sendImageUpdateError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof ImageUpdateError) ? 'Image-update operation failed' : error.message,
+    code: error.code || 'image-update-error'
   });
 }
 
@@ -1025,6 +1042,55 @@ app.post('/api/compose-deployments/:operationId/rollback', async (req, res) => {
     res.json({ operation });
   } catch (error) {
     sendComposeDeploymentError(res, error, 'Could not roll back Compose deployment');
+  }
+});
+
+app.get('/api/image-updates', (req, res) => {
+  try {
+    res.json(imageUpdateManager.status());
+  } catch (error) {
+    sendImageUpdateError(res, error, 'Could not read image-update state');
+  }
+});
+
+app.post('/api/image-updates/plans', async (req, res) => {
+  try {
+    const plan = await imageUpdateManager.createPlan(req.body || {});
+    res.status(201).json({ plan });
+  } catch (error) {
+    sendImageUpdateError(res, error, 'Could not create image-update plan');
+  }
+});
+
+app.get('/api/image-updates/plans/:planId', (req, res) => {
+  try {
+    res.json({ plan: imageUpdateManager.getPlan(req.params.planId) });
+  } catch (error) {
+    sendImageUpdateError(res, error, 'Could not read image-update plan');
+  }
+});
+
+app.post('/api/image-updates/plans/:planId/apply', async (req, res) => {
+  try {
+    const operation = await imageUpdateManager.applyPlan(
+      req.params.planId,
+      req.body && req.body.confirmation
+    );
+    res.status(201).json({ operation });
+  } catch (error) {
+    sendImageUpdateError(res, error, 'Could not apply image update');
+  }
+});
+
+app.post('/api/image-updates/:operationId/rollback', async (req, res) => {
+  try {
+    const operation = await imageUpdateManager.rollbackOperation(
+      req.params.operationId,
+      req.body && req.body.confirmation
+    );
+    res.json({ operation });
+  } catch (error) {
+    sendImageUpdateError(res, error, 'Could not roll back image update');
   }
 });
 

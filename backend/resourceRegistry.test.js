@@ -308,6 +308,28 @@ test('Compose deployment history cannot claim a stable service identity', () => 
   assert.deepEqual(safeLabels(labels), labels);
 });
 
+test('image-update history cannot claim the active image-update identity', () => {
+  const labels = {
+    'com.foxos.managed': 'true',
+    'com.foxos.resource.id': 'res_' + '9'.repeat(32),
+    'com.foxos.image-update.disposable': 'true',
+    'com.foxos.deployment.revision': 'irev_' + 'a'.repeat(32),
+    'com.foxos.deployment.operation': 'iop_' + 'b'.repeat(32)
+  };
+  const activeAliases = identityAliases({
+    Id: '1'.repeat(64),
+    Names: ['/foxos-image-update-lab']
+  }, labels);
+  const historyAliases = identityAliases({
+    Id: '2'.repeat(64),
+    Names: ['/foxos-image-update-lab-rolled-forward-1234abcd']
+  }, labels);
+
+  assert.equal(activeAliases.includes('foxos:' + labels['com.foxos.resource.id']), true);
+  assert.deepEqual(historyAliases, ['image-update-history-container:' + '2'.repeat(64)]);
+  assert.deepEqual(safeLabels(labels), labels);
+});
+
 test('a preserved rollback container does not create a false active host-port conflict', () => {
   const port = { privatePort: 80, protocol: 'tcp', hostIp: '127.0.0.1', hostPort: 18088 };
   const mount = { type: 'volume', name: 'foxos-adoption-lab-data' };

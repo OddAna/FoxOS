@@ -96,6 +96,15 @@ jobs:
             done
             compose_image_ids=$(docker images -q --filter label=com.foxos.compose-deployment.disposable=true)
             if [ -n "$compose_image_ids" ]; then docker image rm -f $compose_image_ids || true; fi
+            for cleanup_attempt in 1 2; do
+              docker ps -aq --filter label=com.foxos.image-update.disposable=true | while IFS= read -r image_container_id; do
+                if [ -n "$image_container_id" ]; then docker rm -f "$image_container_id" || true; fi
+              done
+              docker network ls -q --filter label=com.foxos.image-update.disposable=true | while IFS= read -r image_network_id; do
+                if [ -n "$image_network_id" ]; then docker network rm "$image_network_id" || true; fi
+              done
+              sleep 1
+            done
             docker compose down || true
           }
           trap cleanup EXIT
@@ -196,3 +205,41 @@ jobs:
           test "$(docker ps -q --filter label=com.foxos.compose-deployment.disposable=true | wc -l)" -eq 2
           test "$(docker ps -aq --filter label=com.foxos.compose-deployment.disposable=true | wc -l)" -eq 4
           test "$(docker network ls -q --filter label=com.foxos.compose-deployment.disposable=true | wc -l)" -eq 2
+
+          image_plan_v1=$(docker compose exec -T foxos node /app/imageUpdateCli.js plan \
+            --image traefik/whoami:v1.10.3 \
+            --health-path / \
+            --expected-body "Hostname:" \
+            --confirm "PLAN DISPOSABLE IMAGE UPDATE")
+          image_plan_v1_id=$(printf '%s' "$image_plan_v1" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).planId))')
+          image_plan_v1_revision=$(printf '%s' "$image_plan_v1" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).revisionId))')
+          docker compose exec -T foxos node /app/imageUpdateCli.js apply "$image_plan_v1_id" \
+            --confirm "APPLY IMAGE UPDATE $image_plan_v1_id" >/dev/null
+
+          image_plan_v2=$(docker compose exec -T foxos node /app/imageUpdateCli.js plan \
+            --image traefik/whoami:v1.11.0 \
+            --health-path / \
+            --expected-body "Hostname:" \
+            --confirm "PLAN DISPOSABLE IMAGE UPDATE")
+          image_plan_v2_id=$(printf '%s' "$image_plan_v2" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).planId))')
+          image_operation_v2=$(docker compose exec -T foxos node /app/imageUpdateCli.js apply "$image_plan_v2_id" \
+            --confirm "APPLY IMAGE UPDATE $image_plan_v2_id")
+          image_operation_v2_id=$(printf '%s' "$image_operation_v2" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).operationId))')
+          docker compose exec -T foxos node /app/imageUpdateCli.js rollback "$image_operation_v2_id" \
+            --confirm "ROLLBACK IMAGE UPDATE $image_operation_v2_id" >/dev/null
+
+          image_status=$(docker compose exec -T foxos node /app/imageUpdateCli.js status)
+          image_revision=$(printf '%s' "$image_status" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).current.revisionId))')
+          image_digest=$(printf '%s' "$image_status" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).current.image.digest))')
+          image_port=$(printf '%s' "$image_status" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(String(JSON.parse(s).current.hostPort)))')
+          test "$image_revision" = "$image_plan_v1_revision"
+          test "$image_digest" = "sha256:43a68d10b9dfcfc3ffbfe4dd42100dc9aeaf29b3a5636c856337a5940f1b4f1c"
+          curl --fail --silent --show-error "http://127.0.0.1:$image_port/" | grep -F "Hostname:" >/dev/null
+          test "$(docker ps -q --filter label=com.foxos.image-update.disposable=true | wc -l)" -eq 1
+          test "$(docker ps -aq --filter label=com.foxos.image-update.disposable=true | wc -l)" -eq 2
+          test "$(docker network ls -q --filter label=com.foxos.image-update.disposable=true | wc -l)" -eq 2
+          image_active_id=$(docker ps -q --filter label=com.foxos.image-update.disposable=true)
+          test "$(docker inspect --format '{{.Config.User}}' "$image_active_id")" = "65532:65532"
+          test "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$image_active_id")" = "true"
+          test "$(docker inspect --format '{{.HostConfig.Privileged}}' "$image_active_id")" = "false"
+          test "$(docker inspect --format '{{len .Mounts}}' "$image_active_id")" -eq 0

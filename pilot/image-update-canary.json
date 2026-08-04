@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "name": "foxos-image-update-lab",
+  "purpose": "Disposable image update, immutable digest pinning and rollback proof",
+  "repository": "traefik/whoami",
+  "reviewedTags": {
+    "v1.10.3": "sha256:43a68d10b9dfcfc3ffbfe4dd42100dc9aeaf29b3a5636c856337a5940f1b4f1c",
+    "v1.11.0": "sha256:200689790a0a0ea48ca45992e0450bc26ccab5307375b41c84dfc4f2475937ab"
+  },
+  "platform": "linux/amd64",
+  "runtime": {
+    "user": "65532:65532",
+    "privatePort": 80,
+    "hostBinding": "dynamic-loopback",
+    "freshDedicatedNetworkPerRevision": true,
+    "readOnlyRoot": true,
+    "capDrop": ["ALL"],
+    "noNewPrivileges": true,
+    "memoryBytes": 134217728,
+    "nanoCpus": 500000000,
+    "pidsLimit": 128,
+    "mounts": []
+  },
+  "health": {
+    "path": "/",
+    "expectedStatus": 200,
+    "expectedBody": "Hostname:"
+  },
+  "disposableOnly": true,
+  "productionWorkload": false
+}

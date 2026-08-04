@@ -383,6 +383,8 @@ test('health is public while management APIs require a session', async () => {
   assert.equal(deploymentsResponse.status, 401);
   const composeDeploymentsResponse = await fetch(baseUrl() + '/api/compose-deployments');
   assert.equal(composeDeploymentsResponse.status, 401);
+  const imageUpdatesResponse = await fetch(baseUrl() + '/api/image-updates');
+  assert.equal(imageUpdatesResponse.status, 401);
 });
 
 test('setup creates an authenticated session and unlocks the workspace', async () => {
@@ -647,7 +649,7 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   mockContainer = null;
 });
 
-test('rollback and source/Compose deployment control containers stay out of Store discovery', () => {
+test('rollback and source/Compose/image-update control containers stay out of Store discovery', () => {
   const rollbackContainer = {
     Id: 'f'.repeat(64),
     Image: 'example/web:0.0.1',
@@ -663,7 +665,10 @@ test('rollback and source/Compose deployment control containers stay out of Stor
     'foxos-deployment-lab-rollback-1234abcd',
     'foxos-compose-lab-web',
     'foxos-compose-lab-candidate-1234abcd-api',
-    'foxos-compose-lab-rollback-1234abcd-web'
+    'foxos-compose-lab-rollback-1234abcd-web',
+    'foxos-image-update-lab',
+    'foxos-image-update-lab-candidate-1234abcd',
+    'foxos-image-update-lab-rollback-1234abcd'
   ]
     .map((name, index) => ({
       ...rollbackContainer,

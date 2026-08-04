@@ -15,6 +15,7 @@ const SAFE_LABEL_KEYS = new Set([
   'com.foxos.adoption.disposable',
   'com.foxos.deployment.disposable',
   'com.foxos.compose-deployment.disposable',
+  'com.foxos.image-update.disposable',
   'com.foxos.deployment.group.id',
   'com.foxos.deployment.service',
   'com.foxos.deployment.revision',
@@ -290,6 +291,9 @@ function identityAliases(container, labels) {
   }
   if (/^foxos-compose-lab-(?:candidate|rollback|rolled-forward)-[a-f0-9]{8,32}-[a-z][a-z0-9-]{0,31}$/.test(name)) {
     return [`compose-deployment-history-container:${container.Id || name}`];
+  }
+  if (/^foxos-image-update-lab-(?:candidate|rollback|rolled-forward)-[a-f0-9]{8,32}$/.test(name)) {
+    return [`image-update-history-container:${container.Id || name}`];
   }
 
   const foxosId = labels['com.foxos.resource.id'];
