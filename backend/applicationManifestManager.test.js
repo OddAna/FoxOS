@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const { classifyResource } = require('./resourceClassification');
 const {
   PLAN_APPLICATION_MANIFEST_CONFIRMATION,
   applicationManifestConfirmation,
@@ -18,7 +19,7 @@ const COMPOSE_GROUP_RESOURCE_ID = 'res_' + 'd'.repeat(32);
 const IMAGE_DIGEST = 'sha256:' + 'a'.repeat(64);
 
 function resource(overrides = {}) {
-  return {
+  const value = {
     schemaVersion: 1,
     id: RESOURCE_ID,
     kind: 'container',
@@ -27,7 +28,12 @@ function resource(overrides = {}) {
     ownership: 'foxos-managed',
     provider: 'foxos',
     protected: false,
-    provenance: { imported: false, safeLabels: {}, project: null, service: null },
+    provenance: {
+      imported: false,
+      safeLabels: { 'com.foxos.image-update.disposable': 'true' },
+      project: null,
+      service: null
+    },
     runtime: {
       engine: 'docker',
       containerId: 'c'.repeat(64),
@@ -54,8 +60,12 @@ function resource(overrides = {}) {
     routes: [],
     mounts: [],
     networks: [{ name: 'foxos-image-update-lab-candidate-abc123def456' }],
-    adoption: { stage: 'foxos-managed', eligible: true, ready: true, blockers: [] },
-    ...overrides
+    adoption: { stage: 'foxos-managed', eligible: true, ready: true, blockers: [] }
+  };
+  const merged = { ...value, ...overrides };
+  return {
+    ...merged,
+    classification: overrides.classification || classifyResource(merged)
   };
 }
 
@@ -243,6 +253,11 @@ test('a fully evidenced FoxOS resource finalizes into an owner-only server manif
   assert.equal(draft.desired.environment.observedVariableCount, 1);
   assert.equal(draft.desired.environment.sourceDefaultVariableCount, 1);
   assert.equal(draft.desired.environment.managedVariableCount, 0);
+  assert.equal(draft.schemaVersion, 2);
+  assert.equal(draft.desired.identity.classification.workloadRole, 'application');
+  assert.equal(draft.desired.identity.classification.stateClass, 'stateless');
+  assert.equal(draft.desired.identity.classification.authorityClass, 'foxos-owned');
+  assert.equal(draft.evidence.classificationRevision, resource().classification.revision);
   assert.equal(draft.confirmation, applicationManifestConfirmation(draft.draftId));
 
   const manifest = manager.finalizeDraft(draft.draftId, draft.confirmation);
@@ -301,6 +316,8 @@ test('external applications become redacted blocked import drafts and cannot be 
   assert.equal(serialized.includes(secretValue), false);
   assert.equal(draft.desired.environment.ordinaryNames[0], 'SITE_TITLE');
   assert.equal(draft.provenance.importedFrom, 'coolify');
+  assert.equal(draft.desired.identity.classification.stateClass, 'stateful');
+  assert.equal(draft.desired.identity.classification.authorityClass, 'provider-owned');
   assert.equal(draft.provenance.providerIdentifiersRequired, false);
   assert.equal(draft.desired.dependencies[0].observed, true);
   assert.equal(draft.desired.dependencies[0].required, false);
@@ -309,6 +326,32 @@ test('external applications become redacted blocked import drafts and cannot be 
     (error) => error.code === 'manifest-blocked'
   );
 
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('database classification requires a dedicated lifecycle even without an observed mount', () => {
+  const database = resource({
+    name: 'foxos-postgres',
+    role: 'database',
+    runtime: {
+      ...resource().runtime,
+      image: 'postgres@' + IMAGE_DIGEST,
+      environmentVariableCount: 1
+    },
+    ports: [{ privatePort: 5432, protocol: 'tcp', hostIp: null, hostPort: null }],
+    mounts: []
+  });
+  const { manager, root } = harness({ currentResource: database });
+  const draft = manager.createDraft({
+    resourceId: RESOURCE_ID,
+    confirmation: PLAN_APPLICATION_MANIFEST_CONFIRMATION
+  });
+  const codes = draft.gates.blockers.map((blocker) => blocker.code);
+  assert.equal(draft.desired.identity.classification.workloadRole, 'database');
+  assert.equal(draft.desired.identity.classification.stateClass, 'database');
+  assert.equal(codes.includes('workload-role-lifecycle-unsupported'), true);
+  assert.equal(codes.includes('database-lifecycle-unsupported'), true);
+  assert.equal(draft.gates.status, 'blocked');
   fs.rmSync(root, { recursive: true, force: true });
 });
 

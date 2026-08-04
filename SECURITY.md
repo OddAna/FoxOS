@@ -90,6 +90,28 @@ directed manifest dependency; a shared Docker network is retained only as
 private observational metadata and cannot create an ownership or dependency
 claim.
 
+## Workload classification and independence audit data
+
+Classification is deterministic metadata, not an ownership claim or a security
+guarantee. It uses only already-redacted Resource Registry fields and stores
+reason codes rather than environment values, provider credentials or arbitrary
+labels. `provider-owned` remains provider-owned; scanning or classifying it
+never permits FoxOS lifecycle actions.
+
+`stateless` means that a complete Docker inspection found no declared writable
+mount. Applications may still write important data into the container layer or
+remote services, so every stateless result carries an explicit warning and must
+be reviewed before migration planning. Partial inspection, unknown mount types,
+databases, stateful workloads, proxies, core services and unsupported roles fail
+closed.
+
+Independence audit reports under `.foxos-data/independence-audits/` contain
+private operational metadata: resource names, provider class, classification,
+manifest revision, source type and blocker codes. Directories/files are
+owner-only. The audit compiler makes zero Docker requests and includes no secret
+values. Every report records `runtimeMutated=false`, `providerDetached=false`
+and `applyApproved=false`; no audit endpoint can perform cutover or cleanup.
+
 ## Disposable source deployment pilot
 
 Treat every Git repository and Dockerfile as untrusted code. The implemented

@@ -325,3 +325,34 @@ workload remains blocked on external authority plus any missing image,
 environment, dependency, route, persistence/restore, resource-limit, health or
 update/rollback evidence. Adoption, reconciliation and provider detachment are
 separate future transactions.
+
+### Implemented boundary: deterministic workload classification and read-only independence audit
+
+Resource Registry records separate three concepts that cannot safely be
+collapsed into one role string. `workloadRole` describes application, database,
+worker, agent, proxy, core, internal service or unknown behavior. `stateClass`
+describes stateless, stateful, database or unknown storage behavior.
+`authorityClass` independently records FoxOS-owned or provider-owned authority.
+
+The classifier is a pure local function over redacted observations. Trusted
+safe labels and explicit FoxOS identities outrank image/name heuristics;
+database, agent and worker evidence is role-specific; published routes/ports
+identify application surfaces; writable mounts identify stateful resources.
+Incomplete inspection and unknown mounts produce `unknown`. Every result has a
+stable revision and reason codes. It neither changes the legacy observed role
+nor treats shared networks/projects as directed dependencies.
+
+Application Manifest schema 2 embeds the classification revision. Only
+classified `application` and `internal-service` roles can finalize through the
+current lifecycle. Database and other unsupported roles fail closed even when
+their other evidence looks complete. Existing OCI, public-Git and strict
+Compose source unions remain unchanged.
+
+The independence-audit manager considers only running, fully inspected,
+provider-owned stateless applications as read-only candidates. It compiles the
+current manifest gates into an owner-only checklist covering source,
+environment/secrets, routes/TLS, dependencies, runtime/health/update and
+backup/restore. Report creation writes metadata but performs no Docker request,
+route mutation, provider call, apply approval or detach approval. This creates
+a reviewable first-real-workload planning surface without widening the fixed
+disposable adoption or deployment pilots.

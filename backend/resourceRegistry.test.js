@@ -167,6 +167,12 @@ test('resource registry scans with GET only, redacts secrets and preserves stabl
   assert.equal(first.summary.resources, 2);
   assert.deepEqual(first.summary.byProvider, { coolify: 2 });
   assert.deepEqual(first.summary.byRole, { application: 1, database: 1 });
+  assert.deepEqual(first.summary.byWorkloadRole, { application: 1, database: 1 });
+  assert.deepEqual(first.summary.byStateClass, { database: 1, stateful: 1 });
+  assert.deepEqual(first.summary.byAuthorityClass, { 'provider-owned': 2 });
+  assert.equal(first.summary.statelessAuditCandidates, 0);
+  assert.equal(first.guarantees.classificationMethod, 'deterministic-local-evidence');
+  assert.equal(first.guarantees.classificationDoesNotImplyOwnership, true);
   assert.equal(first.conflicts.some((conflict) => conflict.type === 'host-port'), true);
   assert.equal(first.conflicts.some((conflict) => conflict.type === 'domain-route'), true);
   assert.equal(first.conflicts.some((conflict) => conflict.type === 'shared-volume'), true);
@@ -175,6 +181,9 @@ test('resource registry scans with GET only, redacts secrets and preserves stabl
   assert.equal(first.relationships.some((relationship) => relationship.type === 'provider-project'), true);
   assert.equal(first.resources.every((resource) => resource.ownership === 'observed'), true);
   assert.equal(first.resources.every((resource) => resource.adoption.ready === false), true);
+  assert.equal(first.resources.every((resource) => resource.classification.authorityClass === 'provider-owned'), true);
+  assert.equal(first.resources.find((resource) => resource.name === 'website').classification.stateClass, 'stateful');
+  assert.equal(first.resources.find((resource) => resource.name === 'database').classification.stateClass, 'database');
   assert.deepEqual(first.resources[0].runtime.constraints, {
     user: null,
     privileged: false,

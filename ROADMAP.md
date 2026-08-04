@@ -161,8 +161,12 @@ target blocks only adoption/migration operations that require restore proof.
   runtime or taking ownership.
 - [x] Extend the manifest source model from immutable OCI images to FoxOS-owned
   source-build and Compose deployment revisions.
-- [ ] Distinguish applications, databases, workers, agents, proxies and internal
-  dependencies while keeping every manageable instance addressable.
+- [x] Classify every observed resource on separate deterministic workload-role,
+  state and authority axes, with stable revisions, reason codes and fail-closed
+  unknown states while keeping every manageable instance addressable.
+- [x] Produce owner-only read-only independence audits for real provider-owned
+  stateless application candidates. Audits reuse manifest gates and explicitly
+  approve neither runtime apply nor provider detachment.
 - [ ] Expand the implemented disposable dry-run, conflict detection, verified
   cutover and reversible rollback to real application classes one safety gate at
   a time.

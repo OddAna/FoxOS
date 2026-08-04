@@ -479,6 +479,45 @@ with `POST /api/application-manifests/drafts`, and finalize a reviewed draft at
 `POST /api/application-manifests/drafts/:draftId/finalize`. Owner-only state
 lives under `.foxos-data/application-manifests/`.
 
+## Workload classification and independence audits
+
+Every Resource Registry record carries a deterministic, explainable
+classification with three separate axes:
+
+- workload role: `application`, `database`, `worker`, `agent`, `proxy`, `core`,
+  `internal-service` or `unknown`;
+- state class: `stateless`, `stateful`, `database` or `unknown`;
+- authority: `foxos-owned` or `provider-owned`.
+
+Classification uses only redacted local Docker observations: trusted safe
+labels, image/name role evidence, published surfaces, complete inspection and
+declared mounts. It stores reason codes and a stable classification revision.
+Incomplete inspection or unknown mounts fail closed. A `stateless` result means
+only that Docker exposes no declared writable mount; it does not prove that the
+application keeps no important data elsewhere.
+
+Only a running, fully inspected, provider-owned stateless application appears
+as a candidate for a read-only independence audit. An audit compiles the same
+provider-neutral Application Manifest gates and reports missing immutable
+source, environment/secret, route/TLS, dependency, runtime/health/update and
+backup/restore evidence. It writes private metadata only and never calls Docker,
+changes a route, detaches a provider or approves apply.
+
+```bash
+docker compose exec -T foxos node /app/independenceAuditCli.js candidates
+
+docker compose exec -T foxos node /app/independenceAuditCli.js audit RESOURCE_ID \
+  --confirm "AUDIT WORKLOAD INDEPENDENCE"
+
+docker compose exec -T foxos node /app/independenceAuditCli.js status
+```
+
+Authenticated clients can use `GET /api/independence-audits`, create a report
+with `POST /api/independence-audits`, and read one through
+`GET /api/independence-audits/:auditId`. Reports are owner-only under
+`.foxos-data/independence-audits/`. A planning-ready audit is still not a
+migration, cutover or provider-removal approval.
+
 ## Disposable adoption pilot
 
 FoxOS now has the first provider-neutral import draft, dry-run plan, apply and

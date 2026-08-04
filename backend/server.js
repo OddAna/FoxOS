@@ -9,6 +9,10 @@ const {
   ApplicationManifestError,
   createApplicationManifestManager
 } = require('./applicationManifestManager');
+const {
+  IndependenceAuditError,
+  createIndependenceAuditManager
+} = require('./independenceAuditManager');
 const { createBackupManager } = require('./backupManager');
 const { createDockerClient } = require('./dockerClient');
 const { createEncryptionStore } = require('./encryptionStore');
@@ -436,6 +440,11 @@ const applicationManifestManager = createApplicationManifestManager({
   composeDeploymentStatus: () => composeDeploymentManager.status(),
   imageUpdateStatus: () => imageUpdateManager.status()
 });
+const independenceAuditManager = createIndependenceAuditManager({
+  dataRoot: DATA_ROOT,
+  resourceRegistry,
+  compileApplicationManifest: (resourceId) => applicationManifestManager.compile(resourceId)
+});
 
 function sendAdoptionError(res, error, action) {
   const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
@@ -483,6 +492,17 @@ function sendApplicationManifestError(res, error, action) {
       ? 'Application manifest operation failed'
       : error.message,
     code: error.code || 'application-manifest-error'
+  });
+}
+
+function sendIndependenceAuditError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof IndependenceAuditError)
+      ? 'Independence audit operation failed'
+      : error.message,
+    code: error.code || 'independence-audit-error'
   });
 }
 
@@ -1163,6 +1183,31 @@ app.get('/api/application-manifests/resources/:resourceId/current', (req, res) =
     res.json({ manifest });
   } catch (error) {
     sendApplicationManifestError(res, error, 'Could not read current application manifest');
+  }
+});
+
+app.get('/api/independence-audits', (req, res) => {
+  try {
+    res.json(independenceAuditManager.status());
+  } catch (error) {
+    sendIndependenceAuditError(res, error, 'Could not read independence audits');
+  }
+});
+
+app.post('/api/independence-audits', (req, res) => {
+  try {
+    const audit = independenceAuditManager.createAudit(req.body || {});
+    res.status(201).json({ audit });
+  } catch (error) {
+    sendIndependenceAuditError(res, error, 'Could not create independence audit');
+  }
+});
+
+app.get('/api/independence-audits/:auditId', (req, res) => {
+  try {
+    res.json({ audit: independenceAuditManager.getAudit(req.params.auditId) });
+  } catch (error) {
+    sendIndependenceAuditError(res, error, 'Could not read independence audit');
   }
 });
 
