@@ -78,11 +78,14 @@ jobs:
       - name: Verify clean base install without external providers
         run: |
           cleanup() {
-            container_ids=$(docker ps -aq --filter label=com.foxos.deployment.disposable=true)
-            if [ -n "$container_ids" ]; then docker rm -f $container_ids; fi
+            for cleanup_attempt in 1 2; do
+              container_ids=$(docker ps -aq --filter label=com.foxos.deployment.disposable=true)
+              if [ -n "$container_ids" ]; then docker rm -f $container_ids || true; fi
+              sleep 1
+            done
             image_ids=$(docker images -q --filter label=com.foxos.deployment.disposable=true)
-            if [ -n "$image_ids" ]; then docker image rm -f $image_ids; fi
-            docker compose down
+            if [ -n "$image_ids" ]; then docker image rm -f $image_ids || true; fi
+            docker compose down || true
           }
           trap cleanup EXIT
           test ! -e .env
