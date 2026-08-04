@@ -7,6 +7,7 @@ const { execFile } = require('child_process');
 const express = require('express');
 const { APP_CATALOG, getCatalogApp } = require('./appCatalog');
 const { resolveAppIcon } = require('./appIcon');
+const { SCHEMA_VERSION: RESOURCE_SCHEMA_VERSION, createResourceRegistry } = require('./resourceRegistry');
 const {
   catalogContainerForApp,
   containerName,
@@ -410,6 +411,11 @@ function dockerRequest(method, requestPath, payload = null) {
   });
 }
 
+const resourceRegistry = createResourceRegistry({
+  dataRoot: DATA_ROOT,
+  dockerRequest
+});
+
 function containerSettingsFromDetails(details) {
   const hostConfig = details.HostConfig || {};
   const restartPolicy = hostConfig.RestartPolicy || {};
@@ -785,6 +791,47 @@ app.get('/api/containers', async (req, res) => {
     );
   } catch (error) {
     res.status(503).json({ error: error.message });
+  }
+});
+
+app.get('/api/resources', (req, res) => {
+  try {
+    const snapshot = resourceRegistry.getLatest();
+    res.json({
+      registry: {
+        schemaVersion: RESOURCE_SCHEMA_VERSION,
+        status: snapshot ? 'ready' : 'not-scanned'
+      },
+      snapshot
+    });
+  } catch (error) {
+    console.error('Could not read the resource registry:', error.message);
+    res.status(500).json({ error: 'Could not read the resource registry' });
+  }
+});
+
+app.post('/api/resources/scan', async (req, res) => {
+  try {
+    const snapshot = await resourceRegistry.scan();
+    res.status(201).json({ snapshot });
+  } catch (error) {
+    console.error('Could not scan server resources:', error.message);
+    res.status(503).json({ error: 'Could not scan server resources' });
+  }
+});
+
+app.get('/api/resources/export', (req, res) => {
+  try {
+    const migrationPlan = resourceRegistry.exportLatest();
+    if (!migrationPlan) {
+      return res.status(404).json({ error: 'Run a resource scan before exporting a migration plan' });
+    }
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', `attachment; filename="foxos-resource-plan-${migrationPlan.snapshotId}.json"`);
+    res.send(JSON.stringify(migrationPlan, null, 2) + '\n');
+  } catch (error) {
+    console.error('Could not export the resource migration plan:', error.message);
+    res.status(500).json({ error: 'Could not export the resource migration plan' });
   }
 });
 

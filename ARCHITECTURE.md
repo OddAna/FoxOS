@@ -119,3 +119,13 @@ The first code milestone is deliberately read-only toward existing workloads:
 
 UI work follows the data and safety contract and must preserve the existing
 FoxOS visual language.
+
+### Implemented boundary: Resource Registry v1
+
+Resource Registry v1 implements the read-only observation half of this slice.
+It stores provider-neutral resource records, stable local identities, inventory,
+relationships, ownership status, blockers and conflicts under the FoxOS data
+root and exposes authenticated scan/read/redacted-export APIs. It deliberately
+does not create desired manifests, adopt resources, change labels, detach a
+provider or mutate Docker runtime state. Those actions remain gated by the next
+import-draft and adoption-plan milestone.

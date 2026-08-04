@@ -166,6 +166,31 @@ declared by their own web route and fall back to the Docker mark when they do no
 publish one. Coolify databases, workers, agents, reverse proxies, and other
 internal dependency containers are not presented as standalone store applications.
 
+## Server-owned Resource Registry
+
+FoxOS keeps a provider-neutral, versioned observation of the server under
+`.foxos-data/registry/`. Coolify labels and other provider metadata are treated
+as migration input, not permanent authority. A scan reads containers, images,
+networks, volumes, mounts, ports, routes, health and restart state through
+Docker `GET` requests only. It does not recreate, label, start, stop or adopt a
+resource.
+
+The authenticated API exposes:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/resources/scan` | Run a read-only inventory and atomically store a new snapshot |
+| `GET /api/resources` | Read the latest stored snapshot, ownership status, relationships, conflicts and adoption blockers |
+| `GET /api/resources/export` | Download a redacted provider-neutral migration plan |
+
+Environment values, arbitrary provider labels, middleware credentials and
+secret-bearing health-check commands are never copied into registry snapshots
+or exports; long token-like route path segments are replaced by stable redacted
+fingerprints. Stable FoxOS resource IDs survive normal container recreation by
+using locally stored, hashed identity aliases. Existing external resources stay
+in the `observed` stage; this registry version intentionally provides no
+adoption or provider-detach action yet.
+
 ## Operations
 
 ```bash
@@ -224,6 +249,8 @@ authentication record, FoxOS desktop files, and trash.
 - File operations are synchronous; very large copy/move operations can take time
 - No multi-user roles or permission levels
 - No audit log yet
+- The Resource Registry is read-only observation and migration planning; it
+  does not yet adopt resources or replace provider-owned deployment/proxy state
 - The App Store catalog is intentionally small and reviewed; arbitrary Compose
   files and untrusted install scripts are not accepted through the UI
 - App Store images are maintained by their respective third-party projects, not
@@ -265,6 +292,7 @@ FoxOS/
 │   ├── server.js              # Auth, files, host terminal, metrics, Docker API
 │   ├── appCatalog.js          # Reviewed application definitions
 │   ├── appManager.js          # Docker app validation and container payloads
+│   ├── resourceRegistry.js    # Read-only inventory, ownership and migration plan
 │   └── package.json
 └── frontend/
     ├── src/

@@ -1,0 +1,229 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const test = require('node:test');
+const {
+  createResourceRegistry,
+  parseTraefikRoutes,
+  safeLabels
+} = require('./resourceRegistry');
+
+function container({ id, name, image, labels, port }) {
+  return {
+    Id: id,
+    Image: image,
+    ImageID: 'sha256:' + id,
+    Names: ['/' + name],
+    State: 'running',
+    Status: 'Up 1 hour',
+    Labels: labels,
+    Ports: [{ PrivatePort: 8080, PublicPort: port, Type: 'tcp', IP: '0.0.0.0' }],
+    NetworkSettings: { Networks: { coolify: { IPAddress: '172.18.0.10' } } }
+  };
+}
+
+test('resource registry scans with GET only, redacts secrets and preserves stable identities', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-registry-'));
+  const secretValue = 'registry-super-secret-value';
+  const hiddenLabelValue = 'hidden-provider-token';
+  const calls = [];
+  const labels = {
+    'coolify.managed': 'true',
+    'coolify.type': 'service',
+    'coolify.service.subType': 'application',
+    'coolify.service.subName': 'web',
+    'coolify.serviceName': 'website',
+    'coolify.projectName': 'project-one',
+    'coolify.resourceName': 'website-production',
+    'com.docker.compose.project': 'project-one',
+    'com.docker.compose.service': 'web',
+    'com.docker.compose.container-number': '1',
+    'traefik.http.routers.website.rule': 'Host(`app.example.test`) && PathPrefix(`/dashboard`)',
+    'traefik.http.routers.website.entrypoints': 'websecure',
+    'traefik.http.middlewares.website.headers.customrequestheaders.Authorization': hiddenLabelValue,
+    'example.secret': hiddenLabelValue
+  };
+  const databaseLabels = {
+    'coolify.managed': 'true',
+    'coolify.type': 'service',
+    'coolify.service.subType': 'database',
+    'coolify.service.subName': 'postgres',
+    'coolify.projectName': 'project-one',
+    'coolify.resourceName': 'database-production',
+    'traefik.http.routers.database.rule': 'Host(`app.example.test`) && PathPrefix(`/dashboard`)',
+    'traefik.http.routers.database.entrypoints': 'websecure'
+  };
+
+  let containers = [
+    container({ id: 'a'.repeat(64), name: 'website', image: 'example/web:latest', labels, port: 18080 }),
+    container({ id: 'b'.repeat(64), name: 'database', image: 'postgres:16', labels: databaseLabels, port: 18080 })
+  ];
+
+  function detailsFor(item) {
+    const isDatabase = item.Names[0] === '/database';
+    return {
+      Image: item.ImageID,
+      Config: {
+        Image: item.Image,
+        Labels: item.Labels,
+        Env: isDatabase ? [`POSTGRES_PASSWORD=${secretValue}`] : [`API_TOKEN=${secretValue}`, 'NODE_ENV=production'],
+        Healthcheck: isDatabase ? null : { Test: ['CMD-SHELL', `curl -H 'Authorization: ${secretValue}' http://localhost/`] }
+      },
+      HostConfig: {
+        RestartPolicy: { Name: 'unless-stopped', MaximumRetryCount: 0 },
+        PortBindings: {
+          '8080/tcp': [{ HostIp: '0.0.0.0', HostPort: '18080' }]
+        }
+      },
+      Mounts: [{
+        Type: 'volume',
+        Name: 'shared-data',
+        Source: '/var/lib/docker/volumes/shared-data/_data',
+        Destination: isDatabase ? '/var/lib/postgresql/data' : '/app/data',
+        RW: true
+      }],
+      NetworkSettings: { Networks: { coolify: { IPAddress: isDatabase ? '172.18.0.11' : '172.18.0.10', Gateway: '172.18.0.1' } } },
+      State: { Status: 'running', Health: isDatabase ? null : { Status: 'healthy' } }
+    };
+  }
+
+  async function dockerRequest(method, requestPath) {
+    calls.push({ method, requestPath });
+    if (method !== 'GET') throw new Error('Registry attempted a Docker mutation');
+    if (requestPath === '/containers/json?all=1') return containers;
+    if (requestPath === '/images/json?all=0') {
+      return containers.map((item) => ({
+        Id: item.ImageID,
+        RepoTags: [item.Image],
+        RepoDigests: [],
+        Size: 123456,
+        Created: 1722729600,
+        Labels: { 'example.secret': hiddenLabelValue }
+      }));
+    }
+    if (requestPath === '/networks') {
+      return [{
+        Id: 'network-id',
+        Name: 'coolify',
+        Driver: 'bridge',
+        Scope: 'local',
+        Internal: false,
+        Attachable: true,
+        Ingress: false,
+        Labels: { 'example.secret': hiddenLabelValue }
+      }];
+    }
+    if (requestPath === '/volumes') {
+      return {
+        Volumes: [{
+          Name: 'shared-data',
+          Driver: 'local',
+          Scope: 'local',
+          Mountpoint: '/var/lib/docker/volumes/shared-data/_data',
+          Labels: { 'example.secret': hiddenLabelValue },
+          Options: { password: secretValue }
+        }],
+        Warnings: []
+      };
+    }
+    const inspectedId = requestPath.match(/^\/containers\/([a-f0-9]{64})\/json$/);
+    if (inspectedId) {
+      const item = containers.find((candidate) => candidate.Id === inspectedId[1]);
+      if (!item) throw new Error('Container not found');
+      return detailsFor(item);
+    }
+    throw new Error('Unexpected Docker request: ' + requestPath);
+  }
+
+  const ids = [
+    '00000000-0000-4000-8000-000000000001',
+    '00000000-0000-4000-8000-000000000002',
+    '00000000-0000-4000-8000-000000000003'
+  ];
+  const registry = createResourceRegistry({
+    dataRoot: root,
+    dockerRequest,
+    clock: () => new Date('2026-08-04T12:00:00.000Z'),
+    randomUUID: () => ids.shift()
+  });
+
+  const first = await registry.scan();
+  assert.equal(calls.every((call) => call.method === 'GET'), true);
+  assert.equal(first.mode, 'read-only-observation');
+  assert.equal(first.guarantees.runtimeMutated, false);
+  assert.equal(first.guarantees.secretValuesIncluded, false);
+  assert.equal(first.summary.resources, 2);
+  assert.deepEqual(first.summary.byProvider, { coolify: 2 });
+  assert.deepEqual(first.summary.byRole, { application: 1, database: 1 });
+  assert.equal(first.conflicts.some((conflict) => conflict.type === 'host-port'), true);
+  assert.equal(first.conflicts.some((conflict) => conflict.type === 'domain-route'), true);
+  assert.equal(first.conflicts.some((conflict) => conflict.type === 'shared-volume'), true);
+  assert.equal(first.relationships.some((relationship) => relationship.type === 'shared-network'), true);
+  assert.equal(first.relationships.some((relationship) => relationship.type === 'shared-volume'), true);
+  assert.equal(first.relationships.some((relationship) => relationship.type === 'provider-project'), true);
+  assert.equal(first.resources.every((resource) => resource.ownership === 'observed'), true);
+  assert.equal(first.resources.every((resource) => resource.adoption.ready === false), true);
+  assert.equal(first.resources.find((resource) => resource.name === 'website').routes[0].domain, 'app.example.test');
+
+  const serialized = JSON.stringify(first);
+  assert.equal(serialized.includes(secretValue), false);
+  assert.equal(serialized.includes(hiddenLabelValue), false);
+  assert.equal(serialized.includes('Authorization'), false);
+  assert.equal(serialized.includes('example.secret'), false);
+  assert.equal(serialized.includes('environment-unclassified'), true);
+
+  const firstWebsiteId = first.resources.find((resource) => resource.name === 'website').id;
+  containers = [
+    container({ id: 'c'.repeat(64), name: 'website', image: 'example/web:latest', labels, port: 18080 }),
+    containers[1]
+  ];
+  const second = await registry.scan();
+  assert.equal(second.resources.find((resource) => resource.name === 'website').id, firstWebsiteId);
+  assert.equal(registry.getLatest().snapshotId, second.snapshotId);
+
+  const migrationPlan = registry.exportLatest();
+  assert.equal(migrationPlan.exportType, 'foxos-resource-migration-plan');
+  assert.equal(migrationPlan.guarantees.secretValuesIncluded, false);
+  assert.equal(JSON.stringify(migrationPlan).includes(secretValue), false);
+
+  assert.equal(fs.statSync(registry.paths.registryRoot).mode & 0o777, 0o700);
+  assert.equal(fs.statSync(registry.paths.identitiesFile).mode & 0o777, 0o600);
+  assert.equal(fs.statSync(registry.paths.latestFile).mode & 0o777, 0o600);
+  assert.equal(fs.readdirSync(registry.paths.revisionsRoot).length, 2);
+
+  const persisted = fs.readdirSync(registry.paths.revisionsRoot)
+    .map((file) => fs.readFileSync(path.join(registry.paths.revisionsRoot, file), 'utf8'))
+    .join('\n');
+  assert.equal(persisted.includes(secretValue), false);
+  assert.equal(persisted.includes(hiddenLabelValue), false);
+
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('route and label normalization keeps only migration-safe fields', () => {
+  const labels = {
+    'coolify.managed': 'true',
+    'coolify.projectName': 'example-project',
+    'traefik.http.routers.app.rule': 'Host(`one.example.test`, `two.example.test`) && PathPrefix(`/api`)',
+    'traefik.http.routers.app.tls': 'true',
+    'traefik.http.middlewares.app.basicauth.users': 'user:password-hash',
+    'private.token': 'do-not-copy'
+  };
+
+  assert.deepEqual(parseTraefikRoutes(labels), [
+    { domain: 'one.example.test', scheme: 'https', path: '/api', tls: true },
+    { domain: 'two.example.test', scheme: 'https', path: '/api', tls: true }
+  ]);
+  assert.deepEqual(safeLabels(labels), {
+    'coolify.managed': 'true',
+    'coolify.projectName': 'example-project'
+  });
+
+  const secretPathRoutes = parseTraefikRoutes({
+    'traefik.http.routers.webhook.rule': 'Host(`hooks.example.test`) && PathPrefix(`/webhook/abcdefghijklmnopqrstuvwxyz123456`)',
+    'traefik.http.routers.webhook.entrypoints': 'websecure'
+  });
+  assert.equal(secretPathRoutes[0].path.startsWith('/webhook/:redacted-'), true);
+  assert.equal(secretPathRoutes[0].path.includes('abcdefghijklmnopqrstuvwxyz123456'), false);
+});

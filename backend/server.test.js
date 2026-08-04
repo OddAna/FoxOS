@@ -24,9 +24,11 @@ process.env.DOCKER_SOCKET = path.join(testRoot, 'docker.sock');
 
 let mockContainer = null;
 let lastContainerPayload = null;
+const dockerRequestLog = [];
 const mockContainerId = 'b'.repeat(64);
 
 const dockerMock = http.createServer((req, res) => {
+  dockerRequestLog.push({ method: req.method, url: req.url });
   const respond = (status, payload = null) => {
     res.statusCode = status;
     res.setHeader('Content-Type', 'application/json');
@@ -35,6 +37,42 @@ const dockerMock = http.createServer((req, res) => {
 
   if (req.method === 'GET' && req.url === '/containers/json?all=1') {
     return respond(200, mockContainer ? [mockContainer] : []);
+  }
+  if (req.method === 'GET' && req.url === '/images/json?all=0') {
+    return respond(200, mockContainer ? [{
+      Id: mockContainer.ImageID || 'sha256:' + '9'.repeat(64),
+      RepoTags: mockContainer.Image ? [mockContainer.Image] : [],
+      RepoDigests: [],
+      Size: 1024,
+      Created: 1722729600
+    }] : []);
+  }
+  if (req.method === 'GET' && req.url === '/networks') {
+    return respond(200, [{
+      Id: 'network-id',
+      Name: 'bridge',
+      Driver: 'bridge',
+      Scope: 'local',
+      Internal: false,
+      Attachable: false,
+      Ingress: false,
+      Labels: {}
+    }]);
+  }
+  if (req.method === 'GET' && req.url === '/volumes') {
+    const volumeMount = mockContainer && (mockContainer.Mounts || [])
+      .find((mount) => mount.Type === 'volume' && mount.Name);
+    return respond(200, {
+      Volumes: volumeMount ? [{
+        Name: volumeMount.Name,
+        Driver: 'local',
+        Scope: 'local',
+        Mountpoint: volumeMount.Source,
+        Labels: { 'private.token': 'must-not-leak' },
+        Options: { password: 'must-not-leak' }
+      }] : [],
+      Warnings: []
+    });
   }
   if (req.method === 'POST' && req.url.startsWith('/images/create?')) {
     return respond(200, '{"status":"downloaded"}\n{"status":"complete"}\n');
@@ -48,6 +86,9 @@ const dockerMock = http.createServer((req, res) => {
       const binding = lastContainerPayload.HostConfig.PortBindings[portKey][0];
       mockContainer = {
         Id: mockContainerId,
+        Image: lastContainerPayload.Image,
+        ImageID: 'sha256:' + '8'.repeat(64),
+        Names: ['/foxos-app-' + lastContainerPayload.Labels['com.foxos.app.id']],
         State: 'created',
         Status: 'Created',
         Labels: lastContainerPayload.Labels,
@@ -64,13 +105,24 @@ const dockerMock = http.createServer((req, res) => {
   }
   if (req.method === 'GET' && mockContainer && req.url === '/containers/' + mockContainer.Id + '/json') {
     return respond(200, {
-      Config: { Labels: mockContainer.Labels || {} },
+      Image: mockContainer.ImageID || 'sha256:' + '9'.repeat(64),
+      Config: {
+        Image: mockContainer.Image || 'unknown',
+        Labels: mockContainer.Labels || {},
+        Env: mockContainer.Env || [],
+        Healthcheck: mockContainer.Healthcheck || null
+      },
       Created: mockContainer.Created || '2026-08-04T00:00:00.000000000Z',
       HostConfig: {
         RestartPolicy: mockContainer.RestartPolicy || { Name: 'no', MaximumRetryCount: 0 },
         PortBindings: mockContainer.PortBindings || {}
       },
-      Mounts: mockContainer.Mounts || []
+      Mounts: mockContainer.Mounts || [],
+      NetworkSettings: mockContainer.NetworkSettings || { Networks: {} },
+      State: {
+        Status: mockContainer.State || 'unknown',
+        Health: mockContainer.HealthStatus ? { Status: mockContainer.HealthStatus } : null
+      }
     });
   }
   if (req.method === 'POST' && mockContainer && req.url === '/containers/' + mockContainer.Id + '/update') {
@@ -315,6 +367,9 @@ test('health is public while management APIs require a session', async () => {
 
   const filesResponse = await fetch(baseUrl() + '/api/files');
   assert.equal(filesResponse.status, 401);
+
+  const resourcesResponse = await fetch(baseUrl() + '/api/resources');
+  assert.equal(resourcesResponse.status, 401);
 });
 
 test('setup creates an authenticated session and unlocks the workspace', async () => {
@@ -460,5 +515,71 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   const stoppedCustomApp = stoppedCustomApps.find((candidate) => candidate.containerId === mockContainer.Id);
   assert.equal(stoppedCustomApp.state, 'exited');
   assert.equal(stoppedCustomApp.hostPort, 18085);
+
+  const registrySecret = 'http-registry-secret-value';
+  mockContainer = {
+    Id: 'e'.repeat(64),
+    Image: 'example/registry-web:latest',
+    ImageID: 'sha256:' + '7'.repeat(64),
+    Names: ['/registry-web'],
+    State: 'running',
+    Status: 'Up 10 minutes',
+    Labels: {
+      'coolify.managed': 'true',
+      'coolify.type': 'application',
+      'coolify.projectName': 'registry-test',
+      'coolify.resourceName': 'registry-web',
+      'traefik.http.routers.registry.rule': 'Host(`registry.example.test`)',
+      'traefik.http.routers.registry.entrypoints': 'websecure',
+      'private.token': registrySecret
+    },
+    Ports: [{ PrivatePort: 8080, PublicPort: 18086, Type: 'tcp', IP: '127.0.0.1' }],
+    PortBindings: {
+      '8080/tcp': [{ HostIp: '127.0.0.1', HostPort: '18086' }]
+    },
+    RestartPolicy: { Name: 'unless-stopped', MaximumRetryCount: 0 },
+    Env: [`API_TOKEN=${registrySecret}`, 'NODE_ENV=production'],
+    Healthcheck: { Test: ['CMD-SHELL', `curl -H 'Authorization: ${registrySecret}' http://localhost/`] },
+    HealthStatus: 'healthy',
+    Mounts: [{
+      Type: 'volume',
+      Name: 'registry-data',
+      Source: '/var/lib/docker/volumes/registry-data/_data',
+      Destination: '/app/data',
+      RW: true
+    }],
+    NetworkSettings: { Networks: { bridge: { IPAddress: '172.17.0.2', Gateway: '172.17.0.1' } } }
+  };
+  dockerRequestLog.length = 0;
+
+  const scanResponse = await fetch(baseUrl() + '/api/resources/scan', {
+    method: 'POST',
+    headers: { Cookie: cookie }
+  });
+  assert.equal(scanResponse.status, 201);
+  const scanPayload = await scanResponse.json();
+  assert.equal(scanPayload.snapshot.summary.resources, 1);
+  assert.equal(scanPayload.snapshot.resources[0].provider, 'coolify');
+  assert.equal(scanPayload.snapshot.resources[0].routes[0].domain, 'registry.example.test');
+  assert.equal(scanPayload.snapshot.guarantees.runtimeMutated, false);
+  assert.equal(dockerRequestLog.every((request) => request.method === 'GET'), true);
+  assert.equal(JSON.stringify(scanPayload).includes(registrySecret), false);
+
+  const registryResponse = await fetch(baseUrl() + '/api/resources', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(registryResponse.status, 200);
+  const registryPayload = await registryResponse.json();
+  assert.equal(registryPayload.registry.status, 'ready');
+  assert.equal(registryPayload.snapshot.snapshotId, scanPayload.snapshot.snapshotId);
+
+  const exportResponse = await fetch(baseUrl() + '/api/resources/export', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(exportResponse.status, 200);
+  assert.match(exportResponse.headers.get('content-disposition'), /foxos-resource-plan-snap_/);
+  const exportedPlan = await exportResponse.text();
+  assert.equal(exportedPlan.includes(registrySecret), false);
+  assert.equal(JSON.parse(exportedPlan).exportType, 'foxos-resource-migration-plan');
   mockContainer = null;
 });

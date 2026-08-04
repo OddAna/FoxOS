@@ -35,6 +35,24 @@ of truth after adoption. See `ARCHITECTURE.md`.
    resources one at a time; retire Coolify only after the final independence
    audit passes and destructive cleanup is separately approved.
 
+### Milestone 1 progress: Resource Registry v1
+
+- [x] Read containers, images, networks, volumes and container inspections using
+  Docker `GET` requests only.
+- [x] Normalize provider, role, runtime, ports, routes, mounts, networks, health,
+  restart policy and safe provenance into provider-neutral resource records.
+- [x] Assign stable local FoxOS resource IDs through hashed identity aliases.
+- [x] Persist schema-versioned latest/revision snapshots atomically with
+  owner-only permissions and bounded revision retention.
+- [x] Exclude environment values, arbitrary labels, middleware credentials,
+  health-check commands and token-like route segments from snapshots/exports.
+- [x] Report ownership stage, adoption blockers, resource relationships and
+  route/port/storage conflicts through authenticated scan/read/export APIs.
+- [ ] Define the separate desired-state manifest and import-draft schema used by
+  an adoption plan. Resource Registry v1 records observed state only.
+- [ ] Expose the audit in the existing FoxOS interface without changing its
+  visual language.
+
 ## Stable release system
 
 - [x] Freeze public `main` separately from ongoing development.

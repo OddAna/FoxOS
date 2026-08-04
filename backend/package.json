@@ -5,8 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "check": "node --check server.js && node --check appCatalog.js && node --check appManager.js",
-    "test": "node --test server.test.js"
+    "check": "node --check server.js && node --check appCatalog.js && node --check appManager.js && node --check resourceRegistry.js",
+    "test": "node --test *.test.js"
   },
   "dependencies": {
     "express": "^4.19.2"

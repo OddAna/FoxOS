@@ -34,6 +34,20 @@ authentication.
 - The uninstall screen preserves named volumes by default. Enabling data removal
   permanently deletes the catalog app's FoxOS-managed volume.
 
+## Resource Registry data
+
+Resource scans use Docker `GET` requests only and must never adopt or mutate a
+discovered workload. The registry excludes environment values, arbitrary labels,
+proxy middleware values and health-check commands because they may contain
+credentials. Only explicitly allowed identity and grouping labels are retained,
+and long token-like route path segments are stored only as redacted fingerprints.
+
+Registry files live under `.foxos-data/registry/` with owner-only directory and
+file permissions. They still contain operational metadata such as application
+names, image references, domains, ports and host storage paths. Protect and back
+up this directory as private server administration data. Review a migration-plan
+export before sharing it even though secret-bearing fields are excluded.
+
 ## Reporting a vulnerability
 
 Do not publish exploitable details in a public issue. Contact the maintainer
