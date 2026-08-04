@@ -13,6 +13,7 @@ import TextEditorApp from './apps/TextEditorApp';
 import ImageViewerApp from './apps/ImageViewerApp';
 import MediaPlayerApp from './apps/MediaPlayerApp';
 import TerminalApp from './apps/TerminalApp';
+import AppStoreApp from './apps/AppStoreApp';
 import { useAuth } from './contexts/AuthContext';
 import SetupScreen from './components/auth/SetupScreen';
 import LockScreen from './components/auth/LockScreen';
@@ -571,6 +572,7 @@ const Desktop = () => {
       case 'image-viewer': return <ImageViewerApp filePath={win.filePath} />;
       case 'media-player': return <MediaPlayerApp filePath={win.filePath} ext={win.ext} />;
       case 'terminal': return <TerminalApp />;
+      case 'app-store': return <AppStoreApp />;
       default: return <div style={{ padding: 20, color: '#fff' }}>Bilinmeyen Uygulama: {win.title}</div>;
     }
   };

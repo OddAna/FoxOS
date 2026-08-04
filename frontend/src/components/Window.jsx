@@ -101,7 +101,8 @@ const Window = ({ win, children }) => {
     overflow: 'hidden',
     boxShadow: isFocused ? '0 20px 50px rgba(0,0,0,0.5)' : '0 10px 30px rgba(0,0,0,0.3)',
     transition: win.isMaximized ? 'width 0.3s, height 0.3s, left 0.3s, top 0.3s, border-radius 0.3s' : 'none',
-    pointerEvents: 'auto'
+    pointerEvents: 'auto',
+    background: '#0b101a'
   };
 
   return (
@@ -111,7 +112,7 @@ const Window = ({ win, children }) => {
         onPointerDown={handlePointerDown}
         style={{
         height: '38px',
-        background: 'rgba(255,255,255,0.05)',
+        background: 'rgba(13, 19, 30, 0.99)',
         borderBottom: '1px solid rgba(255,255,255,0.1)',
         display: 'flex',
         alignItems: 'center',
@@ -128,7 +129,7 @@ const Window = ({ win, children }) => {
           {win.title}
         </div>
       </div>
-      <div className="window-content" style={{ flex: 1, overflow: 'auto', background: 'rgba(0,0,0,0.2)' }}>
+      <div className="window-content" style={{ flex: 1, overflow: 'auto', background: '#0b101a' }}>
         {children || win.component}
       </div>
 

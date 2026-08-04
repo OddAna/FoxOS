@@ -26,6 +26,9 @@ not use the host package manager for its own runtime.
 - **Real host overview** — hostname, Linux distribution, kernel, uptime, load,
   memory, and disk usage
 - **Real Docker control** — list containers and start, stop, or restart them
+- **Real App Store** — install a reviewed catalog of Docker applications on the
+  server, choose their host port and network exposure, and manage their real
+  container lifecycle from FoxOS
 - **Host terminal** — commands run directly in the Linux host namespaces
 - **Host file access** — the Files app contains a `Sunucu` entry linked to
   the host root filesystem
@@ -104,6 +107,7 @@ FoxOS agent container (Node.js + built React UI)
   ├── host PID/mount/network namespaces via nsenter
   ├── host root mounted at /host
   ├── Docker Engine socket mounted read/write
+  ├── curated apps created as labeled sibling containers
   └── persistent FoxOS data mounted at /data
 ```
 
@@ -120,6 +124,12 @@ to compromised root access.
 
 - Open **Sunucu** from the Dock to inspect host metrics and control Docker
   containers.
+- Open **App Store** to install and manage applications on the actual server.
+  FoxOS currently includes curated definitions for
+  [Uptime Kuma](https://github.com/louislam/uptime-kuma),
+  [Dozzle](https://github.com/amir20/dozzle),
+  [IT-Tools](https://github.com/CorentinTh/it-tools), and
+  [Stirling PDF](https://github.com/Stirling-Tools/Stirling-PDF).
 - Open **Terminal** to execute commands on the host.
 - Open **Dosyalar**, then **Sunucu**, to browse the host filesystem.
 - Use **Masaüstü** for FoxOS-only workspace files that should persist without
@@ -127,6 +137,15 @@ to compromised root access.
 
 The FoxOS core container is marked as protected and cannot stop or restart itself
 from the container list.
+
+App Store installs are not simulations and are not kept in browser storage.
+FoxOS pulls the catalog image through the host Docker Engine, creates a labeled
+container with an `unless-stopped` restart policy, and reads its live state back
+from Docker. Apps bind to `127.0.0.1` by default. Selecting **Public** binds the
+chosen app port to `0.0.0.0`; only do this when the app is separately protected
+and the server firewall is configured intentionally. Persistent app data is kept
+in a named Docker volume and can be preserved or explicitly deleted when the app
+is removed.
 
 ## Operations
 
@@ -186,7 +205,10 @@ authentication record, FoxOS desktop files, and trash.
 - File operations are synchronous; very large copy/move operations can take time
 - No multi-user roles or permission levels
 - No audit log yet
-- An application marketplace is not included in v0.0.1
+- The App Store catalog is intentionally small and reviewed; arbitrary Compose
+  files and untrusted install scripts are not accepted through the UI
+- App Store images are maintained by their respective third-party projects, not
+  by FoxOS
 - HTTPS must be provided by a reverse proxy or private access layer
 
 ## Development
@@ -222,11 +244,13 @@ FoxOS/
 ├── SECURITY.md                # Deployment and disclosure guidance
 ├── backend/
 │   ├── server.js              # Auth, files, host terminal, metrics, Docker API
+│   ├── appCatalog.js          # Reviewed application definitions
+│   ├── appManager.js          # Docker app validation and container payloads
 │   └── package.json
 └── frontend/
     ├── src/
     │   ├── apps/ServerApp.jsx # Host dashboard and Docker controls
-    │   ├── apps/               # Files, terminal, settings, media tools
+    │   ├── apps/               # App Store, files, terminal, settings, media tools
     │   ├── components/         # Desktop, Dock, windows, authentication
     │   └── contexts/           # Auth, windows, and dialogs
     └── package.json

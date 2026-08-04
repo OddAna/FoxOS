@@ -5,6 +5,15 @@ const os = require('os');
 const path = require('path');
 const { execFile } = require('child_process');
 const express = require('express');
+const { APP_CATALOG, getCatalogApp } = require('./appCatalog');
+const {
+  containerName,
+  createContainerPayload,
+  imagePullPath,
+  managedContainerForApp,
+  stateForCatalogApp,
+  validateInstallOptions
+} = require('./appManager');
 
 const app = express();
 
@@ -22,6 +31,7 @@ const COMMAND_MAX_BUFFER = 2 * 1024 * 1024;
 
 const sessions = new Map();
 const loginAttempts = new Map();
+const appInstallOperations = new Set();
 
 function ensureDirectory(directory) {
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -340,10 +350,16 @@ function runHostCommand(command, cwd = '/') {
   });
 }
 
-function dockerRequest(method, requestPath) {
+function dockerRequest(method, requestPath, payload = null) {
   return new Promise((resolve, reject) => {
     if (!fs.existsSync(DOCKER_SOCKET)) {
       return reject(new Error('Docker socket is not available'));
+    }
+
+    const serializedPayload = payload === null ? null : JSON.stringify(payload);
+    const headers = { 'Content-Type': 'application/json' };
+    if (serializedPayload !== null) {
+      headers['Content-Length'] = Buffer.byteLength(serializedPayload);
     }
 
     const request = http.request(
@@ -351,14 +367,14 @@ function dockerRequest(method, requestPath) {
         socketPath: DOCKER_SOCKET,
         path: requestPath,
         method,
-        headers: { 'Content-Type': 'application/json' }
+        headers
       },
       (response) => {
         const chunks = [];
         response.on('data', (chunk) => chunks.push(chunk));
         response.on('end', () => {
           const body = Buffer.concat(chunks).toString('utf8');
-          if (response.statusCode >= 200 && response.statusCode < 300) {
+          if ((response.statusCode >= 200 && response.statusCode < 300) || response.statusCode === 304) {
             if (!body) {
               return resolve(null);
             }
@@ -383,8 +399,27 @@ function dockerRequest(method, requestPath) {
     );
 
     request.on('error', reject);
+    if (serializedPayload !== null) {
+      request.write(serializedPayload);
+    }
     request.end();
   });
+}
+
+async function hostPortIsListening(port) {
+  const command =
+    "if command -v ss >/dev/null 2>&1; then " +
+    "if ss -H -ltn | awk '{print $4}' | grep -Eq '(^|:)" + port + "$'; then printf used; else printf free; fi; " +
+    "elif command -v netstat >/dev/null 2>&1; then " +
+    "if netstat -ltn 2>/dev/null | awk 'NR>2 {print $4}' | grep -Eq '(^|:)" + port + "$'; then printf used; else printf free; fi; " +
+    "else printf unknown; fi";
+  const result = await runHostCommand(command);
+  return result.success && result.output.trim() === 'used';
+}
+
+async function getCatalogState() {
+  const containers = await dockerRequest('GET', '/containers/json?all=1');
+  return APP_CATALOG.map((catalogApp) => stateForCatalogApp(catalogApp, containers));
 }
 
 app.get('/api/health', (req, res) => {
@@ -674,6 +709,118 @@ app.get('/api/containers', async (req, res) => {
     );
   } catch (error) {
     res.status(503).json({ error: error.message });
+  }
+});
+
+app.get('/api/apps', async (req, res) => {
+  try {
+    res.json({ apps: await getCatalogState() });
+  } catch (error) {
+    res.status(503).json({ error: error.message });
+  }
+});
+
+app.post('/api/apps/:appId/install', async (req, res) => {
+  const catalogApp = getCatalogApp(req.params.appId);
+  if (!catalogApp) {
+    return res.status(404).json({ error: 'Application not found in the FoxOS catalog' });
+  }
+  if (appInstallOperations.has(catalogApp.id)) {
+    return res.status(409).json({ error: 'An install operation is already running for this application' });
+  }
+
+  let options;
+  try {
+    options = validateInstallOptions(catalogApp, req.body);
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+
+  appInstallOperations.add(catalogApp.id);
+  let createdContainerId = null;
+  try {
+    const containers = await dockerRequest('GET', '/containers/json?all=1');
+    if (managedContainerForApp(containers, catalogApp.id)) {
+      return res.status(409).json({ error: 'This application is already installed' });
+    }
+    if (await hostPortIsListening(options.hostPort)) {
+      return res.status(409).json({ error: 'Port ' + options.hostPort + ' is already in use on the server' });
+    }
+
+    await dockerRequest('POST', imagePullPath(catalogApp.image));
+    const created = await dockerRequest(
+      'POST',
+      '/containers/create?name=' + encodeURIComponent(containerName(catalogApp.id)),
+      createContainerPayload(catalogApp, options)
+    );
+    createdContainerId = created.Id;
+    await dockerRequest('POST', '/containers/' + createdContainerId + '/start');
+
+    const state = (await getCatalogState()).find((appState) => appState.id === catalogApp.id);
+    res.status(201).json({ success: true, app: state });
+  } catch (error) {
+    if (createdContainerId) {
+      try {
+        await dockerRequest('DELETE', '/containers/' + createdContainerId + '?force=1&v=0');
+      } catch (cleanupError) {
+        console.error('Could not clean up failed app installation:', cleanupError.message);
+      }
+    }
+    res.status(502).json({ error: error.message });
+  } finally {
+    appInstallOperations.delete(catalogApp.id);
+  }
+});
+
+app.post('/api/apps/:appId/:action', async (req, res) => {
+  const catalogApp = getCatalogApp(req.params.appId);
+  const allowedActions = new Set(['start', 'stop', 'restart']);
+  if (!catalogApp || !allowedActions.has(req.params.action)) {
+    return res.status(400).json({ error: 'Invalid application action' });
+  }
+  if (appInstallOperations.has(catalogApp.id)) {
+    return res.status(409).json({ error: 'Wait for the current install operation to finish' });
+  }
+
+  try {
+    const containers = await dockerRequest('GET', '/containers/json?all=1');
+    const container = managedContainerForApp(containers, catalogApp.id);
+    if (!container) {
+      return res.status(404).json({ error: 'Application is not installed' });
+    }
+    await dockerRequest('POST', '/containers/' + container.Id + '/' + req.params.action + '?t=10');
+    const state = (await getCatalogState()).find((appState) => appState.id === catalogApp.id);
+    res.json({ success: true, app: state });
+  } catch (error) {
+    res.status(502).json({ error: error.message });
+  }
+});
+
+app.delete('/api/apps/:appId', async (req, res) => {
+  const catalogApp = getCatalogApp(req.params.appId);
+  if (!catalogApp) {
+    return res.status(404).json({ error: 'Application not found in the FoxOS catalog' });
+  }
+  if (appInstallOperations.has(catalogApp.id)) {
+    return res.status(409).json({ error: 'Wait for the current install operation to finish' });
+  }
+
+  try {
+    const containers = await dockerRequest('GET', '/containers/json?all=1');
+    const container = managedContainerForApp(containers, catalogApp.id);
+    if (!container) {
+      return res.status(404).json({ error: 'Application is not installed' });
+    }
+
+    await dockerRequest('DELETE', '/containers/' + container.Id + '?force=1&v=0');
+    if (req.query.removeData === 'true') {
+      for (const volume of catalogApp.volumes || []) {
+        await dockerRequest('DELETE', '/volumes/' + encodeURIComponent(volume.name));
+      }
+    }
+    res.json({ success: true, dataRemoved: req.query.removeData === 'true' });
+  } catch (error) {
+    res.status(502).json({ error: error.message });
   }
 });
 

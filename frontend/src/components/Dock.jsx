@@ -1,5 +1,5 @@
 import React from 'react';
-import { Settings, Terminal, Gauge, FolderOpen, Trash2 } from 'lucide-react';
+import { Settings, Terminal, Gauge, FolderOpen, Trash2, Store } from 'lucide-react';
 import { useWindowManager } from '../contexts/WindowContext';
 
 const Dock = () => {
@@ -24,6 +24,17 @@ const Dock = () => {
       component: null,
       width: 800,
       height: 550
+    });
+  };
+
+  const handleOpenAppStore = () => {
+    openWindow({
+      id: 'app-store',
+      type: 'app-store',
+      title: 'App Store',
+      component: null,
+      width: 1040,
+      height: 700
     });
   };
 
@@ -60,6 +71,13 @@ const Dock = () => {
             <Gauge size={26} color="#ffffff" strokeWidth={1.5} />
           </div>
           <div className={`dock-indicator ${isAppOpen('server') ? 'active' : ''}`}></div>
+        </div>
+
+        <div className="dock-item-wrapper">
+          <div className="dock-item app-store" title="App Store" onClick={handleOpenAppStore}>
+            <Store size={26} color="#ffbd66" strokeWidth={1.6} />
+          </div>
+          <div className={`dock-indicator ${isAppOpen('app-store') ? 'active' : ''}`}></div>
         </div>
         
         <div className="dock-item-wrapper">

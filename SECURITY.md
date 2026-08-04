@@ -16,6 +16,23 @@ write to the host filesystem, and control the Docker daemon.
 
 When an HTTPS reverse proxy is in place, set `FOXOS_SECURE_COOKIE=true`.
 
+## App Store deployments
+
+App Store applications are separate Docker containers and have their own
+security model. Installing one does not automatically place it behind FoxOS
+authentication.
+
+- Keep the default **Private** (`127.0.0.1`) exposure unless the application has
+  its own authentication or is protected by a trusted reverse proxy or VPN.
+- Selecting **Public** (`0.0.0.0`) can make the chosen port internet-accessible,
+  depending on the host firewall and provider network rules.
+- Review the linked upstream project before installing. Catalog images are built
+  and maintained by their respective third-party projects.
+- Apps that read the Docker socket, such as Dozzle, have elevated visibility into
+  the server even when the socket is mounted read-only.
+- The uninstall screen preserves named volumes by default. Enabling data removal
+  permanently deletes the catalog app's FoxOS-managed volume.
+
 ## Reporting a vulnerability
 
 Do not publish exploitable details in a public issue. Contact the maintainer

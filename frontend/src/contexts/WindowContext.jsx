@@ -20,15 +20,23 @@ export const WindowProvider = ({ children }) => {
         return prev.map(w => w.id === appConfig.id ? { ...w, isMinimized: false } : w);
       }
       
-      const defaultWidth = appConfig.width || 800;
-      const defaultHeight = appConfig.height || 600;
+      const availableWidth = Math.max(280, window.innerWidth - 16);
+      const availableHeight = Math.max(240, window.innerHeight - 116);
+      const defaultWidth = Math.min(appConfig.width || 800, availableWidth);
+      const defaultHeight = Math.min(appConfig.height || 600, availableHeight);
       
       const maxZ = prev.length > 0 ? Math.max(...prev.map(w => w.zIndex)) : 100;
       
       const newWindow = {
         ...appConfig,
-        x: Math.max(0, (window.innerWidth - defaultWidth) / 2) + (prev.length * 20),
-        y: Math.max(30, (window.innerHeight - defaultHeight) / 2 - 60) + (prev.length * 20),
+        x: Math.min(
+          Math.max(0, (window.innerWidth - defaultWidth) / 2) + (prev.length * 20),
+          Math.max(0, window.innerWidth - defaultWidth)
+        ),
+        y: Math.min(
+          Math.max(30, (window.innerHeight - defaultHeight) / 2 - 60) + (prev.length * 20),
+          Math.max(30, window.innerHeight - defaultHeight - 85)
+        ),
         width: defaultWidth,
         height: defaultHeight,
         isMinimized: false,
