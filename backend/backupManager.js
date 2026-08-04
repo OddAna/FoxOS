@@ -11,6 +11,7 @@ const { atomicWriteJson } = require('./resourceRegistry');
 
 const CONFIG_SCHEMA_VERSION = 1;
 const MAX_PILOT_ARCHIVE_BYTES = 512 * 1024 * 1024;
+const CLEAR_CONFIGURATION_CONFIRMATION = 'REMOVE BACKUP CONFIGURATION';
 
 class BackupError extends Error {
   constructor(message, statusCode = 500, code = 'backup-error') {
@@ -35,6 +36,16 @@ function readJson(target, fallback = null) {
     return JSON.parse(fs.readFileSync(target, 'utf8'));
   } catch (error) {
     if (error.code === 'ENOENT') return fallback;
+    throw error;
+  }
+}
+
+function removeFileIfPresent(target) {
+  try {
+    fs.unlinkSync(target);
+    return true;
+  } catch (error) {
+    if (error.code === 'ENOENT') return false;
     throw error;
   }
 }
@@ -241,6 +252,28 @@ function createBackupManager({
     };
   }
 
+  function clearConfiguration(confirmation) {
+    if (confirmation !== CLEAR_CONFIGURATION_CONFIRMATION) {
+      throw new BackupError(
+        `Exact confirmation is required: ${CLEAR_CONFIGURATION_CONFIRMATION}`,
+        400,
+        'confirmation-required'
+      );
+    }
+
+    // Remove credentials first so an interrupted cleanup fails closed. Encrypted
+    // archives, the local master key and operation history are deliberately kept.
+    const encryptedCredentialsRemoved = removeFileIfPresent(credentialsFile);
+    const configRemoved = removeFileIfPresent(configFile);
+    return {
+      configRemoved,
+      encryptedCredentialsRemoved,
+      encryptedArchivesPreserved: true,
+      masterKeyPreserved: true,
+      backup: status()
+    };
+  }
+
   async function protectArchive({ operationId, resourceId, volumeName, archive, contentDigest }) {
     const config = loadConfig();
     const currentStatus = status();
@@ -335,6 +368,7 @@ function createBackupManager({
 
   ensureDirectory(recoveryRoot);
   return {
+    clearConfiguration,
     configureS3,
     paths: { archivesRoot, configFile, credentialsFile, recoveryRoot },
     protectArchive,
@@ -344,6 +378,7 @@ function createBackupManager({
 
 module.exports = {
   BackupError,
+  CLEAR_CONFIGURATION_CONFIRMATION,
   createBackupManager,
   createS3ObjectStore,
   endpointIsOffHost

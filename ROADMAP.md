@@ -18,6 +18,12 @@ FoxOS core and its public HTTPS path have zero Coolify dependency. Optional
 Coolify discovery exists only to rescue legacy workloads and must be removable
 without changing FoxOS behavior.
 
+Every release candidate must also pass a clean-install check with no `.env`,
+domain, Cloudflare/DNS token, S3-compatible target, provider account or payment
+method. The base installer must never create or enable a remote/billable
+resource. External services are opt-in adapters; absence of an off-host backup
+target blocks only adoption/migration operations that require restore proof.
+
 ## Ordered implementation milestones
 
 1. **Resource registry and ownership audit** — create the provider-neutral,
@@ -187,6 +193,10 @@ without changing FoxOS behavior.
   as ordinary stateless web containers.
 - [ ] Protect FoxOS core, proxy, critical databases and provider-owned resources
   from accidental stop/delete/reconfigure operations.
+- [x] Keep base install and ordinary host management operational with no external
+  provider account; CI starts FoxOS with recovery unconfigured.
+- [x] Require exact confirmation to remove an external backup configuration
+  while preserving encrypted local archives and the master key.
 
 ## Coolify retirement gate
 

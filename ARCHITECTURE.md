@@ -17,6 +17,22 @@ networks, files or containers. Coolify support is an optional, removable
 migration reader for rescuing legacy workloads; it is disabled when absent and
 is never the FoxOS gateway.
 
+## Clean-install and billing contract
+
+A clone of the stable public branch must install on a clean supported Linux
+server with only Docker Engine, Compose v2 and Docker-daemon access. Base setup
+must not require an account, domain, API token, object store, DNS provider,
+cloud provider, third-party panel, payment method or network call beyond pulling
+the repository and container images.
+
+FoxOS installers must never create, subscribe to or enable a remote or billable
+service. External DNS, certificate, Git, registry and backup systems are
+explicitly configured adapters only. `S3-compatible` is a protocol boundary,
+not an AWS, Cloudflare or other vendor dependency. A missing backup adapter
+blocks only operations whose safety contract requires an off-host restore proof;
+it must not block startup, login, host management, Docker control, Files,
+Terminal or App Store.
+
 ## Authority model
 
 | Concern | FoxOS-owned authority | Replaceable input or adapter |

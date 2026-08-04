@@ -56,6 +56,13 @@
 - External registrars, certificate authorities, Git hosts, registries and DNS
   APIs are replaceable adapters. FoxOS must keep the desired state and recovery
   information locally so changing an adapter does not erase resource truth.
+- A clean public installation must require no external provider account, domain,
+  API token, object store, payment method or existing panel. Base startup and
+  ordinary host management must work with recovery explicitly unconfigured.
+- Never make an installer create, subscribe to or enable a remote or billable
+  service. `S3-compatible` is a provider-neutral protocol adapter, not an AWS,
+  Cloudflare or other vendor dependency; external backup configuration must be
+  explicit and removable.
 - Read `ARCHITECTURE.md` before changing discovery, deployment, domains,
   secrets, persistence, backup or migration behavior.
 
@@ -66,6 +73,8 @@
 - Before a release, run backend tests and syntax checks, frontend lint/build,
   Compose and shell validation, version scans, production image build, and
   browser interaction QA proportional to the change.
+- CI must prove the base Compose install becomes healthy without `.env`, DNS,
+  Cloudflare or S3 credentials and reports external recovery as unconfigured.
 - Preserve existing Docker applications, volumes, authentication data and
   server configuration during development deployments. Never take ownership of
   an externally managed container merely because FoxOS discovers it.

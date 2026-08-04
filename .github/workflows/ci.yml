@@ -50,6 +50,14 @@ jobs:
       - name: Validate Compose and installer
         run: |
           docker compose config --quiet
+          if docker compose config | grep -Eiq 'cloudflare|s3-compatible|r2[._-]'; then
+            echo 'Base Compose unexpectedly contains an external provider dependency.' >&2
+            exit 1
+          fi
+          if grep -Eiq 'cloudflare|configure-s3|install-gateway' install.sh; then
+            echo 'Base installer unexpectedly invokes an external provider adapter.' >&2
+            exit 1
+          fi
           FOXOS_PILOT_TOKEN=ci-disposable-placeholder \
             docker compose -f pilot/docker-compose.adoption-lab.yml config --quiet
           bash -n install.sh
@@ -66,3 +74,26 @@ jobs:
             -e FOXOS_ACME_EMAIL=admin@example.com \
             -e CLOUDFLARE_API_TOKEN=0000000000000000000000000000000000000000 \
             foxos-gateway-ci validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
+      - name: Verify clean base install without external providers
+        run: |
+          test ! -e .env
+          ./install.sh
+          for attempt in $(seq 1 30); do
+            state=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' foxos)
+            if [ "$state" = healthy ]; then
+              break
+            fi
+            sleep 2
+          done
+          test "$state" = healthy
+          curl --fail --silent --show-error http://127.0.0.1:8080/api/health >/dev/null
+          docker compose exec -T foxos node /app/recoveryCli.js status | node -e '
+            let input = "";
+            process.stdin.on("data", chunk => input += chunk);
+            process.stdin.on("end", () => {
+              const status = JSON.parse(input);
+              if (status.backup.configured || status.backup.ready || status.backup.adapter) process.exit(1);
+            });
+          '
+          docker compose down

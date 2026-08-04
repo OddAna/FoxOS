@@ -65,6 +65,14 @@ before exposing it to other users.
 - Docker Compose v2 (`docker compose`)
 - A user that can access the Docker daemon
 
+No external service account is required. A clean FoxOS installation does not
+need Cloudflare, a domain, DNS API access, Amazon S3, R2, another object-storage
+provider, an API token, a credit card or an existing control panel. The base
+installer never signs up for, provisions or enables a remote or billable
+service. It starts with off-host recovery shown as **not configured** while host
+management, authentication, Files, Terminal, Docker and App Store remain
+available.
+
 ### 1. Clone and start
 
 ```bash
@@ -75,7 +83,8 @@ chmod +x install.sh
 ```
 
 The installer validates the environment and starts FoxOS. It does not install or
-modify the host operating system.
+modify the host operating system, call a cloud provider or create a remote
+resource.
 
 ### 2. Connect safely
 
@@ -106,6 +115,10 @@ Do not publish FoxOS directly to the public internet. Read
 FoxOS can publish its own HTTPS endpoint without Coolify. The first gateway
 adapter uses Caddy and Cloudflare **DNS only** for ACME DNS-01 validation; web
 traffic goes directly from the browser to the FoxOS gateway.
+
+This is a separate, opt-in adapter. `install.sh` never invokes
+`install-gateway.sh`, and the normal SSH-tunnel installation above does not need
+Cloudflare or any other DNS provider.
 
 1. Create a DNS-only `A` record for the chosen FoxOS hostname pointing to the
    server.
@@ -282,6 +295,14 @@ These operator CLIs deliberately read sensitive values from files or standard
 input instead of command-line arguments. The Store UI does not expose this
 pilot workflow yet.
 
+Off-host recovery is optional for a normal FoxOS installation and mandatory
+only when an operator deliberately starts the adoption pilot. “S3-compatible”
+describes the open API protocol accepted by the current adapter; it does not
+mean Amazon, Cloudflare or any other company is required. FoxOS never creates a
+bucket, subscription or provider account and never opts the operator into
+billing. The operator must explicitly choose and provision a target before
+configuring it.
+
 ```bash
 # Store or rotate a secret. The returned metadata never contains the value.
 docker compose exec -T foxos node /app/secretCli.js put pilot-token \
@@ -299,6 +320,11 @@ docker compose exec -T foxos node /app/recoveryCli.js configure-s3 \
   --region auto \
   --prefix foxos \
   --credentials-stdin < /owner-only/path/s3-credentials.json
+
+# Stop using the configured external target. This removes only its local config
+# and encrypted credential; existing encrypted archives and the master key stay.
+docker compose exec -T foxos node /app/recoveryCli.js clear-configuration \
+  --confirm "REMOVE BACKUP CONFIGURATION"
 ```
 
 The credential JSON has exactly two fields: `accessKeyId` and
@@ -389,6 +415,8 @@ Do not copy its contents into Git or logs.
 - Off-host recovery currently gates each disposable adoption operation; there
   is no scheduled retention policy, database-consistent backup, key escrow or
   full-machine disaster restore workflow yet
+- A fresh installation intentionally has no external backup adapter configured;
+  ordinary FoxOS host management does not require one
 - The App Store catalog is intentionally small and reviewed; arbitrary Compose
   files and untrusted install scripts are not accepted through the UI
 - App Store images are maintained by their respective third-party projects, not
