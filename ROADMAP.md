@@ -5,6 +5,36 @@ server files, terminal access, and a real application Store. The following work
 is required before Coolify can be removed from the development host without
 losing deployment, routing, recovery or operational capabilities.
 
+## Product contract
+
+FoxOS must own the desired state on the server. Applications, dependencies,
+deployment revisions, domains, routes, TLS policy, environment configuration,
+secret references, storage, backups and recovery metadata must survive the
+removal of Coolify or any other imported provider. Providers may discover,
+import, export or apply information, but they must never remain the only source
+of truth after adoption. See `ARCHITECTURE.md`.
+
+## Ordered implementation milestones
+
+1. **Resource registry and ownership audit** — create the provider-neutral,
+   versioned server-side manifest model; inventory Docker and Coolify resources
+   without mutation; persist redacted snapshots; classify resources as
+   observed, import-draft, FoxOS-owned or independent.
+2. **Reversible adoption of one disposable application** — build a dry-run,
+   conflict report, local manifest, data backup, health proof and rollback for
+   one test resource before touching a real workload.
+3. **FoxOS-owned routes and TLS** — introduce the independent proxy, local route
+   records and certificate lifecycle; cut over the disposable application while
+   preserving immediate rollback.
+4. **Secrets, persistence and recovery** — encrypted local secret references,
+   volume/bind inventory, off-host backup and tested restore become adoption
+   gates rather than optional follow-up work.
+5. **Source build and deployments** — Git/image inputs become replaceable
+   adapters feeding FoxOS-owned revisions, build logs, health gates and rollback.
+6. **Resource-by-resource Coolify migration** — import and adopt production
+   resources one at a time; retire Coolify only after the final independence
+   audit passes and destructive cleanup is separately approved.
+
 ## Stable release system
 
 - [x] Freeze public `main` separately from ongoing development.

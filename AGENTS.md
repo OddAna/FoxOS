@@ -25,6 +25,27 @@
 - Functional additions must fit the existing interface and reuse its current
   visual tokens and interaction patterns.
 
+## Server ownership boundary
+
+- FoxOS is the server-owned source of truth for applications, service
+  relationships, deployment revisions, domains, routes, TLS policy,
+  environment configuration, secret references, persistence, backups and
+  recovery metadata.
+- Coolify and similar control panels are import providers only. Their labels,
+  databases, APIs and proxy configuration may be read to build a migration
+  plan, but FoxOS must not require that provider after a resource is adopted.
+- Provider imports must produce a provider-neutral FoxOS manifest stored on the
+  server. Preserve import provenance for audit and rollback, not as the active
+  authority.
+- Never mark a discovered resource as FoxOS-owned automatically. Adoption must
+  be explicit, conflict-checked, backed up, reversible and verified before the
+  external provider is detached.
+- External registrars, certificate authorities, Git hosts, registries and DNS
+  APIs are replaceable adapters. FoxOS must keep the desired state and recovery
+  information locally so changing an adapter does not erase resource truth.
+- Read `ARCHITECTURE.md` before changing discovery, deployment, domains,
+  secrets, persistence, backup or migration behavior.
+
 ## Development and deployment
 
 - The development server checkout under `/opt/foxos` tracks `develop`; it is not
