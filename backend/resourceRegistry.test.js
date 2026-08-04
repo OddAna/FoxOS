@@ -262,6 +262,28 @@ test('a preserved rollback container cannot claim the adopted resource identity'
   assert.deepEqual(rollbackAliases, ['rollback-container:' + 'b'.repeat(64)]);
 });
 
+test('deployment history containers cannot claim the active deployment identity', () => {
+  const labels = {
+    'com.foxos.managed': 'true',
+    'com.foxos.resource.id': 'res_' + '2'.repeat(32),
+    'com.foxos.deployment.disposable': 'true',
+    'com.foxos.deployment.revision': 'drev_' + '3'.repeat(32),
+    'com.foxos.deployment.operation': 'dop_' + '4'.repeat(32)
+  };
+  const activeAliases = identityAliases({
+    Id: 'c'.repeat(64),
+    Names: ['/foxos-deployment-lab']
+  }, labels);
+  const historyAliases = identityAliases({
+    Id: 'd'.repeat(64),
+    Names: ['/foxos-deployment-lab-rollback-1234abcd']
+  }, labels);
+
+  assert.equal(activeAliases.includes('foxos:' + labels['com.foxos.resource.id']), true);
+  assert.deepEqual(historyAliases, ['deployment-history-container:' + 'd'.repeat(64)]);
+  assert.deepEqual(safeLabels(labels), labels);
+});
+
 test('a preserved rollback container does not create a false active host-port conflict', () => {
   const port = { privatePort: 80, protocol: 'tcp', hostIp: '127.0.0.1', hostPort: 18088 };
   const mount = { type: 'volume', name: 'foxos-adoption-lab-data' };

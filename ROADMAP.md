@@ -112,6 +112,24 @@ target blocks only adoption/migration operations that require restore proof.
 - [ ] Add scheduled retention, independently protected recovery-key export,
   database-consistent snapshots and full-machine disaster restore.
 
+### Milestone 5 progress: Disposable Source Deployment v1
+
+- [x] Resolve a credential-free public HTTPS Git branch/tag without a provider
+  API and pin the exact commit, context digest and Dockerfile digest.
+- [x] Enforce the first reviewed Dockerfile subset: digest-pinned bases, bounded
+  context, no symlinks, `ADD`, build mounts, secrets or build network.
+- [x] Persist FoxOS-owned immutable revisions, plans, bounded redacted build
+  logs, image IDs, operation history and the current deployment pointer.
+- [x] Start a resource-limited candidate on a dynamic loopback port and prove
+  HTTP status/body before stopping the active disposable canary.
+- [x] Preserve the previous healthy container and restore/re-prove it through an
+  exact-confirmation rollback.
+- [x] Keep the pilot fixed to `foxos-deployment-lab`; exclude its active and
+  history containers from Store discovery and never touch Coolify/real workloads.
+- [ ] Add private Git through encrypted scoped deploy credentials.
+- [ ] Add webhook triggers, a cancellable queue and reviewed Compose/build-pack
+  workflows after the public Dockerfile transaction is stable.
+
 ## Stable release system
 
 - [x] Freeze public `main` separately from ongoing development.
@@ -136,13 +154,16 @@ target blocks only adoption/migration operations that require restore proof.
 
 ## Git source, build and deployment
 
-- [ ] Connect public and private Git repositories with scoped deploy credentials.
-- [ ] Support manual and webhook-driven deployments from selected branches or tags.
-- [ ] Support reviewed Dockerfile, Docker Compose and build-pack workflows.
-- [ ] Add a deployment queue with cancellable builds, bounded logs, status and
-  retained build/deployment history.
-- [ ] Add health-gated recreate/rolling deployment and automatic rollback to the
-  last healthy revision.
+- [x] Connect credential-free public Git repositories through the generic HTTPS
+  adapter; private Git with scoped encrypted credentials remains open.
+- [x] Support exactly confirmed manual branch/tag deployments for the disposable
+  canary; webhook-driven deployment remains open.
+- [x] Support the first restricted reviewed Dockerfile workflow; Docker Compose
+  and build-pack workflows remain open.
+- [x] Store bounded redacted logs, status and retained deployment history; a
+  cancellable multi-job queue remains open.
+- [x] Health-gate candidate deployment and exact rollback to the previous healthy
+  disposable revision; general rolling deployment remains open.
 - [ ] Add controlled image update, digest pinning and rollback for image-based apps.
 
 ## Environment and secrets

@@ -3,6 +3,8 @@ const http = require('node:http');
 
 const DEFAULT_JSON_LIMIT = 16 * 1024 * 1024;
 const DEFAULT_ARCHIVE_LIMIT = 64 * 1024 * 1024;
+const DEFAULT_BUILD_LOG_LIMIT = 8 * 1024 * 1024;
+const DEFAULT_BUILD_TIMEOUT_MS = 10 * 60 * 1000;
 
 function createDockerClient(socketPath) {
   if (!socketPath) {
@@ -26,6 +28,7 @@ function createDockerClient(socketPath) {
       }
 
       const maxResponseBytes = options.maxResponseBytes || DEFAULT_JSON_LIMIT;
+      const timeoutMs = Number.isInteger(options.timeoutMs) ? options.timeoutMs : 0;
       let settled = false;
       const finish = (operation) => {
         if (settled) return;
@@ -70,6 +73,12 @@ function createDockerClient(socketPath) {
       });
 
       dockerRequest.on('error', (error) => finish(() => reject(error)));
+      if (timeoutMs > 0) {
+        dockerRequest.setTimeout(timeoutMs, () => {
+          dockerRequest.destroy();
+          finish(() => reject(new Error('Docker API request timed out')));
+        });
+      }
       if (body !== null) dockerRequest.write(body);
       dockerRequest.end();
     });
@@ -97,10 +106,20 @@ function createDockerClient(socketPath) {
     });
   }
 
-  return { request, requestBuffer };
+  function requestBuild(requestPath, buildContext) {
+    return requestRaw('POST', requestPath, buildContext, {
+      contentType: 'application/x-tar',
+      maxResponseBytes: DEFAULT_BUILD_LOG_LIMIT,
+      timeoutMs: DEFAULT_BUILD_TIMEOUT_MS
+    });
+  }
+
+  return { request, requestBuffer, requestBuild };
 }
 
 module.exports = {
   DEFAULT_ARCHIVE_LIMIT,
+  DEFAULT_BUILD_LOG_LIMIT,
+  DEFAULT_BUILD_TIMEOUT_MS,
   createDockerClient
 };

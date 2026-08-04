@@ -65,6 +65,35 @@ names, image references, domains, ports and host storage paths. Protect and back
 up this directory as private server administration data. Review a migration-plan
 export before sharing it even though secret-bearing fields are excluded.
 
+## Disposable source deployment pilot
+
+Treat every Git repository and Dockerfile as untrusted code. The implemented
+source path is restricted to the fixed `foxos-deployment-lab`; it must not be
+pointed at a production application.
+
+- Only credential-free public HTTPS Git URLs are accepted. Local/private
+  addresses, redirects, URL credentials, submodules and non-HTTPS transports
+  are rejected.
+- The plan pins the exact commit, complete context digest and Dockerfile digest.
+  Apply clones again and fails closed if any of them changed.
+- Contexts are bounded and cannot contain symlinks. Every `FROM` image must be
+  digest-pinned; `ADD`, `RUN --mount`, build secrets and SSH forwarding are
+  rejected.
+- Docker build networking is disabled. No secret/environment revision is
+  injected. Build response size, runtime, stored log length and log line length
+  are bounded, and common credential forms are redacted.
+- Candidates bind only to a Docker-assigned `127.0.0.1` port and receive memory,
+  CPU and PID limits plus `no-new-privileges`. They are verified before the
+  previous canary is stopped.
+- Plan, apply and rollback have separate exact confirmation strings. Only
+  containers with the fixed FoxOS resource/disposable labels can participate.
+- Deployment state/logs under `.foxos-data/deployments/` are owner-only and may
+  still reveal repository names, commits, build steps and image metadata.
+
+This is a transactional safety proof, not a general multi-tenant build service.
+Private Git, webhooks, arbitrary ports, Compose/build packs, persistence,
+domains and real workload updates remain unsupported.
+
 ## Disposable adoption pilot
 
 The first adoption engine is intentionally restricted to disposable lab

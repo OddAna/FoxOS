@@ -13,6 +13,9 @@ const SAFE_LABEL_KEYS = new Set([
   'com.foxos.core',
   'com.foxos.gateway',
   'com.foxos.adoption.disposable',
+  'com.foxos.deployment.disposable',
+  'com.foxos.deployment.revision',
+  'com.foxos.deployment.operation',
   'com.foxos.resource.id',
   'com.docker.compose.project',
   'com.docker.compose.service',
@@ -278,6 +281,9 @@ function identityAliases(container, labels) {
 
   if (/-foxos-rollback-[a-f0-9]{8,32}$/.test(name)) {
     return [`rollback-container:${container.Id || name}`];
+  }
+  if (/^foxos-deployment-lab-(?:candidate|rollback|rolled-forward)-[a-f0-9]{8,32}$/.test(name)) {
+    return [`deployment-history-container:${container.Id || name}`];
   }
 
   const foxosId = labels['com.foxos.resource.id'];

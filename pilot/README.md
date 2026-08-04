@@ -90,3 +90,23 @@ project and its test volume:
 ```bash
 docker compose -f pilot/docker-compose.adoption-lab.yml down --volumes
 ```
+
+## Disposable source deployment canary
+
+`source-deployment-canary/v1` and `v2` are the only reviewed contexts intended
+for Source Deployment v1. They are tiny dependency-free Node HTTP servers built
+from the same digest-pinned base image and differ only in their response marker.
+They contain no persistence, environment values, secrets, routes or provider
+configuration.
+
+The source flow is not an adoption flow: it creates only the fixed
+`foxos-deployment-lab` FoxOS-owned canary. It resolves the public repository ref
+to a commit, pins both context and Dockerfile digests, builds without network or
+secrets, starts a loopback-only candidate, proves the marker, and only then
+preserves/promotes the active revision. Apply v1, then v2, then roll back the v2
+operation to prove restoration of v1. Exact commands and confirmation strings
+are in the main README.
+
+Do not copy production code, credentials or real data into these directories.
+Do not rename another container to `foxos-deployment-lab` or reuse its
+`com.foxos.deployment.disposable=true` label.

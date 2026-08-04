@@ -63,6 +63,13 @@
   service. `S3-compatible` is a provider-neutral protocol adapter, not an AWS,
   Cloudflare or other vendor dependency; external backup configuration must be
   explicit and removable.
+- The source deployment implementation is also a disposable-only pilot. Keep the
+  fixed `foxos-deployment-lab` identity, public credential-free HTTPS Git input,
+  commit/context/Dockerfile pinning, digest-pinned base images, networkless and
+  secretless build, dynamic loopback candidate, health-before-cutover and exact
+  rollback gates. Do not widen it to private Git, arbitrary containers, ports,
+  build mounts, Compose/build packs, persistence or real workloads without
+  Burak's explicit approval and the remaining roadmap gates.
 - Read `ARCHITECTURE.md` before changing discovery, deployment, domains,
   secrets, persistence, backup or migration behavior.
 
