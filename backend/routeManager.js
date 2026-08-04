@@ -54,7 +54,13 @@ function safeBaseUrl(value) {
   return parsed.origin;
 }
 
-function defaultHttpsProbe({ gatewayHost, route, expectedAvailable, timeoutMs = 30000 }) {
+function defaultHttpsProbe({
+  gatewayHost,
+  route,
+  expectedAvailable,
+  timeoutMs = 30000,
+  httpsRequest = https.request
+}) {
   const publicUrl = new URL(route.publicUrl);
   const startedAt = Date.now();
 
@@ -62,7 +68,7 @@ function defaultHttpsProbe({ gatewayHost, route, expectedAvailable, timeoutMs = 
     let lastResult = null;
 
     const attempt = () => {
-      const request = https.request({
+      const request = httpsRequest({
         hostname: gatewayHost,
         port: 443,
         path: publicUrl.pathname,
@@ -72,25 +78,32 @@ function defaultHttpsProbe({ gatewayHost, route, expectedAvailable, timeoutMs = 
         timeout: 5000,
         rejectUnauthorized: true
       }, (response) => {
+        // IncomingMessage clears its socket reference after the response ends.
+        // Capture the completed TLS handshake result while the socket is live.
+        const authorizedTls = Boolean(response.socket && response.socket.authorized);
         let received = 0;
         response.on('data', (chunk) => {
           received += chunk.length;
           if (received > 256 * 1024) response.destroy();
         });
         response.on('end', () => {
-          const statusCode = response.statusCode || 0;
-          const routeHeader = String(response.headers[ROUTE_HEADER] || '');
-          const available = response.socket.authorized === true &&
-            statusCode >= 200 && statusCode < 300 && routeHeader === ROUTE_NAME;
-          lastResult = { statusCode, routeHeader: routeHeader || null };
-          if (available === expectedAvailable) {
-            return resolve({
-              verified: true,
-              expectedAvailable,
-              statusCode,
-              routeHeader: routeHeader || null,
-              authorizedTls: response.socket.authorized === true
-            });
+          try {
+            const statusCode = response.statusCode || 0;
+            const routeHeader = String(response.headers[ROUTE_HEADER] || '');
+            const available = authorizedTls &&
+              statusCode >= 200 && statusCode < 300 && routeHeader === ROUTE_NAME;
+            lastResult = { statusCode, routeHeader: routeHeader || null };
+            if (available === expectedAvailable) {
+              return resolve({
+                verified: true,
+                expectedAvailable,
+                statusCode,
+                routeHeader: routeHeader || null,
+                authorizedTls
+              });
+            }
+          } catch (error) {
+            lastResult = { error: error.code || 'invalid-https-probe-response' };
           }
           retry();
         });
