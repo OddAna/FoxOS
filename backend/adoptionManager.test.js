@@ -127,7 +127,7 @@ function imageDetails() {
   };
 }
 
-function createHarness({ resourceOverride = {}, failTargetHealth = false } = {}) {
+function createHarness({ resourceOverride = {}, failTargetHealth = false, failRouteActivation = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-adoption-test-'));
   const calls = [];
   const archive = tarArchive('data/example.txt', 'foxos disposable backup\n');
@@ -135,6 +135,8 @@ function createHarness({ resourceOverride = {}, failTargetHealth = false } = {})
   let sourceName = 'foxos-adoption-lab';
   let targetExists = false;
   let targetPayload = null;
+  let routeActive = false;
+  const routeCalls = [];
   const currentResource = resource(resourceOverride);
   const snapshot = {
     snapshotId: 'snap_' + '2'.repeat(32),
@@ -144,6 +146,36 @@ function createHarness({ resourceOverride = {}, failTargetHealth = false } = {})
   };
   const registry = {
     scan: async () => snapshot
+  };
+  const routeManager = {
+    planRoute: (resourceId, name, privatePort) => ({
+      schemaVersion: 1,
+      routeId: 'route_' + '9'.repeat(24),
+      resourceId,
+      owner: 'foxos',
+      gateway: 'foxos-caddy',
+      publicBaseUrl: 'https://foxos.example.test:8443',
+      publicPath: '/_foxos/apps/foxos-adoption-lab/',
+      publicUrl: 'https://foxos.example.test:8443/_foxos/apps/foxos-adoption-lab/',
+      tls: { mode: 'foxos-gateway', verificationRequired: true },
+      upstream: { protocol: 'http', network: 'foxos-routing', alias: 'foxos-route-adoption-lab', privatePort }
+    }),
+    activate: async (route, targetId) => {
+      routeCalls.push({ action: 'activate', route, targetId });
+      if (failRouteActivation) {
+        const error = new Error('Route proof failed');
+        error.code = 'route-health-verification-failed';
+        throw error;
+      }
+      routeActive = true;
+      return { ...route, status: 'active', proof: { verified: true, statusCode: 200, authorizedTls: true } };
+    },
+    deactivate: async (route, targetId) => {
+      routeCalls.push({ action: 'deactivate', route, targetId });
+      routeActive = false;
+      return { ...route, status: 'inactive', proof: { verified: true, expectedAvailable: false, statusCode: 502 } };
+    },
+    status: () => ({ schemaVersion: 1, owner: 'foxos', routes: [] })
   };
 
   async function dockerRequest(method, requestPath, payload = null) {
@@ -205,6 +237,7 @@ function createHarness({ resourceOverride = {}, failTargetHealth = false } = {})
     dockerRequest,
     dockerArchiveRequest,
     resourceRegistry: registry,
+    routeManager,
     clock: () => new Date('2026-08-04T12:00:00.000Z'),
     randomUUID: () => '00000000-0000-4000-8000-000000000099',
     wait: async () => {}
@@ -214,8 +247,9 @@ function createHarness({ resourceOverride = {}, failTargetHealth = false } = {})
     calls,
     currentResource,
     manager,
+    routeCalls,
     root,
-    runtime: () => ({ currentSourceState, sourceName, targetExists, targetPayload })
+    runtime: () => ({ currentSourceState, sourceName, targetExists, targetPayload, routeActive })
   };
 }
 
@@ -238,6 +272,9 @@ test('manifest planning is deterministic, read-only and persists no secret value
     assert.equal(first.planId, second.planId);
     assert.equal(first.manifest.revision, second.manifest.revision);
     assert.equal(first.manifest.desired.runtime.image.reference, IMAGE_DIGEST);
+    assert.equal(first.manifest.schemaVersion, 2);
+    assert.equal(first.manifest.desired.routes[0].owner, 'foxos');
+    assert.equal(first.manifest.desired.routes[0].publicPath, '/_foxos/apps/foxos-adoption-lab/');
     assert.deepEqual(first.manifest.desired.environment, {
       ordinary: [],
       secretRefs: [],
@@ -289,6 +326,8 @@ test('apply proves backup restore and rollback restores the original source', as
 
     assert.equal(operation.status, 'applied');
     assert.equal(operation.backups[0].restoreProof.verified, true);
+    assert.equal(operation.routeProof.authorizedTls, true);
+    assert.equal(harness.runtime().routeActive, true);
     assert.equal(operation.backups[0].contentDigest, operation.backups[0].restoreProof.restoredDigest);
     assert.equal(harness.runtime().targetExists, true);
     assert.match(harness.runtime().sourceName, /^foxos-adoption-lab-foxos-rollback-/);
@@ -305,8 +344,10 @@ test('apply proves backup restore and rollback restores the original source', as
       currentSourceState: 'running',
       sourceName: 'foxos-adoption-lab',
       targetExists: false,
-      targetPayload: harness.runtime().targetPayload
+      targetPayload: harness.runtime().targetPayload,
+      routeActive: false
     });
+    assert.deepEqual(harness.routeCalls.map((call) => call.action), ['activate', 'deactivate']);
   } finally {
     fs.rmSync(harness.root, { recursive: true, force: true });
   }
@@ -327,7 +368,29 @@ test('failed target verification attempts automatic source restoration', async (
     assert.equal(harness.runtime().currentSourceState, 'running');
     assert.equal(harness.runtime().sourceName, 'foxos-adoption-lab');
     assert.equal(harness.runtime().targetExists, false);
+    assert.equal(harness.runtime().routeActive, false);
     assert.equal(harness.manager.status().operations[0].status, 'failed-automatic-rollback-attempted');
+  } finally {
+    fs.rmSync(harness.root, { recursive: true, force: true });
+  }
+});
+
+test('failed HTTPS route verification attempts automatic source restoration', async () => {
+  const harness = createHarness({ failRouteActivation: true });
+  try {
+    const plan = await harness.manager.createPlan(RESOURCE_ID, {
+      confirmation: planDraftConfirmation(RESOURCE_ID),
+      healthPrivatePort: 80,
+      healthPath: '/'
+    });
+    await assert.rejects(
+      harness.manager.applyPlan(plan.planId, plan.confirmation),
+      (error) => error.code === 'route-health-verification-failed'
+    );
+    assert.equal(harness.runtime().currentSourceState, 'running');
+    assert.equal(harness.runtime().sourceName, 'foxos-adoption-lab');
+    assert.equal(harness.runtime().targetExists, false);
+    assert.equal(harness.runtime().routeActive, false);
   } finally {
     fs.rmSync(harness.root, { recursive: true, force: true });
   }
@@ -343,4 +406,19 @@ test('environment comparison stores names only and backup digest rejects unsafe 
     () => tarContentDigest(tarArchive('../escape.txt', 'unsafe')),
     (error) => error.code === 'unsafe-backup-archive'
   );
+});
+
+test('schema 1 operation records remain readable for live rollback compatibility', () => {
+  const harness = createHarness();
+  try {
+    const operationId = 'op_' + '7'.repeat(32);
+    fs.mkdirSync(harness.manager.paths.operationsRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(harness.manager.paths.operationsRoot, operationId + '.json'),
+      JSON.stringify({ schemaVersion: 1, operationId, status: 'applied' })
+    );
+    assert.equal(harness.manager.getOperation(operationId).schemaVersion, 1);
+  } finally {
+    fs.rmSync(harness.root, { recursive: true, force: true });
+  }
 });

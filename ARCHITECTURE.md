@@ -135,7 +135,7 @@ relationships, ownership status, blockers and conflicts under the FoxOS data
 root and exposes authenticated scan/read/redacted-export APIs. A scan still
 never creates desired state, changes labels or mutates Docker runtime state.
 
-### Implemented boundary: Disposable Adoption v1
+### Implemented boundary: Disposable adoption and route cutover
 
 Disposable Adoption v1 adds the next import-draft and adoption-plan slice while
 keeping real workloads out of scope. It accepts only an explicitly labeled
@@ -146,9 +146,9 @@ or unpinned images are rejected.
 
 The deterministic manifest contains the immutable image digest, loopback port,
 reviewed HTTP health proof, restart policy, resource limits, one named volume,
-empty classified environment/secret lists and provider provenance. Provider IDs
-are not runtime authority. Planning performs Docker reads only and persists no
-environment values.
+empty classified environment/secret lists, a FoxOS-owned HTTPS route and
+provider provenance. Provider IDs are not runtime authority. Planning performs
+Docker reads only and persists no environment values.
 
 Apply requires an exact operator confirmation and follows this transaction:
 
@@ -157,11 +157,17 @@ Apply requires an exact operator confirmation and follows this transaction:
 3. stop and rename the original source as a retained rollback container;
 4. create the FoxOS target from the local manifest using the pinned digest,
    Docker bridge, loopback port, `no-new-privileges` and a reviewed health check;
-5. record health and make immediate rollback available.
+5. attach only the target to the internal `foxos-routing` network under a fixed
+   FoxOS alias;
+6. publish the fixed pilot path through FoxOS Caddy and verify the public HTTPS
+   response and trusted certificate before making rollback available.
 
-Rollback verifies the FoxOS target identity before removing it, retains the
+Rollback verifies the FoxOS target identity, disconnects its route, proves that
+the HTTPS path no longer serves the app, then removes the target, retains the
 named volume, restores the original container name and state, and proves the
-source runtime. A failed target health proof triggers an automatic source
-restoration attempt. This pilot does not import routes, TLS, databases, secrets,
-write-heavy persistence or provider networks, and it does not detach or delete
-any provider state.
+source runtime. Failed target or route proof triggers an automatic source
+restoration attempt. The route record is schema-versioned under the FoxOS data
+root and depends only on FoxOS Caddy, FoxOS state and Docker Engine. This pilot
+does not import provider routes or TLS state, databases, secrets, write-heavy
+persistence or provider networks, and it does not detach or delete provider
+state.

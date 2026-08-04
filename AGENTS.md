@@ -49,6 +49,10 @@
   its `foxos-adoption-lab*` name gate, explicit disposable label, loopback port,
   read-only single-volume policy or Coolify rejection without Burak's explicit
   approval and the missing safety gates in `ROADMAP.md`.
+- The current route manager is likewise a fixed disposable pilot: it may publish
+  only `/_foxos/apps/foxos-adoption-lab/` through FoxOS Caddy and may connect
+  only the verified FoxOS-managed target to the labeled `foxos-routing`
+  network. Do not make provider proxy/network state part of this path.
 - External registrars, certificate authorities, Git hosts, registries and DNS
   APIs are replaceable adapters. FoxOS must keep the desired state and recovery
   information locally so changing an adapter does not erase resource truth.

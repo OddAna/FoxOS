@@ -24,7 +24,14 @@
 		-Server
 	}
 
-	reverse_proxy foxos:8080
+	handle_path /_foxos/apps/foxos-adoption-lab/* {
+		header X-FoxOS-Route "foxos-adoption-lab"
+		reverse_proxy foxos-route-adoption-lab:80
+	}
+
+	handle {
+		reverse_proxy foxos:8080
+	}
 }
 
 https://127.0.0.1 {

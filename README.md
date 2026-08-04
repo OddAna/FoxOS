@@ -218,6 +218,7 @@ The authenticated API exposes:
 | `GET /api/resources/export` | Download a redacted provider-neutral migration plan |
 | `POST /api/resources/:resourceId/adoption-plan` | Create a deterministic import draft for the strictly disposable pilot |
 | `GET /api/adoptions` | Read locally stored plans and operations |
+| `GET /api/routes` | Read FoxOS-owned route records and their last verification state |
 | `POST /api/adoptions/plans/:planId/apply` | Apply an explicitly confirmed disposable plan |
 | `POST /api/adoptions/:operationId/rollback` | Restore the preserved source container for an applied pilot operation |
 
@@ -239,21 +240,23 @@ starts with `foxos-adoption-lab`, whose
 runtime passes every pilot safety gate. Coolify-managed resources are rejected.
 
 The included `pilot/docker-compose.adoption-lab.yml` creates the isolated test
-resource. It publishes only on `127.0.0.1:18088`, uses one read-only named
-volume and has no real domain route or dependency. Before runtime mutation,
+resource. Its source publishes only on `127.0.0.1:18088`, uses one read-only
+named volume and has no provider route or dependency. Before runtime mutation,
 FoxOS writes a versioned manifest, pins the image digest, archives the volume
 and restores that archive into a temporary volume to prove it can be read back.
 Only then does it stop and preserve the source container, create the
-FoxOS-managed target and require a healthy result. An exact confirmation string
-is required for both apply and rollback. If target verification fails, FoxOS
-attempts to restore the source automatically.
+FoxOS-managed target and require a healthy result. The target is connected to
+the internal FoxOS routing network and the fixed pilot path is verified through
+the FoxOS-owned Caddy gateway with trusted HTTPS before apply completes.
 
 The old source container is retained stopped under a distinct rollback name;
-it is not shown as a second Store application. Rolling back deletes only the
+it is not shown as a second Store application. Rolling back first disconnects
+and verifies removal of the public pilot route, then deletes only the
 FoxOS-managed target, keeps the named volume, restores the source name, starts
-it if it was previously running and verifies its runtime. Pilot manifests,
-plans, operation records and backup archives live under
-`.foxos-data/adoption/` with owner-only permissions. See
+it if it was previously running and verifies its runtime. Route records live
+under `.foxos-data/routes/`; pilot manifests, plans, operation records and
+backup archives live under `.foxos-data/adoption/`, all with owner-only
+permissions. See
 [`pilot/README.md`](pilot/README.md) for the operator procedure.
 
 ## Operations

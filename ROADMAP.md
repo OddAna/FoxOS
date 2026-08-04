@@ -78,6 +78,19 @@ without changing FoxOS behavior.
 - [ ] Expand beyond the disposable static-volume policy only after encrypted
   secrets, database-aware consistency and route/TLS cutover exist.
 
+### Milestone 3 progress: FoxOS-owned route cutover
+
+- [x] Store a schema-versioned, provider-neutral route record under the FoxOS
+  data root for the disposable pilot.
+- [x] Route the disposable pilot through FoxOS Caddy on the existing
+  browser-trusted certificate without a Coolify proxy, network, API or label.
+- [x] Attach only the FoxOS-managed target to an internal FoxOS-owned routing
+  network and verify the public HTTPS response before completing apply.
+- [x] Disconnect the route, prove the public path is unavailable and restore the
+  preserved source during rollback.
+- [ ] Generalize the fixed pilot path into conflict-checked domain/path records
+  for normal applications.
+
 ## Stable release system
 
 - [x] Freeze public `main` separately from ongoing development.
@@ -126,7 +139,8 @@ without changing FoxOS behavior.
   DNS-01 certificate issuance/renewal, owner-only persistent TLS state, secure
   cookies and a loopback-only direct agent port. It does not use the Coolify
   proxy, API, network, labels or certificate store.
-- [ ] Manage domains and routes through a FoxOS-owned Traefik, Caddy or NGINX layer.
+- [ ] Manage arbitrary domains and routes through the FoxOS-owned Caddy layer;
+  the fixed disposable pilot route is implemented.
 - [ ] Detect domain and port collisions before deployment.
 - [ ] Support HTTP-to-HTTPS redirects, WebSockets, path routes and reviewed middleware.
 - [ ] Issue and automatically renew ACME certificates; support custom certificates
