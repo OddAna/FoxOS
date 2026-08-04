@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Activity,
+  ArrowLeft,
   Check,
   Code,
   Compass,
+  Copy,
   Database,
   Download,
   ExternalLink,
@@ -15,6 +17,7 @@ import {
   Play,
   RotateCw,
   Search,
+  Save,
   Server,
   Settings,
   Square,
@@ -55,6 +58,23 @@ const decorateApp = (app) => ({
   ...APP_VISUALS[app.id]
 });
 
+const copyText = async (value) => {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = value;
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand('copy');
+  textarea.remove();
+  if (!copied) throw new Error('Adres kopyalanamadı');
+};
+
 const AppLogo = ({ app, size = 40 }) => {
   const [sourceIndex, setSourceIndex] = useState(0);
   const logoSources = [app.logoUrl, DEFAULT_APP_LOGO].filter((source, index, sources) => (
@@ -88,6 +108,13 @@ const AppStoreApp = () => {
   const [actionRunning, setActionRunning] = useState({});
   const [searchQuery, setSearchQuery] = useState('');
   const [activeMenu, setActiveMenu] = useState(null);
+  const [settingsAppId, setSettingsAppId] = useState(null);
+  const [settingsAppSnapshot, setSettingsAppSnapshot] = useState(null);
+  const [containerSettings, setContainerSettings] = useState(null);
+  const [settingsLoading, setSettingsLoading] = useState(false);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [restartPolicy, setRestartPolicy] = useState('no');
+  const [settingsMessage, setSettingsMessage] = useState(null);
   const { showDialog } = useDialog();
 
   const loadApps = useCallback(async ({ quiet = false } = {}) => {
@@ -127,6 +154,30 @@ const AppStoreApp = () => {
     };
   }, []);
 
+  useEffect(() => {
+    const containerId = settingsAppSnapshot && settingsAppSnapshot.containerId;
+    if (!settingsAppId || !containerId) return undefined;
+
+    let active = true;
+    setSettingsLoading(true);
+    setSettingsMessage(null);
+    apiFetch(`/api/containers/${containerId}/settings`)
+      .then((response) => response.json())
+      .then((payload) => {
+        if (!active) return;
+        setContainerSettings(payload.settings);
+        setRestartPolicy(payload.settings.restartPolicy);
+      })
+      .catch((error) => {
+        if (active) setSettingsMessage({ type: 'error', text: error.message });
+      })
+      .finally(() => {
+        if (active) setSettingsLoading(false);
+      });
+
+    return () => { active = false; };
+  }, [settingsAppId, settingsAppSnapshot]);
+
   const handleInstall = async (event, app) => {
     event.stopPropagation();
     setInstalling((current) => ({ ...current, [app.id]: true }));
@@ -149,18 +200,27 @@ const AppStoreApp = () => {
     }
   };
 
-  const runAction = async (event, app, action) => {
+  const runAction = async (event, app, action, { inline = false } = {}) => {
     event.stopPropagation();
     setActiveMenu(null);
     setActionRunning((current) => ({ ...current, [app.id]: action }));
+    if (inline) setSettingsMessage(null);
     try {
       const actionPath = app.managedByFoxOS
         ? `/api/apps/${app.id}/${action}`
         : `/api/containers/${app.containerId}/${action}`;
       await apiFetch(actionPath, { method: 'POST' });
       await loadApps({ quiet: true });
+      if (inline) {
+        const labels = { start: 'başlatıldı', stop: 'durduruldu', restart: 'yeniden başlatıldı' };
+        setSettingsMessage({ type: 'success', text: `${app.name} ${labels[action]}.` });
+      }
     } catch (error) {
-      showDialog({ title: 'İşlem Hatası', message: error.message, type: 'error' });
+      if (inline) {
+        setSettingsMessage({ type: 'error', text: error.message });
+      } else {
+        showDialog({ title: 'İşlem Hatası', message: error.message, type: 'error' });
+      }
     } finally {
       setActionRunning((current) => ({ ...current, [app.id]: null }));
     }
@@ -221,27 +281,38 @@ const AppStoreApp = () => {
   const handleSettings = (event, app) => {
     event.stopPropagation();
     setActiveMenu(null);
-    const accessAddress = app.externalUrl || (app.hostPort
-      ? `${app.bindAddress || 'sunucu'}:${app.hostPort}`
-      : 'Yayınlanmış adres yok');
-    const managementSource = app.managedByFoxOS
-      ? 'FoxOS'
-      : app.installationSource === 'coolify' ? 'Coolify' : 'Docker';
+    setSettingsAppId(app.id);
+    setSettingsAppSnapshot(app);
+    setContainerSettings(null);
+    setSettingsMessage(null);
+  };
 
-    showDialog({
-      title: `${app.name} Ayarları`,
-      type: 'info',
-      message: (
-        <div style={{ display: 'grid', gap: '8px', wordBreak: 'break-word' }}>
-          <div><strong>Durum:</strong> {app.status || app.state}</div>
-          <div><strong>Instance:</strong> {app.instanceName || app.containerName}</div>
-          <div><strong>Container:</strong> {app.containerName}</div>
-          <div><strong>İmaj:</strong> {app.image}</div>
-          <div><strong>Yönetim:</strong> {managementSource}</div>
-          <div><strong>Erişim:</strong> {accessAddress}</div>
-        </div>
-      )
-    });
+  const closeSettings = () => {
+    setSettingsAppId(null);
+    setSettingsAppSnapshot(null);
+    setContainerSettings(null);
+    setSettingsMessage(null);
+  };
+
+  const saveContainerSettings = async () => {
+    if (!settingsAppSnapshot || !settingsAppSnapshot.containerId) return;
+    setSettingsSaving(true);
+    setSettingsMessage(null);
+    try {
+      const response = await apiFetch(`/api/containers/${settingsAppSnapshot.containerId}/settings`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ restartPolicy })
+      });
+      const payload = await response.json();
+      setContainerSettings(payload.settings);
+      setRestartPolicy(payload.settings.restartPolicy);
+      setSettingsMessage({ type: 'success', text: 'Ayar kaydedildi.' });
+    } catch (error) {
+      setSettingsMessage({ type: 'error', text: error.message });
+    } finally {
+      setSettingsSaving(false);
+    }
   };
 
   const displayedApps = useMemo(() => {
@@ -263,6 +334,25 @@ const AppStoreApp = () => {
   }, [activeCategory, apps, searchQuery]);
 
   const featuredApp = apps.find((app) => app.featured);
+  const settingsApp = settingsAppId
+    ? apps.find((app) => app.id === settingsAppId) || settingsAppSnapshot
+    : null;
+
+  const settingsAccessUrl = settingsApp ? (() => {
+    if (settingsApp.externalUrl) return settingsApp.externalUrl;
+    const configuredPort = containerSettings && containerSettings.ports && containerSettings.ports[0];
+    const hostPort = settingsApp.hostPort || (configuredPort && configuredPort.hostPort);
+    if (!hostPort) return null;
+    const bindAddress = settingsApp.bindAddress || (configuredPort && configuredPort.hostIp);
+    const hostname = bindAddress === '127.0.0.1' ? '127.0.0.1' : window.location.hostname;
+    return `http://${hostname}:${hostPort}`;
+  })() : null;
+
+  const managementSource = settingsApp
+    ? settingsApp.managedByFoxOS
+      ? 'FoxOS'
+      : settingsApp.installationSource === 'coolify' ? 'Coolify' : 'Docker'
+    : null;
 
   const renderServiceMenu = (app, suffix) => (
     <>
@@ -325,7 +415,10 @@ const AppStoreApp = () => {
               type="text"
               placeholder="Ara..."
               value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
+              onChange={(event) => {
+                closeSettings();
+                setSearchQuery(event.target.value);
+              }}
               style={{ background: 'transparent', border: 'none', color: '#fff', outline: 'none', width: '100%', fontSize: '13px' }}
             />
           </div>
@@ -336,7 +429,11 @@ const AppStoreApp = () => {
           {CATEGORIES.map((category) => (
             <div
               key={category.id}
-              onClick={() => { setActiveCategory(category.id); setSearchQuery(''); }}
+              onClick={() => {
+                closeSettings();
+                setActiveCategory(category.id);
+                setSearchQuery('');
+              }}
               style={{
                 display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 10px', borderRadius: '6px', cursor: 'pointer',
                 background: activeCategory === category.id && !searchQuery ? '#0ea5e9' : 'transparent',
@@ -352,6 +449,121 @@ const AppStoreApp = () => {
       </div>
 
       <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: '0 0 40px 0' }}>
+        {settingsApp ? (
+          <div style={{ padding: '30px 40px' }}>
+            <button
+              type="button"
+              onClick={closeSettings}
+              style={{ background: 'transparent', color: '#aaa', border: 'none', padding: '0', marginBottom: '24px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}
+            >
+              <ArrowLeft size={16} /> Mağazaya Dön
+            </button>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '18px', paddingBottom: '24px', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+              <div style={{ width: '72px', height: '72px', flex: '0 0 72px', borderRadius: '16px', background: 'rgba(255,255,255,0.9)', padding: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <AppLogo app={settingsApp} size={48} />
+              </div>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <h1 style={{ margin: '0 0 6px 0', fontSize: '28px', fontWeight: 'bold' }}>{settingsApp.name}</h1>
+                <div style={{ color: '#888', fontSize: '13px' }}>{settingsApp.developer}</div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: settingsApp.state === 'running' ? '#27c93f' : '#ff5f56', fontSize: '13px' }}>
+                <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'currentColor' }} />
+                {settingsApp.state === 'running' ? 'Çalışıyor' : 'Durduruldu'}
+              </div>
+            </div>
+
+            {settingsMessage && (
+              <div style={{ marginTop: '20px', padding: '10px 12px', borderRadius: '8px', background: settingsMessage.type === 'error' ? 'rgba(255,95,86,0.12)' : 'rgba(39,201,63,0.12)', border: `1px solid ${settingsMessage.type === 'error' ? 'rgba(255,95,86,0.35)' : 'rgba(39,201,63,0.35)'}`, color: settingsMessage.type === 'error' ? '#ff8a84' : '#75da85', fontSize: '13px' }}>
+                {settingsMessage.text}
+              </div>
+            )}
+
+            <section style={{ padding: '26px 0', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+              <h2 style={{ margin: '0 0 14px 0', fontSize: '16px' }}>Kontroller</h2>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
+                <button type="button" onClick={(event) => handleOpenApp(event, settingsApp)} disabled={settingsApp.state !== 'running'} style={{ background: '#0ea5e9', color: '#fff', border: 'none', padding: '9px 14px', borderRadius: '8px', cursor: settingsApp.state === 'running' ? 'pointer' : 'not-allowed', opacity: settingsApp.state === 'running' ? 1 : 0.5, display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px', fontWeight: 'bold' }}>
+                  <ExternalLink size={15} /> Aç
+                </button>
+                {settingsApp.state === 'running' ? (
+                  <button type="button" onClick={(event) => runAction(event, settingsApp, 'stop', { inline: true })} disabled={Boolean(actionRunning[settingsApp.id])} style={{ background: 'rgba(255,255,255,0.08)', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 14px', borderRadius: '8px', cursor: actionRunning[settingsApp.id] ? 'wait' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px' }}>
+                    {actionRunning[settingsApp.id] === 'stop' ? <Loader2 size={15} className="spin" /> : <Square size={15} />} Durdur
+                  </button>
+                ) : (
+                  <button type="button" onClick={(event) => runAction(event, settingsApp, 'start', { inline: true })} disabled={Boolean(actionRunning[settingsApp.id])} style={{ background: 'rgba(255,255,255,0.08)', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 14px', borderRadius: '8px', cursor: actionRunning[settingsApp.id] ? 'wait' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px' }}>
+                    {actionRunning[settingsApp.id] === 'start' ? <Loader2 size={15} className="spin" /> : <Play size={15} />} Başlat
+                  </button>
+                )}
+                <button type="button" onClick={(event) => runAction(event, settingsApp, 'restart', { inline: true })} disabled={Boolean(actionRunning[settingsApp.id])} style={{ background: 'rgba(255,255,255,0.08)', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 14px', borderRadius: '8px', cursor: actionRunning[settingsApp.id] ? 'wait' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px' }}>
+                  {actionRunning[settingsApp.id] === 'restart' ? <Loader2 size={15} className="spin" /> : <RotateCw size={15} />} Yeniden Başlat
+                </button>
+              </div>
+            </section>
+
+            <section style={{ padding: '26px 0', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+              <h2 style={{ margin: '0 0 6px 0', fontSize: '16px' }}>Erişim</h2>
+              <div style={{ marginBottom: '14px', color: '#888', fontSize: '13px' }}>Uygulamanın yayınlanmış adresi.</div>
+              {settingsAccessUrl ? (
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'stretch' }}>
+                  <div style={{ flex: 1, minWidth: 0, padding: '9px 12px', borderRadius: '8px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: '#ccc', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{settingsAccessUrl}</div>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await copyText(settingsAccessUrl);
+                        setSettingsMessage({ type: 'success', text: 'Erişim adresi kopyalandı.' });
+                      } catch (error) {
+                        setSettingsMessage({ type: 'error', text: error.message });
+                      }
+                    }}
+                    style={{ background: 'rgba(255,255,255,0.08)', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 12px', borderRadius: '8px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px' }}
+                  >
+                    <Copy size={14} /> Kopyala
+                  </button>
+                </div>
+              ) : (
+                <div style={{ color: '#888', fontSize: '13px' }}>Bu container için yayınlanmış bir web adresi bulunamadı.</div>
+              )}
+            </section>
+
+            <section style={{ padding: '26px 0', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+              <h2 style={{ margin: '0 0 6px 0', fontSize: '16px' }}>Otomatik Başlatma</h2>
+              <div style={{ marginBottom: '14px', color: '#888', fontSize: '13px' }}>Sunucu veya Docker yeniden başladığında containerın davranışı.</div>
+              {settingsLoading ? (
+                <div style={{ color: '#888', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}><Loader2 size={15} className="spin" /> Ayarlar okunuyor...</div>
+              ) : (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center' }}>
+                  <select value={restartPolicy} onChange={(event) => setRestartPolicy(event.target.value)} style={{ minWidth: '210px', background: '#24242a', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 12px', borderRadius: '8px', outline: 'none', fontSize: '13px' }}>
+                    <option value="no">Kapalı</option>
+                    <option value="unless-stopped">Elle durdurulana kadar</option>
+                    <option value="always">Her zaman</option>
+                  </select>
+                  <button type="button" onClick={saveContainerSettings} disabled={settingsSaving || !containerSettings} style={{ background: '#0ea5e9', color: '#fff', border: 'none', padding: '9px 14px', borderRadius: '8px', cursor: settingsSaving || !containerSettings ? 'not-allowed' : 'pointer', opacity: settingsSaving || !containerSettings ? 0.5 : 1, display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px', fontWeight: 'bold' }}>
+                    {settingsSaving ? <Loader2 size={15} className="spin" /> : <Save size={15} />} Kaydet
+                  </button>
+                </div>
+              )}
+            </section>
+
+            <section style={{ padding: '26px 0 0 0' }}>
+              <h2 style={{ margin: '0 0 14px 0', fontSize: '16px' }}>Container</h2>
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 160px) minmax(0, 1fr)', rowGap: '10px', columnGap: '16px', fontSize: '13px', wordBreak: 'break-word' }}>
+                <div style={{ color: '#888' }}>Instance</div><div>{settingsApp.instanceName || settingsApp.containerName}</div>
+                <div style={{ color: '#888' }}>Container</div><div>{settingsApp.containerName}</div>
+                <div style={{ color: '#888' }}>İmaj</div><div>{settingsApp.image}</div>
+                <div style={{ color: '#888' }}>Yönetim</div><div>{managementSource}</div>
+                <div style={{ color: '#888' }}>Durum</div><div>{settingsApp.status || settingsApp.state}</div>
+                {containerSettings && containerSettings.ports.length > 0 && (
+                  <><div style={{ color: '#888' }}>Portlar</div><div>{containerSettings.ports.map((port) => `${port.hostIp}:${port.hostPort} → ${port.privatePort}`).join(', ')}</div></>
+                )}
+                {containerSettings && containerSettings.mounts.length > 0 && (
+                  <><div style={{ color: '#888' }}>Depolama</div><div>{containerSettings.mounts.map((mount) => `${mount.name || mount.source} → ${mount.destination}${mount.readOnly ? ' (salt okunur)' : ''}`).join(', ')}</div></>
+                )}
+              </div>
+            </section>
+          </div>
+        ) : (
+          <>
         {activeCategory === 'kesfet' && !searchQuery && featuredApp && (
           <div style={{ padding: '30px 40px 10px 40px' }}>
             <div style={{ fontSize: '12px', color: '#888', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '10px' }}>Öne Çıkan</div>
@@ -427,6 +639,8 @@ const AppStoreApp = () => {
             </div>
           )}
         </div>
+          </>
+        )}
       </div>
 
       <style>{`

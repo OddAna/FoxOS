@@ -28,8 +28,8 @@ not use the host package manager for its own runtime.
 - **Real Docker control** — list containers and start, stop, or restart them
 - **Real App Store** — install a reviewed catalog of Docker applications on the
   server, discover usable applications that already exist on that server, and
-  manage the real lifecycle of FoxOS-owned installations from the original
-  FoxOS store interface
+  manage their real lifecycle, access address, restart policy, ports, and
+  storage from the FoxOS store interface
 - **Host terminal** — commands run directly in the Linux host namespaces
 - **Host file access** — the Files app contains a `Sunucu` entry linked to
   the host root filesystem
@@ -132,7 +132,8 @@ to compromised root access.
   [IT-Tools](https://github.com/CorentinTh/it-tools), and
   [Stirling PDF](https://github.com/Stirling-Tools/Stirling-PDF).
 - Use an installed application's three-dot menu to open, start, stop, restart,
-  or inspect that exact instance.
+  or manage that exact instance. **Ayarlar** opens as a full page inside the
+  same Store window; it is not a popup or a separate browser window.
 - Open **Terminal** to execute commands on the host.
 - Open **Dosyalar**, then **Sunucu**, to browse the host filesystem.
 - Use **Masaüstü** for FoxOS-only workspace files that should persist without
@@ -157,10 +158,12 @@ user-facing Docker or Coolify applications with a published port or proxy route
 appear as installed without being re-created. Every discovered container remains
 a separate application instance, so multiple WordPress sites or repeated app
 deployments do not collapse into one card. The Store can open, start, stop, and
-restart these existing containers; only FoxOS-owned installations can be deleted
-from Store. Known applications use their project logos, while custom applications
-use the icon declared by their own web route and fall back to the Docker mark when
-they do not publish one. Databases, workers, agents, reverse proxies, and other
+restart these existing containers and can save their Docker restart policy;
+only FoxOS-owned installations can be deleted from Store. A stopped application
+with a configured published port remains visible and can be started again. Known
+applications use their project logos, while custom applications use the icon
+declared by their own web route and fall back to the Docker mark when they do not
+publish one. Coolify databases, workers, agents, reverse proxies, and other
 internal dependency containers are not presented as standalone store applications.
 
 ## Operations

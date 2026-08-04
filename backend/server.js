@@ -35,6 +35,7 @@ const COMMAND_MAX_BUFFER = 2 * 1024 * 1024;
 const sessions = new Map();
 const loginAttempts = new Map();
 const appInstallOperations = new Set();
+const containerPortCache = new Map();
 
 function ensureDirectory(directory) {
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -409,6 +410,74 @@ function dockerRequest(method, requestPath, payload = null) {
   });
 }
 
+function containerSettingsFromDetails(details) {
+  const hostConfig = details.HostConfig || {};
+  const restartPolicy = hostConfig.RestartPolicy || {};
+  const portBindings = hostConfig.PortBindings || {};
+
+  return {
+    restartPolicy: restartPolicy.Name || 'no',
+    ports: Object.entries(portBindings).flatMap(([privatePort, bindings]) => (
+      (bindings || []).map((binding) => ({
+        privatePort,
+        hostIp: binding.HostIp || '0.0.0.0',
+        hostPort: binding.HostPort || null
+      }))
+    )),
+    mounts: (details.Mounts || []).map((mount) => ({
+      type: mount.Type,
+      name: mount.Name || null,
+      source: mount.Source || null,
+      destination: mount.Destination,
+      readOnly: mount.RW === false
+    })),
+    created: details.Created || null
+  };
+}
+
+function publishedPortsFromBindings(portBindings = {}) {
+  return Object.entries(portBindings).flatMap(([privatePort, bindings]) => {
+    const [privatePortNumber, type = 'tcp'] = privatePort.split('/');
+    return (bindings || []).map((binding) => ({
+      PrivatePort: Number(privatePortNumber),
+      PublicPort: Number(binding.HostPort),
+      Type: type,
+      IP: binding.HostIp || '0.0.0.0'
+    })).filter((port) => Number.isInteger(port.PrivatePort) && Number.isInteger(port.PublicPort));
+  });
+}
+
+async function containersWithConfiguredPorts(containers) {
+  const currentIds = new Set(containers.map((container) => container.Id));
+  for (const cachedId of containerPortCache.keys()) {
+    if (!currentIds.has(cachedId)) containerPortCache.delete(cachedId);
+  }
+
+  return Promise.all(containers.map(async (container) => {
+    const publishedPorts = (container.Ports || []).filter((port) => port.PublicPort);
+    if (publishedPorts.length) {
+      containerPortCache.set(container.Id, publishedPorts);
+      return container;
+    }
+
+    const cachedPorts = containerPortCache.get(container.Id);
+    if (cachedPorts) return { ...container, Ports: cachedPorts };
+    if (container.State === 'running') return container;
+
+    try {
+      const details = await dockerRequest('GET', '/containers/' + container.Id + '/json');
+      const configuredPorts = publishedPortsFromBindings(
+        details.HostConfig && details.HostConfig.PortBindings
+      );
+      if (!configuredPorts.length) return container;
+      containerPortCache.set(container.Id, configuredPorts);
+      return { ...container, Ports: configuredPorts };
+    } catch {
+      return container;
+    }
+  }));
+}
+
 async function hostPortIsListening(port) {
   const command =
     "if command -v ss >/dev/null 2>&1; then " +
@@ -421,7 +490,8 @@ async function hostPortIsListening(port) {
 }
 
 async function getCatalogState() {
-  const containers = await dockerRequest('GET', '/containers/json?all=1');
+  const listedContainers = await dockerRequest('GET', '/containers/json?all=1');
+  const containers = await containersWithConfiguredPorts(listedContainers);
   return [
     ...APP_CATALOG.map((catalogApp) => stateForCatalogApp(catalogApp, containers)),
     ...discoveredAppStates(containers, APP_CATALOG)
@@ -846,6 +916,47 @@ app.delete('/api/apps/:appId', async (req, res) => {
       }
     }
     res.json({ success: true, dataRemoved: req.query.removeData === 'true' });
+  } catch (error) {
+    res.status(502).json({ error: error.message });
+  }
+});
+
+app.get('/api/containers/:id/settings', async (req, res) => {
+  const { id } = req.params;
+  if (!/^[a-f0-9]{12,64}$/.test(id)) {
+    return res.status(400).json({ error: 'Invalid container ID' });
+  }
+
+  try {
+    const details = await dockerRequest('GET', '/containers/' + id + '/json');
+    res.json({ settings: containerSettingsFromDetails(details) });
+  } catch (error) {
+    res.status(502).json({ error: error.message });
+  }
+});
+
+app.patch('/api/containers/:id/settings', async (req, res) => {
+  const { id } = req.params;
+  const restartPolicy = req.body && req.body.restartPolicy;
+  const allowedRestartPolicies = new Set(['no', 'unless-stopped', 'always']);
+  if (!/^[a-f0-9]{12,64}$/.test(id)) {
+    return res.status(400).json({ error: 'Invalid container ID' });
+  }
+  if (!allowedRestartPolicies.has(restartPolicy)) {
+    return res.status(400).json({ error: 'Invalid restart policy' });
+  }
+
+  try {
+    const details = await dockerRequest('GET', '/containers/' + id + '/json');
+    if (details.Config && details.Config.Labels && details.Config.Labels['com.foxos.core'] === 'true') {
+      return res.status(409).json({ error: 'FoxOS cannot change its own core settings' });
+    }
+
+    await dockerRequest('POST', '/containers/' + id + '/update', {
+      RestartPolicy: { Name: restartPolicy, MaximumRetryCount: 0 }
+    });
+    const updatedDetails = await dockerRequest('GET', '/containers/' + id + '/json');
+    res.json({ success: true, settings: containerSettingsFromDetails(updatedDetails) });
   } catch (error) {
     res.status(502).json({ error: error.message });
   }

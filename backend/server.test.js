@@ -63,7 +63,25 @@ const dockerMock = http.createServer((req, res) => {
     return;
   }
   if (req.method === 'GET' && mockContainer && req.url === '/containers/' + mockContainer.Id + '/json') {
-    return respond(200, { Config: { Labels: mockContainer.Labels || {} } });
+    return respond(200, {
+      Config: { Labels: mockContainer.Labels || {} },
+      Created: mockContainer.Created || '2026-08-04T00:00:00.000000000Z',
+      HostConfig: {
+        RestartPolicy: mockContainer.RestartPolicy || { Name: 'no', MaximumRetryCount: 0 },
+        PortBindings: mockContainer.PortBindings || {}
+      },
+      Mounts: mockContainer.Mounts || []
+    });
+  }
+  if (req.method === 'POST' && mockContainer && req.url === '/containers/' + mockContainer.Id + '/update') {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      const payload = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      mockContainer.RestartPolicy = payload.RestartPolicy;
+      respond(200, { Warnings: [] });
+    });
+    return;
   }
   if (req.method === 'POST' && mockContainer && req.url.startsWith('/containers/' + mockContainer.Id + '/')) {
     if (req.url.includes('/stop')) {
@@ -406,5 +424,41 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   });
   assert.equal(discoveredContainerStopResponse.status, 200);
   assert.equal(mockContainer.State, 'exited');
+
+  const settingsResponse = await fetch(baseUrl() + '/api/containers/' + mockContainer.Id + '/settings', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(settingsResponse.status, 200);
+  assert.equal((await settingsResponse.json()).settings.restartPolicy, 'no');
+
+  const updateSettingsResponse = await fetch(baseUrl() + '/api/containers/' + mockContainer.Id + '/settings', {
+    method: 'PATCH',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ restartPolicy: 'unless-stopped' })
+  });
+  assert.equal(updateSettingsResponse.status, 200);
+  assert.equal((await updateSettingsResponse.json()).settings.restartPolicy, 'unless-stopped');
+  assert.equal(mockContainer.RestartPolicy.Name, 'unless-stopped');
+
+  mockContainer = {
+    Id: 'd'.repeat(64),
+    Image: 'example/custom-web-app:latest',
+    Names: ['/stopped-custom-web-app'],
+    State: 'exited',
+    Status: 'Exited (0)',
+    Labels: { 'com.docker.compose.service': 'custom-web-app' },
+    Ports: [],
+    PortBindings: {
+      '8080/tcp': [{ HostIp: '127.0.0.1', HostPort: '18085' }]
+    }
+  };
+  const stoppedCustomAppsResponse = await fetch(baseUrl() + '/api/apps', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(stoppedCustomAppsResponse.status, 200);
+  const stoppedCustomApps = (await stoppedCustomAppsResponse.json()).apps;
+  const stoppedCustomApp = stoppedCustomApps.find((candidate) => candidate.containerId === mockContainer.Id);
+  assert.equal(stoppedCustomApp.state, 'exited');
+  assert.equal(stoppedCustomApp.hostPort, 18085);
   mockContainer = null;
 });
