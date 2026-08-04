@@ -10,6 +10,10 @@ const { createDockerClient } = require('./dockerClient');
 const { createEncryptionStore } = require('./encryptionStore');
 const { createRouteManager } = require('./routeManager');
 const { createSecretManager } = require('./secretManager');
+const {
+  SourceDeploymentError,
+  createSourceDeploymentManager
+} = require('./sourceDeploymentManager');
 const { APP_CATALOG, getCatalogApp } = require('./appCatalog');
 const { resolveAppIcon } = require('./appIcon');
 const { SCHEMA_VERSION: RESOURCE_SCHEMA_VERSION, createResourceRegistry } = require('./resourceRegistry');
@@ -396,6 +400,11 @@ const adoptionManager = createAdoptionManager({
   secretManager,
   backupManager
 });
+const sourceDeploymentManager = createSourceDeploymentManager({
+  dataRoot: DATA_ROOT,
+  dockerRequest,
+  dockerBuildRequest: dockerClient.requestBuild
+});
 
 function sendAdoptionError(res, error, action) {
   const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
@@ -403,6 +412,17 @@ function sendAdoptionError(res, error, action) {
   res.status(status).json({
     error: status >= 500 && !(error instanceof AdoptionError) ? 'Adoption operation failed' : error.message,
     code: error.code || 'adoption-error'
+  });
+}
+
+function sendSourceDeploymentError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof SourceDeploymentError)
+      ? 'Source deployment operation failed'
+      : error.message,
+    code: error.code || 'source-deployment-error'
   });
 }
 
@@ -875,6 +895,55 @@ app.get('/api/recovery/status', (req, res) => {
     res.json({ encryption: encryptionStore.status(), backup: backupManager.status() });
   } catch (error) {
     sendAdoptionError(res, error, 'Could not read recovery status');
+  }
+});
+
+app.get('/api/deployments', (req, res) => {
+  try {
+    res.json(sourceDeploymentManager.status());
+  } catch (error) {
+    sendSourceDeploymentError(res, error, 'Could not read source deployment state');
+  }
+});
+
+app.post('/api/deployments/plans', async (req, res) => {
+  try {
+    const plan = await sourceDeploymentManager.createPlan(req.body || {});
+    res.status(201).json({ plan });
+  } catch (error) {
+    sendSourceDeploymentError(res, error, 'Could not create source deployment plan');
+  }
+});
+
+app.get('/api/deployments/plans/:planId', (req, res) => {
+  try {
+    res.json({ plan: sourceDeploymentManager.getPlan(req.params.planId) });
+  } catch (error) {
+    sendSourceDeploymentError(res, error, 'Could not read source deployment plan');
+  }
+});
+
+app.post('/api/deployments/plans/:planId/apply', async (req, res) => {
+  try {
+    const operation = await sourceDeploymentManager.applyPlan(
+      req.params.planId,
+      req.body && req.body.confirmation
+    );
+    res.status(201).json({ operation });
+  } catch (error) {
+    sendSourceDeploymentError(res, error, 'Could not apply source deployment plan');
+  }
+});
+
+app.post('/api/deployments/:operationId/rollback', async (req, res) => {
+  try {
+    const operation = await sourceDeploymentManager.rollbackOperation(
+      req.params.operationId,
+      req.body && req.body.confirmation
+    );
+    res.json({ operation });
+  } catch (error) {
+    sendSourceDeploymentError(res, error, 'Could not roll back source deployment');
   }
 });
 

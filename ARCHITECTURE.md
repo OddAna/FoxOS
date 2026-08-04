@@ -194,3 +194,36 @@ This pilot does not import provider routes or TLS state, databases, write-heavy
 persistence or provider networks, and it does not detach or delete provider
 state. Scheduled retention, independently protected recovery-key export and
 full-machine disaster restore remain outside this implemented boundary.
+
+### Implemented boundary: Disposable source deployment
+
+The first Milestone 5 slice is separate from migration/adoption and accepts only
+the fixed `foxos-deployment-lab` canary. A generic public-HTTPS Git adapter
+resolves a branch or tag to an immutable commit without using a Git-host API.
+The plan also pins a deterministic bounded context digest, Dockerfile digest,
+private port `8080`, HTTP path and response marker. Git provenance remains an
+input; FoxOS owns the revision, operation, build log, image ID, health proof,
+current pointer and rollback pointer under its local data root.
+
+The source adapter rejects credentials, redirects, private/local repository
+hosts, submodules, symlinks and oversized contexts. The reviewed Dockerfile
+subset requires digest-pinned base images and rejects `ADD` and build mounts.
+Builds receive no secrets, use no build network, have bounded response/log size
+and timeout, and produce an immutable Docker image ID before runtime creation.
+
+Apply follows a health-before-cutover transaction:
+
+1. clone the public ref again and reject commit, context or Dockerfile drift;
+2. build the reviewed context through Docker Engine and persist a redacted log;
+3. start a resource-limited candidate on a dynamic loopback-only host port;
+4. prove HTTP status plus the expected body marker while the current revision
+   remains running;
+5. stop and rename the previous FoxOS-owned canary only after candidate proof;
+6. promote the candidate and atomically update the server-owned current record.
+
+A failed build or candidate proof removes only the candidate. A later applied
+revision retains the previous healthy container stopped under a history-only
+name. Exact-confirmation rollback verifies both container identities, restores
+the previous name/runtime and repeats its original health proof. This pilot has
+no provider API, Coolify, route, domain, TLS, secret, persistent volume or
+off-host-backup dependency and cannot deploy a real workload.

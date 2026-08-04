@@ -238,6 +238,10 @@ The authenticated API exposes:
 | `GET /api/resources/:resourceId/environment-revision` | Read the classified environment revision for one resource |
 | `POST /api/resources/:resourceId/environment-revisions` | Pin ordinary values and encrypted secret references to one resource |
 | `GET /api/recovery/status` | Read local encryption and off-host backup readiness without credentials |
+| `GET /api/deployments` | Read FoxOS-owned disposable source revisions, plans, operations and current state |
+| `POST /api/deployments/plans` | Resolve a public HTTPS Git branch/tag to an immutable commit and create a reviewed Dockerfile plan |
+| `POST /api/deployments/plans/:planId/apply` | Build and health-gate an exactly confirmed disposable source revision |
+| `POST /api/deployments/:operationId/rollback` | Restore the preserved previous healthy source revision |
 | `GET /api/adoptions` | Read locally stored plans and operations |
 | `GET /api/routes` | Read FoxOS-owned route records and their last verification state |
 | `POST /api/adoptions/plans/:planId/apply` | Apply an explicitly confirmed disposable plan |
@@ -250,6 +254,57 @@ fingerprints. Stable FoxOS resource IDs survive normal container recreation by
 using locally stored, hashed identity aliases. Existing external resources stay
 in the `observed` stage unless an operator uses the narrowly gated disposable
 adoption pilot described below.
+
+## Disposable source deployment pilot
+
+FoxOS includes the first Milestone 5 source-build transaction. It is deliberately
+limited to the fixed `foxos-deployment-lab` canary and is not exposed in the Store
+UI. The source adapter accepts a credential-free public HTTPS Git URL plus a
+branch or tag, resolves it without a provider API, and pins the plan to the exact
+Git commit, Dockerfile digest and complete bounded context digest. Git hosts are
+inputs only; all revision, build, health and rollback authority is stored under
+`.foxos-data/deployments/` with owner-only permissions.
+
+The pilot rejects local/private repository hosts, redirects, credentials,
+submodules, symlinks, oversized contexts, unpinned `FROM` images, `ADD`, build
+mounts and every private port except `8080`. Docker builds receive no secrets and
+run with build networking disabled. Build output is bounded, redacted and stored
+separately from the immutable revision record.
+
+Apply starts the built image on a Docker-assigned `127.0.0.1` port with CPU,
+memory and PID limits. The existing active canary remains running while FoxOS
+checks HTTP `200` and an explicit response marker. Only a verified candidate is
+promoted. A failed build or health proof removes the candidate without cutting
+over. A later healthy revision stops and preserves the previous container so an
+exact-confirmation rollback can restore and re-prove it.
+
+The repository contains two intentionally tiny canary contexts for the live
+v1 → v2 → rollback proof. After this branch is published, plan them with:
+
+```bash
+docker compose exec -T foxos node /app/deploymentCli.js plan \
+  --repository https://github.com/OddAna/FoxOS.git \
+  --ref develop \
+  --context pilot/source-deployment-canary/v1 \
+  --dockerfile Dockerfile \
+  --private-port 8080 \
+  --health-path / \
+  --expected-body "FoxOS source deployment canary v1" \
+  --confirm "PLAN DISPOSABLE SOURCE"
+
+# Use the plan ID and exact confirmation returned above.
+docker compose exec -T foxos node /app/deploymentCli.js apply PLAN_ID \
+  --confirm "DEPLOY DISPOSABLE PLAN_ID"
+
+# After applying v2, use its operation ID and returned rollback confirmation.
+docker compose exec -T foxos node /app/deploymentCli.js rollback OPERATION_ID \
+  --confirm "ROLLBACK DEPLOYMENT OPERATION_ID"
+```
+
+This path has no domain, external route, volume, secret, Cloudflare, S3 or
+Coolify dependency. It proves the source-build/deployment transaction only; real
+applications, private Git credentials, webhooks, persistent data and general
+rolling deployments remain blocked.
 
 ## Disposable adoption pilot
 
@@ -466,6 +521,7 @@ FoxOS/
 │   ├── encryptionStore.js     # Local AES-GCM key and authenticated envelopes
 │   ├── secretManager.js       # Encrypted secrets and classified environment revisions
 │   ├── backupManager.js       # Encrypted S3-compatible round-trip and restore gate
+│   ├── sourceDeploymentManager.js # Public Git commit, Docker build, health gate and rollback pilot
 │   ├── adoptionManager.js     # Disposable plan/apply/rollback transaction
 │   └── package.json
 └── frontend/

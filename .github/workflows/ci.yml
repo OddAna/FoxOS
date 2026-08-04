@@ -77,6 +77,14 @@ jobs:
 
       - name: Verify clean base install without external providers
         run: |
+          cleanup() {
+            container_ids=$(docker ps -aq --filter label=com.foxos.deployment.disposable=true)
+            if [ -n "$container_ids" ]; then docker rm -f $container_ids; fi
+            image_ids=$(docker images -q --filter label=com.foxos.deployment.disposable=true)
+            if [ -n "$image_ids" ]; then docker image rm -f $image_ids; fi
+            docker compose down
+          }
+          trap cleanup EXIT
           test ! -e .env
           ./install.sh
           for attempt in $(seq 1 30); do
@@ -96,4 +104,39 @@ jobs:
               if (status.backup.configured || status.backup.ready || status.backup.adapter) process.exit(1);
             });
           '
-          docker compose down
+
+          plan_v1=$(docker compose exec -T foxos node /app/deploymentCli.js plan \
+            --repository https://github.com/OddAna/FoxOS.git \
+            --ref develop \
+            --context pilot/source-deployment-canary/v1 \
+            --dockerfile Dockerfile \
+            --private-port 8080 \
+            --health-path / \
+            --expected-body "FoxOS source deployment canary v1" \
+            --confirm "PLAN DISPOSABLE SOURCE")
+          plan_v1_id=$(printf '%s' "$plan_v1" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).planId))')
+          plan_v1_revision=$(printf '%s' "$plan_v1" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).revisionId))')
+          operation_v1=$(docker compose exec -T foxos node /app/deploymentCli.js apply "$plan_v1_id" \
+            --confirm "DEPLOY DISPOSABLE $plan_v1_id")
+          printf '%s' "$operation_v1" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>{if(JSON.parse(s).status!=="applied")process.exit(1)})'
+
+          plan_v2=$(docker compose exec -T foxos node /app/deploymentCli.js plan \
+            --repository https://github.com/OddAna/FoxOS.git \
+            --ref develop \
+            --context pilot/source-deployment-canary/v2 \
+            --dockerfile Dockerfile \
+            --private-port 8080 \
+            --health-path / \
+            --expected-body "FoxOS source deployment canary v2" \
+            --confirm "PLAN DISPOSABLE SOURCE")
+          plan_v2_id=$(printf '%s' "$plan_v2" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).planId))')
+          operation_v2=$(docker compose exec -T foxos node /app/deploymentCli.js apply "$plan_v2_id" \
+            --confirm "DEPLOY DISPOSABLE $plan_v2_id")
+          operation_v2_id=$(printf '%s' "$operation_v2" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).operationId))')
+          docker compose exec -T foxos node /app/deploymentCli.js rollback "$operation_v2_id" \
+            --confirm "ROLLBACK DEPLOYMENT $operation_v2_id" >/dev/null
+          deployment_status=$(docker compose exec -T foxos node /app/deploymentCli.js status)
+          deployment_revision=$(printf '%s' "$deployment_status" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).current.revisionId))')
+          test "$deployment_revision" = "$plan_v1_revision"
+          deployment_port=$(printf '%s' "$deployment_status" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(String(JSON.parse(s).current.hostPort)))')
+          curl --fail --silent --show-error "http://127.0.0.1:$deployment_port/" | grep -F "FoxOS source deployment canary v1" >/dev/null

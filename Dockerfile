@@ -1,4 +1,4 @@
-FROM node:22-alpine AS frontend-builder
+FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 AS frontend-builder
 
 WORKDIR /build/frontend
 COPY frontend/package*.json ./
@@ -6,12 +6,12 @@ RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
-FROM node:22-bookworm-slim AS runtime
+FROM node:22-bookworm-slim@sha256:f32b81066cde10a75dbac96646099533316d94bac4150c55da1636e1f0ffdc46 AS runtime
 
 ENV NODE_ENV=production
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl util-linux \
+    && apt-get install -y --no-install-recommends ca-certificates curl git tar util-linux \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
