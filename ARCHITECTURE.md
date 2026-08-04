@@ -132,7 +132,36 @@ FoxOS visual language.
 Resource Registry v1 implements the read-only observation half of this slice.
 It stores provider-neutral resource records, stable local identities, inventory,
 relationships, ownership status, blockers and conflicts under the FoxOS data
-root and exposes authenticated scan/read/redacted-export APIs. It deliberately
-does not create desired manifests, adopt resources, change labels, detach a
-provider or mutate Docker runtime state. Those actions remain gated by the next
-import-draft and adoption-plan milestone.
+root and exposes authenticated scan/read/redacted-export APIs. A scan still
+never creates desired state, changes labels or mutates Docker runtime state.
+
+### Implemented boundary: Disposable Adoption v1
+
+Disposable Adoption v1 adds the next import-draft and adoption-plan slice while
+keeping real workloads out of scope. It accepts only an explicitly labeled
+`foxos-adoption-lab*` application observed directly from Docker or Compose;
+Coolify-managed resources and anything with routes, dependencies, conflicts,
+unresolved environment overrides, dangerous host access, mutable pilot mounts
+or unpinned images are rejected.
+
+The deterministic manifest contains the immutable image digest, loopback port,
+reviewed HTTP health proof, restart policy, resource limits, one named volume,
+empty classified environment/secret lists and provider provenance. Provider IDs
+are not runtime authority. Planning performs Docker reads only and persists no
+environment values.
+
+Apply requires an exact operator confirmation and follows this transaction:
+
+1. re-scan and reject drift from the planned source fingerprint;
+2. archive the named volume and prove a restore in disposable Docker objects;
+3. stop and rename the original source as a retained rollback container;
+4. create the FoxOS target from the local manifest using the pinned digest,
+   Docker bridge, loopback port, `no-new-privileges` and a reviewed health check;
+5. record health and make immediate rollback available.
+
+Rollback verifies the FoxOS target identity before removing it, retains the
+named volume, restores the original container name and state, and proves the
+source runtime. A failed target health proof triggers an automatic source
+restoration attempt. This pilot does not import routes, TLS, databases, secrets,
+write-heavy persistence or provider networks, and it does not detach or delete
+any provider state.

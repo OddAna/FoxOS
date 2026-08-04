@@ -45,6 +45,10 @@
 - Never mark a discovered resource as FoxOS-owned automatically. Adoption must
   be explicit, conflict-checked, backed up, reversible and verified before the
   external provider is detached.
+- The current adoption implementation is a disposable-only pilot. Do not widen
+  its `foxos-adoption-lab*` name gate, explicit disposable label, loopback port,
+  read-only single-volume policy or Coolify rejection without Burak's explicit
+  approval and the missing safety gates in `ROADMAP.md`.
 - External registrars, certificate authorities, Git hosts, registries and DNS
   APIs are replaceable adapters. FoxOS must keep the desired state and recovery
   information locally so changing an adapter does not erase resource truth.

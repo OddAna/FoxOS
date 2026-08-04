@@ -370,6 +370,9 @@ test('health is public while management APIs require a session', async () => {
 
   const resourcesResponse = await fetch(baseUrl() + '/api/resources');
   assert.equal(resourcesResponse.status, 401);
+
+  const adoptionsResponse = await fetch(baseUrl() + '/api/adoptions');
+  assert.equal(adoptionsResponse.status, 401);
 });
 
 test('setup creates an authenticated session and unlocks the workspace', async () => {
@@ -581,5 +584,35 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   const exportedPlan = await exportResponse.text();
   assert.equal(exportedPlan.includes(registrySecret), false);
   assert.equal(JSON.parse(exportedPlan).exportType, 'foxos-resource-migration-plan');
+
+  dockerRequestLog.length = 0;
+  const blockedAdoptionResponse = await fetch(
+    baseUrl() + '/api/resources/' + scanPayload.snapshot.resources[0].id + '/adoption-plan',
+    {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        confirmation: 'PLAN DISPOSABLE ' + scanPayload.snapshot.resources[0].id,
+        healthPrivatePort: 8080,
+        healthPath: '/'
+      })
+    }
+  );
+  assert.equal(blockedAdoptionResponse.status, 403);
+  assert.equal((await blockedAdoptionResponse.json()).code, 'pilot-resource-only');
+  assert.equal(dockerRequestLog.every((request) => request.method === 'GET'), true);
   mockContainer = null;
+});
+
+test('rollback source containers stay out of Store discovery', () => {
+  const rollbackContainer = {
+    Id: 'f'.repeat(64),
+    Image: 'example/web:0.0.1',
+    Names: ['/foxos-adoption-lab-foxos-rollback-1234abcd'],
+    State: 'exited',
+    Status: 'Exited (0)',
+    Labels: {},
+    Ports: [{ PrivatePort: 80, PublicPort: 18088, Type: 'tcp', IP: '127.0.0.1' }]
+  };
+  assert.deepEqual(discoveredAppStates([rollbackContainer], []), []);
 });

@@ -61,6 +61,31 @@ names, image references, domains, ports and host storage paths. Protect and back
 up this directory as private server administration data. Review a migration-plan
 export before sharing it even though secret-bearing fields are excluded.
 
+## Disposable adoption pilot
+
+The first adoption engine is intentionally restricted to disposable lab
+containers. It requires both the `foxos-adoption-lab*` name and the explicit
+`com.foxos.adoption.disposable=true` label. It rejects protected resources,
+Coolify-managed workloads, provider routes, relationships, conflicts,
+unclassified environment overrides, command/user/workdir overrides, host
+namespaces, privileged mode, added devices/capabilities, non-loopback ports and
+unsupported persistence. Do not add the disposable label to a real workload to
+bypass these controls.
+
+Planning uses Docker reads only. Apply and rollback require separate exact
+confirmation strings. Before stopping the source, FoxOS archives the pilot
+volume and restores it into temporary Docker objects, then compares a normalized
+content digest. Backup archives and operation files are owner-only under
+`.foxos-data/adoption/`; they may still contain application data and must be
+treated as sensitive.
+
+The preserved source container is stopped and renamed, not deleted. A rollback
+verifies that the active target carries the expected FoxOS resource identity,
+removes only that target without deleting its named volume, restores the source
+name and state, and verifies health when the source defines a health check. The
+pilot is not evidence that databases, live write-heavy volumes, routes, TLS or
+secrets are safe to migrate.
+
 ## Reporting a vulnerability
 
 Do not publish exploitable details in a public issue. Contact the maintainer

@@ -12,6 +12,7 @@ const SAFE_LABEL_KEYS = new Set([
   'com.foxos.app.name',
   'com.foxos.core',
   'com.foxos.gateway',
+  'com.foxos.adoption.disposable',
   'com.foxos.resource.id',
   'com.docker.compose.project',
   'com.docker.compose.service',
@@ -274,6 +275,11 @@ function adoptionBlockers(resource, inspectionFailed) {
 function identityAliases(container, labels) {
   const aliases = [];
   const name = dockerName(container);
+
+  if (/-foxos-rollback-[a-f0-9]{8,32}$/.test(name)) {
+    return [`rollback-container:${container.Id || name}`];
+  }
+
   const foxosId = labels['com.foxos.resource.id'];
   const composeProject = labels['com.docker.compose.project'];
   const composeService = labels['com.docker.compose.service'];
@@ -683,6 +689,7 @@ module.exports = {
   buildRelationships,
   createResourceRegistry,
   detectConflicts,
+  identityAliases,
   parseTraefikRoutes,
   roleFor,
   safeLabels

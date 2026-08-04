@@ -270,7 +270,12 @@ function discoveredProfileForContainer(container) {
 function isDiscoverableApplication(container) {
   const labels = container.Labels || {};
   const name = containerDisplayName(container);
-  if (labels['com.foxos.core'] === 'true' || DISCOVERY_EXCLUDED_NAMES.has(name)) {
+  const runtimeName = dockerContainerName(container);
+  if (
+    labels['com.foxos.core'] === 'true' ||
+    DISCOVERY_EXCLUDED_NAMES.has(name) ||
+    /-foxos-rollback-[a-f0-9]{8,32}$/.test(runtimeName)
+  ) {
     return false;
   }
 
