@@ -31,9 +31,10 @@ chmod 700 .foxos-data
 
 docker compose up -d --build
 
-port="${FOXOS_PORT:-8080}"
+published_endpoint="$(docker compose port foxos 8080)"
+port="${published_endpoint##*:}"
 echo
-echo "FoxOS is running on the server at 127.0.0.1:${port}."
+echo "FoxOS is listening on ${published_endpoint}."
 echo "From your computer, create a secure tunnel:"
 echo "  ssh -L ${port}:127.0.0.1:${port} <user>@<server-ip>"
 echo "Then open http://127.0.0.1:${port}"
