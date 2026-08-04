@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { atomicWriteJson } = require('./resourceRegistry');
 
-const APPLICATION_MANIFEST_SCHEMA_VERSION = 1;
+const APPLICATION_MANIFEST_SCHEMA_VERSION = 2;
 const PLAN_APPLICATION_MANIFEST_CONFIRMATION = 'PLAN APPLICATION MANIFEST';
 const MAX_DRAFTS = 100;
 const RESOURCE_ID_PATTERN = /^res_[a-f0-9]{32}$/;
@@ -327,6 +327,7 @@ function createApplicationManifestManager({
     if (!resource) throw new ApplicationManifestError('Resource was not found in the latest registry snapshot', 404, 'resource-not-found');
 
     const blockers = [];
+    const classification = resource.classification || null;
     const relationships = relatedRelationships(snapshot, resourceId);
     const environment = getEnvironmentRevision(resourceId);
     const routeState = routeStatus();
@@ -471,6 +472,29 @@ function createApplicationManifestManager({
       addBlocker(blockers, blocker.code, blocker.section, blocker.message);
     }
 
+    if (!classification || classification.status !== 'classified' || !classification.revision) {
+      addBlocker(
+        blockers,
+        'workload-classification-incomplete',
+        'classification',
+        'A complete deterministic workload role and state classification is required.'
+      );
+    } else if (!['application', 'internal-service'].includes(classification.workloadRole)) {
+      addBlocker(
+        blockers,
+        'workload-role-lifecycle-unsupported',
+        'classification',
+        'This workload role needs a dedicated lifecycle contract before manifest finalization.'
+      );
+    }
+    if (classification && classification.stateClass === 'database') {
+      addBlocker(
+        blockers,
+        'database-lifecycle-unsupported',
+        'classification',
+        'Database-consistent backup, restore and lifecycle evidence is not implemented.'
+      );
+    }
     if (resource.protected) addBlocker(blockers, 'foxos-core-protected', 'ownership', 'FoxOS core resources cannot become application manifests.');
     if (resource.provider !== 'foxos' || resource.ownership !== 'foxos-managed') {
       addBlocker(blockers, 'external-provider-authority', 'ownership', 'The current runtime is still authoritative outside FoxOS.');
@@ -544,7 +568,22 @@ function createApplicationManifestManager({
     }
 
     const desired = {
-      identity: { resourceId, name: resource.name, kind: resource.kind, role: resource.role },
+      identity: {
+        resourceId,
+        name: resource.name,
+        kind: resource.kind,
+        role: resource.role,
+        classification: classification ? {
+          schemaVersion: classification.schemaVersion,
+          revision: classification.revision,
+          workloadRole: classification.workloadRole,
+          stateClass: classification.stateClass,
+          authorityClass: classification.authorityClass,
+          status: classification.status,
+          evidence: classification.evidence,
+          warnings: classification.warnings
+        } : null
+      },
       source,
       runtime: {
         engine: resource.runtime.engine,
@@ -607,6 +646,7 @@ function createApplicationManifestManager({
       environmentRevision: environment && environment.revision || null,
       routeIds: ownedRoutes.map((route) => route.routeId).sort(),
       sourceAuthority,
+      classificationRevision: classification && classification.revision || null,
       sourceRevision: source && source.type !== 'oci-image' ? {
         type: source.type,
         revisionId: source.revisionId,
@@ -733,7 +773,10 @@ function createApplicationManifestManager({
           'foxos-compose-deployment-revision'
         ],
         composeDependencies: 'directed-depends-on-only',
-        sharedNetworkImpliesDependency: false
+        sharedNetworkImpliesDependency: false,
+        classificationRequired: true,
+        supportedWorkloadRoles: ['application', 'internal-service'],
+        databaseLifecycleSupported: false
       }
     };
   }

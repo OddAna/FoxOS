@@ -354,9 +354,37 @@ jobs:
               if(!sources.includes("foxos-source-build-revision") || !sources.includes("oci-image")) failures.push(`source-types:${sources.join(",")}`);
               if(!compose.some(manifest=>manifest.desired.dependencies.some(dependency=>dependency.type==="compose-depends-on" && dependency.required))) failures.push("directed-dependency-missing");
               if(compose.some(manifest=>manifest.desired.dependencies.some(dependency=>dependency.type==="shared-network" && dependency.required))) failures.push("shared-network-required");
+              if(status.current.some(manifest=>manifest.schemaVersion!==2)) failures.push("manifest-schema");
+              if(status.current.some(manifest=>manifest.desired.identity.classification?.stateClass!=="stateless")) failures.push("state-classification");
+              if(status.current.some(manifest=>manifest.desired.identity.classification?.authorityClass!=="foxos-owned")) failures.push("authority-classification");
+              const roles=status.current.map(manifest=>manifest.desired.identity.classification?.workloadRole).sort();
+              if(roles.filter(role=>role==="application").length!==3 || roles.filter(role=>role==="internal-service").length!==1) failures.push(`workload-roles:${roles.join(",")}`);
               if(failures.length) {
                 console.error(`application manifest integration failed: ${failures.join(";")}`);
                 process.exit(1);
               }
+            });
+          '
+
+          independence_status=$(docker compose exec -T foxos node /app/independenceAuditCli.js status)
+          printf '%s' "$independence_status" | node -e '
+            let s="";
+            process.stdin.on("data",c=>s+=c);
+            process.stdin.on("end",()=>{
+              const status=JSON.parse(s);
+              if(status.candidates.length!==0 || status.audits.length!==0) process.exit(1);
+              if(status.guarantees.runtimeMutated || status.guarantees.providerDetached || status.guarantees.applyApproved) process.exit(1);
+            });
+          '
+          independence_audit=$(docker compose exec -T foxos node /app/independenceAuditCli.js audit "$image_resource_id" \
+            --confirm "AUDIT WORKLOAD INDEPENDENCE")
+          printf '%s' "$independence_audit" | node -e '
+            let s="";
+            process.stdin.on("data",c=>s+=c);
+            process.stdin.on("end",()=>{
+              const audit=JSON.parse(s);
+              if(audit.result!=="not-a-stateless-application-candidate") process.exit(1);
+              if(audit.guarantees.dockerRequestsMade!==0 || audit.guarantees.runtimeMutated || audit.guarantees.providerDetached || audit.guarantees.applyApproved) process.exit(1);
+              if(audit.evidence.secretValuesIncluded) process.exit(1);
             });
           '

@@ -1,6 +1,10 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const {
+  RESOURCE_CLASSIFICATION_SCHEMA_VERSION,
+  classifyResource
+} = require('./resourceClassification');
 
 const SCHEMA_VERSION = 1;
 const INSPECT_CONCURRENCY = 6;
@@ -407,6 +411,7 @@ function normalizeResource(container, details, resourceId, inspectionFailed) {
     ready: blockers.every((blocker) => blocker.severity !== 'blocking'),
     blockers
   };
+  resource.classification = classifyResource(resource);
   return resource;
 }
 
@@ -663,6 +668,12 @@ function createResourceRegistry({
         byOwnership: countBy(resources, (resource) => resource.ownership),
         byProvider: countBy(resources, (resource) => resource.provider),
         byRole: countBy(resources, (resource) => resource.role),
+        byWorkloadRole: countBy(resources, (resource) => resource.classification.workloadRole),
+        byStateClass: countBy(resources, (resource) => resource.classification.stateClass),
+        byAuthorityClass: countBy(resources, (resource) => resource.classification.authorityClass),
+        statelessAuditCandidates: resources.filter((resource) => (
+          resource.classification.independenceAudit.eligibleForReadOnlyAudit
+        )).length,
         adoptionReady: resources.filter((resource) => resource.adoption.ready).length,
         relationships: relationships.length,
         blockingConflicts: conflicts.filter((conflict) => conflict.severity === 'blocking').length
@@ -677,7 +688,11 @@ function createResourceRegistry({
       guarantees: {
         dockerRequests: 'GET-only',
         runtimeMutated: false,
-        secretValuesIncluded: false
+        secretValuesIncluded: false,
+        classificationSchemaVersion: RESOURCE_CLASSIFICATION_SCHEMA_VERSION,
+        classificationMethod: 'deterministic-local-evidence',
+        classificationDoesNotImplyOwnership: true,
+        statelessDoesNotProveApplicationDataFree: true
       },
       ...snapshotCore
     };
