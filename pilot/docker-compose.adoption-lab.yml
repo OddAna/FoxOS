@@ -6,6 +6,9 @@ services:
     container_name: foxos-adoption-lab
     labels:
       com.foxos.adoption.disposable: "true"
+    environment:
+      FOXOS_PILOT_MODE: disposable
+      FOXOS_PILOT_TOKEN: "${FOXOS_PILOT_TOKEN:?set FOXOS_PILOT_TOKEN for the disposable lab}"
     ports:
       - "127.0.0.1:18088:80/tcp"
     volumes:

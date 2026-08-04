@@ -5,9 +5,12 @@ const {
   createAdoptionManager,
   planDraftConfirmation
 } = require('./adoptionManager');
+const { createBackupManager } = require('./backupManager');
 const { createDockerClient } = require('./dockerClient');
+const { createEncryptionStore } = require('./encryptionStore');
 const { createResourceRegistry } = require('./resourceRegistry');
 const { createRouteManager } = require('./routeManager');
+const { createSecretManager } = require('./secretManager');
 
 function flagValue(args, name, fallback = null) {
   const index = args.indexOf(name);
@@ -32,12 +35,17 @@ async function main() {
     networkName: process.env.FOXOS_ROUTE_NETWORK || 'foxos-routing',
     gatewayHost: process.env.FOXOS_ROUTE_GATEWAY_HOST || 'foxos-gateway'
   });
+  const encryptionStore = createEncryptionStore({ dataRoot });
+  const secretManager = createSecretManager({ dataRoot, encryptionStore });
+  const backupManager = createBackupManager({ dataRoot, encryptionStore });
   const manager = createAdoptionManager({
     dataRoot,
     dockerRequest: docker.request,
     dockerArchiveRequest: docker.requestBuffer,
     resourceRegistry: registry,
-    routeManager
+    routeManager,
+    secretManager,
+    backupManager
   });
 
   if (command === 'status') {

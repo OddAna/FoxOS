@@ -39,6 +39,9 @@ not use the host package manager for its own runtime.
   session cookies, protected management APIs, and basic login rate limiting
 - **Independent HTTPS gateway** — the optional FoxOS-owned Caddy service issues
   and renews its own certificate without the Coolify proxy or network
+- **Server-owned secrets and recovery gate** — environment revisions reference
+  AES-256-GCM encrypted local secrets, while disposable adoption requires an
+  encrypted off-host upload, download, authentication and real restore proof
 
 FoxOS is currently an **alpha**. See [Current limitations](#current-limitations)
 before exposing it to other users.
@@ -217,6 +220,11 @@ The authenticated API exposes:
 | `GET /api/resources` | Read the latest stored snapshot, ownership status, relationships, conflicts and adoption blockers |
 | `GET /api/resources/export` | Download a redacted provider-neutral migration plan |
 | `POST /api/resources/:resourceId/adoption-plan` | Create a deterministic import draft for the strictly disposable pilot |
+| `GET /api/secrets` | Read encrypted-secret metadata without returning values |
+| `POST /api/secrets` | Create a new encrypted secret revision |
+| `GET /api/resources/:resourceId/environment-revision` | Read the classified environment revision for one resource |
+| `POST /api/resources/:resourceId/environment-revisions` | Pin ordinary values and encrypted secret references to one resource |
+| `GET /api/recovery/status` | Read local encryption and off-host backup readiness without credentials |
 | `GET /api/adoptions` | Read locally stored plans and operations |
 | `GET /api/routes` | Read FoxOS-owned route records and their last verification state |
 | `POST /api/adoptions/plans/:planId/apply` | Apply an explicitly confirmed disposable plan |
@@ -241,23 +249,64 @@ runtime passes every pilot safety gate. Coolify-managed resources are rejected.
 
 The included `pilot/docker-compose.adoption-lab.yml` creates the isolated test
 resource. Its source publishes only on `127.0.0.1:18088`, uses one read-only
-named volume and has no provider route or dependency. Before runtime mutation,
-FoxOS writes a versioned manifest, pins the image digest, archives the volume
-and restores that archive into a temporary volume to prove it can be read back.
-Only then does it stop and preserve the source container, create the
-FoxOS-managed target and require a healthy result. The target is connected to
-the internal FoxOS routing network and the fixed pilot path is verified through
-the FoxOS-owned Caddy gateway with trusted HTTPS before apply completes.
+named volume, one ordinary test setting and one disposable secret setting, and
+has no provider route or dependency. Before runtime mutation, FoxOS writes a
+versioned manifest, pins the image digest and pins the classified environment
+revision. Secret values are decrypted only in memory for source comparison and
+target creation; they do not enter the manifest, plan, operation, API response
+or registry snapshot.
+
+The volume archive is encrypted locally with AES-256-GCM before it is written
+or uploaded to the configured S3-compatible HTTPS target. FoxOS then verifies
+the remote object metadata, downloads it again, verifies the ciphertext digest
+and authentication tag, decrypts it in memory, and restores the downloaded
+archive into a temporary Docker volume. Only after that real restore proof does
+it stop and preserve the source container, create the FoxOS-managed target and
+require a healthy result. The target is connected to the internal FoxOS routing
+network and the fixed pilot path is verified through the FoxOS-owned Caddy
+gateway with trusted HTTPS before apply completes.
 
 The old source container is retained stopped under a distinct rollback name;
 it is not shown as a second Store application. Rolling back first disconnects
 and verifies removal of the public pilot route, then deletes only the
 FoxOS-managed target, keeps the named volume, restores the source name, starts
 it if it was previously running and verifies its runtime. Route records live
-under `.foxos-data/routes/`; pilot manifests, plans, operation records and
-backup archives live under `.foxos-data/adoption/`, all with owner-only
-permissions. See
+under `.foxos-data/routes/`; secret/environment revisions, recovery config,
+encrypted archives, manifests, plans and operation records live below
+`.foxos-data/`, all with owner-only permissions. See
 [`pilot/README.md`](pilot/README.md) for the operator procedure.
+
+### Configure encrypted secrets and off-host recovery
+
+These operator CLIs deliberately read sensitive values from files or standard
+input instead of command-line arguments. The Store UI does not expose this
+pilot workflow yet.
+
+```bash
+# Store or rotate a secret. The returned metadata never contains the value.
+DATA_ROOT=.foxos-data node backend/secretCli.js put pilot-token \
+  --value-file /owner-only/path/pilot-token
+
+# Pin the source resource's complete override set to an environment revision.
+DATA_ROOT=.foxos-data node backend/secretCli.js environment RESOURCE_ID \
+  --ordinary FOXOS_PILOT_MODE=disposable \
+  --secret FOXOS_PILOT_TOKEN=pilot-token
+
+# Configure an off-host S3-compatible HTTPS target with scoped credentials.
+DATA_ROOT=.foxos-data node backend/recoveryCli.js configure-s3 \
+  --endpoint https://your-s3-endpoint \
+  --bucket your-foxos-backup-bucket \
+  --region auto \
+  --prefix foxos \
+  --access-key-file /owner-only/path/access-key-id \
+  --secret-key-file /owner-only/path/secret-access-key
+```
+
+`DATA_ROOT/security/master-key` is the local encryption root. Losing it makes
+encrypted secrets and archives unreadable, so it must be protected separately
+with the FoxOS data backup. The current gate proves operational off-host
+round-trip and restore on the same FoxOS installation; scheduled retention,
+key escrow and full-machine disaster recovery remain later milestones.
 
 ## Operations
 
@@ -317,8 +366,10 @@ Refresh the page to create a new account.
 
 ### Back up FoxOS data
 
-Stop FoxOS and back up the local `.foxos-data/` directory. It contains the
-authentication record, FoxOS desktop files, and trash.
+Stop FoxOS and back up the complete local `.foxos-data/` directory. It contains
+the authentication record, FoxOS desktop files, registry/manifests, encrypted
+secret records, the encryption master key, recovery configuration and trash.
+Do not copy its contents into Git or logs.
 
 ## Current limitations
 
@@ -329,8 +380,11 @@ authentication record, FoxOS desktop files, and trash.
 - File operations are synchronous; very large copy/move operations can take time
 - No multi-user roles or permission levels
 - No audit log yet
-- The Resource Registry is read-only observation and migration planning; it
-  does not yet adopt resources or replace provider-owned deployment/proxy state
+- General resource migration is not available; only the explicitly labeled
+  disposable pilot can be adopted, routed, backed up, restored and rolled back
+- Off-host recovery currently gates each disposable adoption operation; there
+  is no scheduled retention policy, database-consistent backup, key escrow or
+  full-machine disaster restore workflow yet
 - The App Store catalog is intentionally small and reviewed; arbitrary Compose
   files and untrusted install scripts are not accepted through the UI
 - App Store images are maintained by their respective third-party projects, not
@@ -377,6 +431,10 @@ FoxOS/
 │   ├── appCatalog.js          # Reviewed application definitions
 │   ├── appManager.js          # Docker app validation and container payloads
 │   ├── resourceRegistry.js    # Read-only inventory, ownership and migration plan
+│   ├── encryptionStore.js     # Local AES-GCM key and authenticated envelopes
+│   ├── secretManager.js       # Encrypted secrets and classified environment revisions
+│   ├── backupManager.js       # Encrypted S3-compatible round-trip and restore gate
+│   ├── adoptionManager.js     # Disposable plan/apply/rollback transaction
 │   └── package.json
 └── frontend/
     ├── src/

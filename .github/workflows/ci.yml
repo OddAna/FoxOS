@@ -50,7 +50,8 @@ jobs:
       - name: Validate Compose and installer
         run: |
           docker compose config --quiet
-          docker compose -f pilot/docker-compose.adoption-lab.yml config --quiet
+          FOXOS_PILOT_TOKEN=ci-disposable-placeholder \
+            docker compose -f pilot/docker-compose.adoption-lab.yml config --quiet
           bash -n install.sh
           bash -n install-gateway.sh
           sh -n gateway/entrypoint.sh
