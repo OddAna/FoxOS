@@ -27,8 +27,8 @@ not use the host package manager for its own runtime.
   memory, and disk usage
 - **Real Docker control** — list containers and start, stop, or restart them
 - **Real App Store** — install a reviewed catalog of Docker applications on the
-  server, choose their host port and network exposure, and manage their real
-  container lifecycle from FoxOS
+  server and manage their real container lifecycle from the original FoxOS
+  store interface
 - **Host terminal** — commands run directly in the Linux host namespaces
 - **Host file access** — the Files app contains a `Sunucu` entry linked to
   the host root filesystem
@@ -141,11 +141,10 @@ from the container list.
 App Store installs are not simulations and are not kept in browser storage.
 FoxOS pulls the catalog image through the host Docker Engine, creates a labeled
 container with an `unless-stopped` restart policy, and reads its live state back
-from Docker. Apps bind to `127.0.0.1` by default. Selecting **Public** binds the
-chosen app port to `0.0.0.0`; only do this when the app is separately protected
-and the server firewall is configured intentionally. Persistent app data is kept
-in a named Docker volume and can be preserved or explicitly deleted when the app
-is removed.
+from Docker. The store installs apps on their catalog port with a private
+`127.0.0.1` bind by default. Persistent app data is kept in a named Docker volume
+and is preserved by the store when the app is removed; the authenticated API can
+explicitly remove a FoxOS-owned volume when requested.
 
 ## Operations
 

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Settings, Terminal, Gauge, FolderOpen, Trash2, Store } from 'lucide-react';
+import { Settings, Terminal, Gauge, FolderOpen, Trash2, Box } from 'lucide-react';
 import { useWindowManager } from '../contexts/WindowContext';
 
 const Dock = () => {
@@ -27,14 +27,14 @@ const Dock = () => {
     });
   };
 
-  const handleOpenAppStore = () => {
+  const handleOpenStore = () => {
     openWindow({
-      id: 'app-store',
-      type: 'app-store',
-      title: 'App Store',
+      id: 'store',
+      type: 'store',
+      title: 'Mağaza',
       component: null,
-      width: 1040,
-      height: 700
+      width: 1200,
+      height: 750
     });
   };
 
@@ -74,13 +74,6 @@ const Dock = () => {
         </div>
 
         <div className="dock-item-wrapper">
-          <div className="dock-item app-store" title="App Store" onClick={handleOpenAppStore}>
-            <Store size={26} color="#ffbd66" strokeWidth={1.6} />
-          </div>
-          <div className={`dock-indicator ${isAppOpen('app-store') ? 'active' : ''}`}></div>
-        </div>
-        
-        <div className="dock-item-wrapper">
           <div className="dock-item app-settings" title="Ayarlar" onClick={handleOpenSettings}>
             <Settings size={26} color="#ffffff" strokeWidth={1.5} />
           </div>
@@ -92,6 +85,13 @@ const Dock = () => {
             <Terminal size={26} color="#ffffff" strokeWidth={1.5} />
           </div>
           <div className={`dock-indicator ${isAppOpen('terminal') ? 'active' : ''}`}></div>
+        </div>
+
+        <div className="dock-item-wrapper">
+          <div className="dock-item app-store" title="Mağaza" onClick={handleOpenStore}>
+            <Box size={26} color="#ffffff" strokeWidth={1.5} />
+          </div>
+          <div className={`dock-indicator ${isAppOpen('store') ? 'active' : ''}`}></div>
         </div>
 
         <div className="dock-item-wrapper">

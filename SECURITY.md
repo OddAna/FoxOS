@@ -24,8 +24,9 @@ authentication.
 
 - Keep the default **Private** (`127.0.0.1`) exposure unless the application has
   its own authentication or is protected by a trusted reverse proxy or VPN.
-- Selecting **Public** (`0.0.0.0`) can make the chosen port internet-accessible,
-  depending on the host firewall and provider network rules.
+- The current store UI installs apps with the **Private** (`127.0.0.1`) bind.
+  An authenticated API client that explicitly requests `0.0.0.0` can make the
+  chosen port internet-accessible, depending on firewall and provider rules.
 - Review the linked upstream project before installing. Catalog images are built
   and maintained by their respective third-party projects.
 - Apps that read the Docker socket, such as Dozzle, have elevated visibility into

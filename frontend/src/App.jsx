@@ -572,7 +572,7 @@ const Desktop = () => {
       case 'image-viewer': return <ImageViewerApp filePath={win.filePath} />;
       case 'media-player': return <MediaPlayerApp filePath={win.filePath} ext={win.ext} />;
       case 'terminal': return <TerminalApp />;
-      case 'app-store': return <AppStoreApp />;
+      case 'store': return <AppStoreApp />;
       default: return <div style={{ padding: 20, color: '#fff' }}>Bilinmeyen Uygulama: {win.title}</div>;
     }
   };

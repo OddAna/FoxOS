@@ -1,362 +1,352 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Activity,
-  Box,
-  CircleStop,
-  ExternalLink,
+  Check,
+  Code,
+  Compass,
+  Database,
+  Download,
   FileText,
-  LoaderCircle,
+  Film,
+  Globe,
+  Loader2,
+  MoreVertical,
   Play,
-  RefreshCw,
+  RotateCw,
   Search,
-  ShieldCheck,
-  Store,
-  TerminalSquare,
+  Server,
+  Square,
+  Terminal,
   Trash2,
   Wrench
 } from 'lucide-react';
+import { useDialog } from '../contexts/DialogContext';
 import { apiFetch } from '../api';
-import './AppStoreApp.css';
 
-const APP_ICONS = {
-  activity: Activity,
-  logs: TerminalSquare,
-  tools: Wrench,
-  document: FileText
+const CATEGORIES = [
+  { id: 'kesfet', name: 'Keşfet', icon: <Compass size={18} /> },
+  { id: 'gelistirici', name: 'Geliştirici Araçları', icon: <Code size={18} /> },
+  { id: 'diller', name: 'Programlama Dilleri', icon: <Terminal size={18} /> },
+  { id: 'veritabani', name: 'Veritabanları', icon: <Database size={18} /> },
+  { id: 'devops', name: 'DevOps', icon: <Terminal size={18} /> },
+  { id: 'guncellemeler', name: 'Güncellemeler', icon: <RotateCw size={18} /> },
+  { id: 'medya', name: 'Medya ve Eğlence', icon: <Film size={18} /> },
+  { id: 'webapp', name: 'Web Uygulamaları', icon: <Globe size={18} /> }
+];
+
+const APP_VISUALS = {
+  'uptime-kuma': {
+    featured: true,
+    banner: 'linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%)',
+    icon: <Activity size={38} color="#10b981" />
+  },
+  dozzle: { icon: <Terminal size={38} color="#3b82f6" /> },
+  'it-tools': { icon: <Wrench size={38} color="#f59e0b" /> },
+  'stirling-pdf': { icon: <FileText size={38} color="#ef4444" /> }
 };
 
-const stateLabel = (app) => {
-  if (!app.installed) return 'Kurulmadı';
-  if (app.state === 'running') return 'Çalışıyor';
-  if (app.state === 'exited') return 'Durduruldu';
-  return app.state || 'Bilinmiyor';
-};
+const decorateApp = (app) => ({
+  ...app,
+  developer: app.publisher,
+  appType: 'webapp',
+  ...APP_VISUALS[app.id]
+});
 
 const AppStoreApp = () => {
+  const [activeCategory, setActiveCategory] = useState('kesfet');
   const [apps, setApps] = useState([]);
-  const [selectedId, setSelectedId] = useState(null);
-  const [query, setQuery] = useState('');
-  const [category, setCategory] = useState('Tümü');
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState('');
-  const [notice, setNotice] = useState(null);
-  const [hostPort, setHostPort] = useState('');
-  const [bindAddress, setBindAddress] = useState('127.0.0.1');
-  const [confirmRemoval, setConfirmRemoval] = useState(false);
-  const [removeData, setRemoveData] = useState(false);
+  const [installing, setInstalling] = useState({});
+  const [uninstalling, setUninstalling] = useState({});
+  const [actionRunning, setActionRunning] = useState({});
+  const [searchQuery, setSearchQuery] = useState('');
+  const [activeMenu, setActiveMenu] = useState(null);
+  const { showDialog } = useDialog();
 
   const loadApps = useCallback(async ({ quiet = false } = {}) => {
     if (!quiet) setLoading(true);
     try {
       const response = await apiFetch('/api/apps');
       const payload = await response.json();
-      setApps(payload.apps || []);
-      setSelectedId((current) => current || payload.apps?.[0]?.id || null);
-      setNotice(null);
+      setApps((payload.apps || []).map(decorateApp));
     } catch (error) {
-      setNotice({ type: 'error', message: error.message });
+      showDialog({ title: 'Mağaza Hatası', message: error.message, type: 'error' });
     } finally {
       if (!quiet) setLoading(false);
     }
-  }, []);
+  }, [showDialog]);
 
   useEffect(() => {
     loadApps();
   }, [loadApps]);
 
-  const selectedApp = apps.find((app) => app.id === selectedId) || null;
-
   useEffect(() => {
-    if (!selectedApp) return;
-    setHostPort(String(selectedApp.hostPort || selectedApp.defaultPort));
-    setBindAddress(selectedApp.bindAddress || '127.0.0.1');
-    setConfirmRemoval(false);
-    setRemoveData(false);
-  }, [selectedApp?.id]); // oxlint-disable-line react-hooks/exhaustive-deps
+    const closeMenu = () => setActiveMenu(null);
+    window.addEventListener('click', closeMenu);
+    return () => window.removeEventListener('click', closeMenu);
+  }, []);
 
-  const categories = useMemo(
-    () => ['Tümü', ...new Set(apps.map((app) => app.category))],
-    [apps]
-  );
-
-  const visibleApps = useMemo(() => {
-    const normalizedQuery = query.trim().toLocaleLowerCase('tr-TR');
-    return apps.filter((app) => {
-      const inCategory = category === 'Tümü' || app.category === category;
-      const searchable = `${app.name} ${app.summary} ${app.publisher}`.toLocaleLowerCase('tr-TR');
-      return inCategory && (!normalizedQuery || searchable.includes(normalizedQuery));
-    });
-  }, [apps, category, query]);
-
-  const refreshAndSelect = async (appId) => {
-    await loadApps({ quiet: true });
-    setSelectedId(appId);
-  };
-
-  const install = async () => {
-    if (!selectedApp) return;
-    setBusy('install');
-    setNotice({ type: 'info', message: 'İmaj indiriliyor ve uygulama sunucuda hazırlanıyor…' });
+  const handleInstall = async (event, app) => {
+    event.stopPropagation();
+    setInstalling((current) => ({ ...current, [app.id]: true }));
     try {
-      await apiFetch(`/api/apps/${selectedApp.id}/install`, {
+      await apiFetch(`/api/apps/${app.id}/install`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ hostPort, bindAddress })
+        body: JSON.stringify({ hostPort: app.defaultPort, bindAddress: '127.0.0.1' })
       });
-      await refreshAndSelect(selectedApp.id);
-      setNotice({ type: 'success', message: `${selectedApp.name} kuruldu ve başlatıldı.` });
-    } catch (error) {
-      setNotice({ type: 'error', message: error.message });
-    } finally {
-      setBusy('');
-    }
-  };
-
-  const runAction = async (action) => {
-    if (!selectedApp) return;
-    setBusy(action);
-    setNotice(null);
-    try {
-      await apiFetch(`/api/apps/${selectedApp.id}/${action}`, { method: 'POST' });
-      await refreshAndSelect(selectedApp.id);
-    } catch (error) {
-      setNotice({ type: 'error', message: error.message });
-    } finally {
-      setBusy('');
-    }
-  };
-
-  const uninstall = async () => {
-    if (!selectedApp) return;
-    setBusy('remove');
-    try {
-      await apiFetch(`/api/apps/${selectedApp.id}?removeData=${removeData}`, { method: 'DELETE' });
-      await refreshAndSelect(selectedApp.id);
-      setConfirmRemoval(false);
-      setNotice({
-        type: 'success',
-        message: removeData ? 'Uygulama ve kalıcı verileri kaldırıldı.' : 'Uygulama kaldırıldı; kalıcı verileri korundu.'
+      await loadApps({ quiet: true });
+      showDialog({
+        title: 'Yüklendi',
+        message: `${app.name} sunucuya kuruldu. Uygulama portu güvenlik için yalnızca sunucunun kendisine bağlandı.`,
+        type: 'success'
       });
     } catch (error) {
-      setNotice({ type: 'error', message: error.message });
+      showDialog({ title: 'Kurulum Hatası', message: error.message, type: 'error' });
     } finally {
-      setBusy('');
+      setInstalling((current) => ({ ...current, [app.id]: false }));
     }
   };
 
-  const openApplication = () => {
-    if (!selectedApp?.hostPort) return;
-    const hostname = selectedApp.bindAddress === '127.0.0.1'
-      ? '127.0.0.1'
-      : window.location.hostname;
-    window.open(`http://${hostname}:${selectedApp.hostPort}`, '_blank', 'noopener,noreferrer');
+  const runAction = async (event, app, action) => {
+    event.stopPropagation();
+    setActiveMenu(null);
+    setActionRunning((current) => ({ ...current, [app.id]: action }));
+    try {
+      await apiFetch(`/api/apps/${app.id}/${action}`, { method: 'POST' });
+      await loadApps({ quiet: true });
+    } catch (error) {
+      showDialog({ title: 'İşlem Hatası', message: error.message, type: 'error' });
+    } finally {
+      setActionRunning((current) => ({ ...current, [app.id]: null }));
+    }
   };
 
-  const installedCount = apps.filter((app) => app.installed).length;
-  const runningCount = apps.filter((app) => app.state === 'running').length;
+  const handleUninstall = (event, app) => {
+    event.stopPropagation();
+    setActiveMenu(null);
+    showDialog({
+      title: `${app.name} Kaldırılsın mı?`,
+      message: 'Uygulama containerı kaldırılacak. Kalıcı uygulama verileri korunacak.',
+      type: 'warning',
+      confirmText: 'Kaldır',
+      onConfirm: async () => {
+        setUninstalling((current) => ({ ...current, [app.id]: true }));
+        try {
+          await apiFetch(`/api/apps/${app.id}?removeData=false`, { method: 'DELETE' });
+          await loadApps({ quiet: true });
+        } catch (error) {
+          showDialog({ title: 'Kaldırma Hatası', message: error.message, type: 'error' });
+        } finally {
+          setUninstalling((current) => ({ ...current, [app.id]: false }));
+        }
+      }
+    });
+  };
+
+  const handleOpenApp = (event, app) => {
+    event.stopPropagation();
+    if (app.state !== 'running') {
+      showDialog({ title: 'Servis Kapalı', message: 'Bu uygulamayı açmak için önce servisi başlatın.', type: 'warning' });
+      return;
+    }
+    if (!app.hostPort) {
+      showDialog({ title: 'Port Bulunamadı', message: 'Docker yayın portu okunamadı.', type: 'error' });
+      return;
+    }
+
+    const localFoxOS = ['127.0.0.1', 'localhost'].includes(window.location.hostname);
+    if (app.bindAddress === '127.0.0.1' && !localFoxOS) {
+      showDialog({
+        title: 'Özel Erişim',
+        message: `Bu uygulama güvenlik için 127.0.0.1:${app.hostPort} üzerinde çalışıyor. Aynı portu SSH tüneliyle açın.`,
+        type: 'info'
+      });
+      return;
+    }
+
+    const hostname = app.bindAddress === '127.0.0.1' ? '127.0.0.1' : window.location.hostname;
+    window.open(`http://${hostname}:${app.hostPort}`, '_blank', 'noopener,noreferrer');
+  };
+
+  const displayedApps = useMemo(() => {
+    if (searchQuery) {
+      const query = searchQuery.toLocaleLowerCase('tr-TR');
+      return apps.filter((app) => `${app.name} ${app.description}`.toLocaleLowerCase('tr-TR').includes(query));
+    }
+
+    const filters = {
+      gelistirici: (app) => app.category === 'Utilities',
+      diller: () => false,
+      veritabani: () => false,
+      devops: (app) => ['Monitoring', 'Docker'].includes(app.category),
+      guncellemeler: (app) => app.installed,
+      medya: (app) => app.category === 'Documents',
+      webapp: () => true
+    };
+    return activeCategory === 'kesfet' ? apps : apps.filter(filters[activeCategory] || (() => true));
+  }, [activeCategory, apps, searchQuery]);
+
+  const featuredApp = apps.find((app) => app.featured);
+
+  const ServiceMenu = ({ app, suffix }) => (
+    <>
+      <div
+        style={{
+          width: suffix === 'featured' ? '10px' : '8px',
+          height: suffix === 'featured' ? '10px' : '8px',
+          borderRadius: '50%',
+          background: app.state === 'running' ? '#27c93f' : actionRunning[app.id] ? '#ffbd2e' : '#ff5f56',
+          boxShadow: '0 2px 5px rgba(0,0,0,0.5)'
+        }}
+        title={`Durum: ${app.state}`}
+      />
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          const menuId = `${app.id}-${suffix}`;
+          setActiveMenu(activeMenu === menuId ? null : menuId);
+        }}
+        style={{
+          background: 'transparent', color: suffix === 'featured' ? '#fff' : '#888',
+          border: '1px solid rgba(255,255,255,0.2)', padding: suffix === 'featured' ? '6px' : '4px',
+          borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center'
+        }}
+      >
+        <MoreVertical size={suffix === 'featured' ? 16 : 14} />
+      </button>
+      {activeMenu === `${app.id}-${suffix}` && (
+        <div style={{ position: 'absolute', top: '100%', right: suffix === 'featured' ? '90px' : '70px', background: 'rgba(30, 30, 35, 0.95)', backdropFilter: 'blur(10px)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', padding: '4px', zIndex: 10, minWidth: '150px', boxShadow: '0 10px 25px rgba(0,0,0,0.5)' }}>
+          <div onClick={(event) => runAction(event, app, 'start')} style={{ padding: '8px 12px', fontSize: '13px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '8px' }} className="menu-item"><Play size={14} /> Başlat</div>
+          <div onClick={(event) => runAction(event, app, 'stop')} style={{ padding: '8px 12px', fontSize: '13px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '8px' }} className="menu-item"><Square size={14} /> Durdur</div>
+          <div onClick={(event) => runAction(event, app, 'restart')} style={{ padding: '8px 12px', fontSize: '13px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '8px' }} className="menu-item"><RotateCw size={14} /> Yeniden Başlat</div>
+          <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '4px 0' }} />
+          <div onClick={(event) => handleUninstall(event, app)} style={{ padding: '8px 12px', fontSize: '13px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '8px', color: '#ff5f56' }} className="menu-item"><Trash2 size={14} /> Sil</div>
+        </div>
+      )}
+    </>
+  );
 
   return (
-    <div className="app-store-shell">
-      <header className="app-store-header">
-        <div className="app-store-heading">
-          <div className="app-store-mark"><Store size={22} /></div>
-          <div>
-            <span className="app-store-kicker">FOXOS CURATED CATALOG</span>
-            <h1>App Store</h1>
+    <div style={{ display: 'flex', height: '100%', width: '100%', color: '#fff', background: 'rgba(20, 20, 25, 0.95)', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif' }}>
+      <div style={{ width: '220px', flex: '0 0 220px', background: 'rgba(255,255,255,0.03)', borderRight: '1px solid rgba(255,255,255,0.08)', display: 'flex', flexDirection: 'column', paddingTop: '20px' }}>
+        <div style={{ padding: '0 15px', marginBottom: '20px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', background: 'rgba(255,255,255,0.08)', borderRadius: '8px', padding: '6px 10px' }}>
+            <Search size={16} color="#888" style={{ marginRight: '8px' }} />
+            <input
+              type="text"
+              placeholder="Ara..."
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              style={{ background: 'transparent', border: 'none', color: '#fff', outline: 'none', width: '100%', fontSize: '13px' }}
+            />
           </div>
         </div>
-        <div className="app-store-stats" aria-label="Uygulama durumu">
-          <span><strong>{installedCount}</strong> kurulu</span>
-          <span><i className="status-dot" /> <strong>{runningCount}</strong> çalışıyor</span>
-          <button type="button" onClick={() => loadApps()} title="Yenile" disabled={loading}>
-            <RefreshCw size={15} className={loading ? 'spin' : ''} />
-          </button>
-        </div>
-      </header>
 
-      <div className="app-store-toolbar">
-        <label className="app-store-search">
-          <Search size={16} />
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Uygulama ara"
-          />
-        </label>
-        <div className="app-store-categories">
-          {categories.map((item) => (
-            <button
-              type="button"
-              key={item}
-              className={category === item ? 'active' : ''}
-              onClick={() => setCategory(item)}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', padding: '0 10px' }}>
+          <div style={{ fontSize: '11px', color: '#888', fontWeight: 'bold', padding: '8px 10px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Kategoriler</div>
+          {CATEGORIES.map((category) => (
+            <div
+              key={category.id}
+              onClick={() => { setActiveCategory(category.id); setSearchQuery(''); }}
+              style={{
+                display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 10px', borderRadius: '6px', cursor: 'pointer',
+                background: activeCategory === category.id && !searchQuery ? '#0ea5e9' : 'transparent',
+                color: activeCategory === category.id && !searchQuery ? '#fff' : '#ccc',
+                transition: 'background 0.2s', fontSize: '14px'
+              }}
             >
-              {item}
-            </button>
+              {category.icon}
+              {category.name}
+            </div>
           ))}
         </div>
       </div>
 
-      {notice && <div className={`app-store-notice ${notice.type}`}>{notice.message}</div>}
-
-      <main className="app-store-main">
-        <section className="app-store-library" aria-label="Uygulama kataloğu">
-          {loading ? (
-            <div className="app-store-empty"><LoaderCircle className="spin" /> Katalog okunuyor…</div>
-          ) : visibleApps.length === 0 ? (
-            <div className="app-store-empty">Aramanızla eşleşen uygulama yok.</div>
-          ) : (
-            <div className="app-store-grid">
-              {visibleApps.map((app) => {
-                const Icon = APP_ICONS[app.icon] || Box;
-                return (
-                  <button
-                    type="button"
-                    key={app.id}
-                    onClick={() => setSelectedId(app.id)}
-                    className={`app-card ${selectedId === app.id ? 'selected' : ''}`}
-                    style={{ '--app-accent': app.accent }}
-                  >
-                    <div className="app-card-icon"><Icon size={24} /></div>
-                    <div className="app-card-copy">
-                      <div className="app-card-title-row">
-                        <h2>{app.name}</h2>
-                        <span className={`app-state ${app.state}`}>{stateLabel(app)}</span>
-                      </div>
-                      <p>{app.summary}</p>
-                      <span className="app-card-meta">{app.publisher} · {app.category}</span>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </section>
-
-        <aside className="app-store-detail" style={{ '--app-accent': selectedApp?.accent || '#8ba9ff' }}>
-          {selectedApp ? (
-            <>
-              <div className="detail-accent" />
-              <div className="detail-heading">
-                {React.createElement(APP_ICONS[selectedApp.icon] || Box, { size: 27 })}
-                <div>
-                  <span>{selectedApp.category}</span>
-                  <h2>{selectedApp.name}</h2>
-                </div>
-              </div>
-              <p className="detail-description">{selectedApp.description}</p>
-              <a className="detail-source" href={selectedApp.docsUrl} target="_blank" rel="noreferrer">
-                Proje kaynağı <ExternalLink size={13} />
-              </a>
-
-              <div className="detail-image">
-                <span>CONTAINER IMAGE</span>
-                <code>{selectedApp.image}</code>
-              </div>
-
-              {selectedApp.installed ? (
-                <div className="installed-panel">
-                  <div className="installed-status">
-                    <span className={`large-state ${selectedApp.state}`}><i /> {stateLabel(selectedApp)}</span>
-                    <small>{selectedApp.status}</small>
-                  </div>
-                  <div className="installed-address">
-                    <span>Bağlantı</span>
-                    <strong>{selectedApp.bindAddress}:{selectedApp.hostPort || '—'}</strong>
-                  </div>
-                  <div className="action-grid">
-                    {selectedApp.state === 'running' ? (
-                      <>
-                        <button type="button" className="primary" onClick={openApplication} disabled={!selectedApp.hostPort}>
-                          <ExternalLink size={15} /> Aç
-                        </button>
-                        <button type="button" onClick={() => runAction('restart')} disabled={Boolean(busy)}>
-                          <RefreshCw size={15} className={busy === 'restart' ? 'spin' : ''} /> Yeniden başlat
-                        </button>
-                        <button type="button" onClick={() => runAction('stop')} disabled={Boolean(busy)}>
-                          <CircleStop size={15} /> Durdur
-                        </button>
-                      </>
-                    ) : (
-                      <button type="button" className="primary" onClick={() => runAction('start')} disabled={Boolean(busy)}>
-                        <Play size={15} /> Başlat
-                      </button>
-                    )}
-                    <button type="button" className="danger-quiet" onClick={() => setConfirmRemoval(true)} disabled={Boolean(busy)}>
-                      <Trash2 size={15} /> Kaldır
+      <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: '0 0 40px 0' }}>
+        {activeCategory === 'kesfet' && !searchQuery && featuredApp && (
+          <div style={{ padding: '30px 40px 10px 40px' }}>
+            <div style={{ fontSize: '12px', color: '#888', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '10px' }}>Öne Çıkan</div>
+            <div style={{ background: featuredApp.banner, borderRadius: '16px', padding: '30px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 10px 30px rgba(0,0,0,0.3)', position: 'relative', overflow: 'hidden' }}>
+              <div style={{ zIndex: 1, maxWidth: '70%' }}>
+                <h1 style={{ margin: '0 0 10px 0', fontSize: '32px', fontWeight: 'bold' }}>{featuredApp.name}</h1>
+                <p style={{ margin: '0 0 20px 0', fontSize: '16px', opacity: 0.9, lineHeight: '1.5' }}>{featuredApp.description}</p>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', position: 'relative' }}>
+                  {featuredApp.installed && <ServiceMenu app={featuredApp} suffix="featured" />}
+                  {featuredApp.installed ? (
+                    <button type="button" onClick={(event) => handleOpenApp(event, featuredApp)} disabled={uninstalling[featuredApp.id]} style={{ background: 'rgba(255,255,255,0.2)', color: '#fff', border: '1px solid rgba(255,255,255,0.4)', padding: '8px 24px', borderRadius: '20px', fontSize: '14px', fontWeight: 'bold', cursor: uninstalling[featuredApp.id] ? 'wait' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: '8px', opacity: uninstalling[featuredApp.id] ? 0.7 : 1 }}>
+                      {uninstalling[featuredApp.id] ? <Loader2 size={16} className="spin" /> : <Check size={16} />}
+                      {uninstalling[featuredApp.id] ? 'Kaldırılıyor...' : 'Aç'}
                     </button>
-                  </div>
-
-                  {confirmRemoval && (
-                    <div className="remove-confirm">
-                      <strong>{selectedApp.name} kaldırılsın mı?</strong>
-                      {(selectedApp.volumes || []).length > 0 && (
-                        <label>
-                          <input type="checkbox" checked={removeData} onChange={(event) => setRemoveData(event.target.checked)} />
-                          Kalıcı uygulama verisini de sil
-                        </label>
-                      )}
-                      <p>{removeData ? 'Bu uygulama verisi geri alınamaz.' : 'Kalıcı volume korunacak; yeniden kurulumda kullanılabilir.'}</p>
-                      <div>
-                        <button type="button" onClick={() => setConfirmRemoval(false)}>Vazgeç</button>
-                        <button type="button" className="danger" onClick={uninstall} disabled={busy === 'remove'}>
-                          {busy === 'remove' && <LoaderCircle size={14} className="spin" />} Kaldır
-                        </button>
-                      </div>
-                    </div>
+                  ) : (
+                    <button type="button" onClick={(event) => handleInstall(event, featuredApp)} disabled={installing[featuredApp.id]} style={{ background: '#fff', color: '#000', border: 'none', padding: '8px 24px', borderRadius: '20px', fontSize: '14px', fontWeight: 'bold', cursor: installing[featuredApp.id] ? 'wait' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                      {installing[featuredApp.id] ? <Loader2 size={16} className="spin" /> : <Download size={16} />} {installing[featuredApp.id] ? 'Bekle...' : 'Yükle'}
+                    </button>
                   )}
                 </div>
-              ) : (
-                <div className="install-panel">
-                  <label>
-                    <span>Sunucu portu</span>
-                    <input
-                      type="number"
-                      min="1024"
-                      max="65535"
-                      value={hostPort}
-                      onChange={(event) => setHostPort(event.target.value)}
-                    />
-                  </label>
-                  <fieldset>
-                    <legend>Ağ erişimi</legend>
-                    <button
-                      type="button"
-                      className={bindAddress === '127.0.0.1' ? 'active' : ''}
-                      onClick={() => setBindAddress('127.0.0.1')}
-                    >
-                      <ShieldCheck size={15} /> Özel
-                    </button>
-                    <button
-                      type="button"
-                      className={bindAddress === '0.0.0.0' ? 'active public' : ''}
-                      onClick={() => setBindAddress('0.0.0.0')}
-                    >
-                      Herkese açık
-                    </button>
-                  </fieldset>
-                  <p className={`exposure-note ${bindAddress === '0.0.0.0' ? 'warning' : ''}`}>
-                    {bindAddress === '0.0.0.0'
-                      ? 'Bu port güvenlik duvarı izin veriyorsa internetten erişilebilir olur.'
-                      : 'Yalnızca sunucunun kendisinden veya SSH tüneli üzerinden erişilir.'}
-                  </p>
-                  {selectedApp.risk && <p className="risk-note">{selectedApp.risk}</p>}
-                  <button type="button" className="install-button" onClick={install} disabled={Boolean(busy)}>
-                    {busy === 'install' ? <LoaderCircle size={17} className="spin" /> : <Box size={17} />}
-                    {busy === 'install' ? 'Kuruluyor…' : 'Sunucuya kur'}
-                  </button>
-                </div>
-              )}
+              </div>
+              <div style={{ width: '120px', height: '120px', background: 'rgba(255,255,255,0.9)', padding: '20px', borderRadius: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 20px 40px rgba(0,0,0,0.2)', zIndex: 1 }}>
+                {featuredApp.icon}
+              </div>
+            </div>
+          </div>
+        )}
 
-              <ul className="detail-notes">
-                {(selectedApp.notes || []).map((note) => <li key={note}>{note}</li>)}
-              </ul>
-            </>
+        {activeCategory === 'guncellemeler' && (
+          <div style={{ padding: '30px 40px 10px 40px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <h1 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: 'bold' }}>Güncellemeler</h1>
+              <div style={{ fontSize: '14px', color: '#888' }}>Yüklü uygulamaların canlı durumu Docker üzerinden okunuyor.</div>
+            </div>
+            <button type="button" onClick={() => loadApps()} disabled={loading} style={{ background: 'rgba(255,255,255,0.1)', color: '#fff', border: '1px solid rgba(255,255,255,0.2)', padding: '8px 16px', borderRadius: '8px', cursor: loading ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 'bold' }}>
+              <RotateCw size={14} className={loading ? 'spin' : ''} /> Yenile
+            </button>
+          </div>
+        )}
+
+        <div style={{ padding: '20px 40px' }}>
+          {loading ? (
+            <div style={{ padding: '40px', color: '#888', textAlign: 'center' }}><Loader2 size={20} className="spin" /> Katalog yükleniyor...</div>
           ) : (
-            <div className="app-store-empty">Detayları görmek için bir uygulama seçin.</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
+              {displayedApps.map((app) => (
+                <div key={app.id} style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '16px', padding: '20px', display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '16px' }}>
+                    <div style={{ width: '60px', height: '60px', flex: '0 0 60px', borderRadius: '14px', background: 'rgba(255,255,255,0.9)', padding: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{app.icon || <Server size={38} color="#0ea5e9" />}</div>
+                    <div style={{ minWidth: 0 }}>
+                      <h3 style={{ margin: '0 0 4px 0', fontSize: '16px', fontWeight: 'bold' }}>{app.name}</h3>
+                      <div style={{ fontSize: '12px', color: '#888', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{app.developer}</div>
+                    </div>
+                  </div>
+                  <p style={{ margin: '0 0 20px 0', fontSize: '13px', color: '#aaa', lineHeight: '1.5', flex: 1 }}>{app.description}</p>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '16px' }}>
+                    <span style={{ fontSize: '11px', background: 'rgba(255,255,255,0.1)', padding: '4px 8px', borderRadius: '4px', color: '#ccc' }}>{app.category}</span>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center', position: 'relative' }}>
+                      {app.installed && <ServiceMenu app={app} suffix="grid" />}
+                      {app.installed ? (
+                        <button type="button" onClick={(event) => handleOpenApp(event, app)} disabled={uninstalling[app.id]} style={{ background: 'transparent', color: '#0ea5e9', border: '1px solid #0ea5e9', padding: '6px 16px', borderRadius: '16px', fontSize: '13px', fontWeight: 'bold', cursor: uninstalling[app.id] ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: '6px', opacity: uninstalling[app.id] ? 0.7 : 1 }}>
+                          {uninstalling[app.id] ? <Loader2 size={14} className="spin" /> : <Check size={14} />} {uninstalling[app.id] ? 'Kaldırılıyor...' : 'Aç'}
+                        </button>
+                      ) : installing[app.id] ? (
+                        <button type="button" disabled style={{ background: 'rgba(255,255,255,0.1)', color: '#888', border: 'none', padding: '6px 16px', borderRadius: '16px', fontSize: '13px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '6px' }}><Loader2 size={14} className="spin" /> Bekle...</button>
+                      ) : (
+                        <button type="button" onClick={(event) => handleInstall(event, app)} style={{ background: 'rgba(255,255,255,0.9)', color: '#000', border: 'none', padding: '6px 16px', borderRadius: '16px', fontSize: '13px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}><Download size={14} /> Yükle</button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
           )}
-        </aside>
-      </main>
+        </div>
+      </div>
+
+      <style>{`
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+        .spin { animation: spin 1s linear infinite; }
+        .menu-item:hover { background: rgba(14, 165, 233, 0.8); }
+      `}</style>
     </div>
   );
 };
