@@ -39,23 +39,6 @@ function readJson(target, fallback = null) {
   }
 }
 
-function atomicWriteSecret(target, value) {
-  ensureDirectory(path.dirname(target));
-  const temporary = `${target}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
-  try {
-    fs.writeFileSync(temporary, value, { flag: 'wx', mode: 0o600 });
-    fs.renameSync(temporary, target);
-    fs.chmodSync(target, 0o600);
-  } catch (error) {
-    try {
-      fs.unlinkSync(temporary);
-    } catch {
-      // The temporary file may not exist if creation itself failed.
-    }
-    throw error;
-  }
-}
-
 function endpointIsOffHost(endpoint) {
   let url;
   try {
@@ -165,10 +148,13 @@ function createBackupManager({
 
   const recoveryRoot = path.join(dataRoot, 'recovery');
   const configFile = path.join(recoveryRoot, 's3.json');
-  const credentialsRoot = path.join(recoveryRoot, 'credentials');
-  const accessKeyFile = path.join(credentialsRoot, 's3-access-key-id');
-  const secretKeyFile = path.join(credentialsRoot, 's3-secret-access-key');
+  const credentialsFile = path.join(recoveryRoot, 's3-credentials.foxosenc');
   const archivesRoot = path.join(recoveryRoot, 'archives');
+  const credentialsContext = {
+    purpose: 'foxos-backup-credentials',
+    schemaVersion: 1,
+    adapter: 's3-compatible'
+  };
 
   function loadConfig() {
     if (objectStore && objectStoreConfig) return { ...objectStoreConfig, injected: true };
@@ -183,7 +169,7 @@ function createBackupManager({
   function credentialsAvailable() {
     if (objectStore) return true;
     try {
-      return fs.statSync(accessKeyFile).isFile() && fs.statSync(secretKeyFile).isFile();
+      return fs.statSync(credentialsFile).isFile();
     } catch {
       return false;
     }
@@ -195,8 +181,16 @@ function createBackupManager({
     if (!config || !credentialsAvailable()) {
       throw new BackupError('Off-host backup is not configured', 409, 'off-host-backup-unconfigured');
     }
-    const accessKeyId = fs.readFileSync(accessKeyFile, 'utf8').trim();
-    const secretAccessKey = fs.readFileSync(secretKeyFile, 'utf8').trim();
+    let credentials;
+    try {
+      credentials = JSON.parse(
+        encryptionStore.decryptBuffer(fs.readFileSync(credentialsFile), credentialsContext).toString('utf8')
+      );
+    } catch {
+      throw new BackupError('Off-host backup credentials cannot be decrypted', 409, 'off-host-backup-credentials-unavailable');
+    }
+    const accessKeyId = typeof credentials.accessKeyId === 'string' ? credentials.accessKeyId.trim() : '';
+    const secretAccessKey = typeof credentials.secretAccessKey === 'string' ? credentials.secretAccessKey.trim() : '';
     if (!accessKeyId || !secretAccessKey) {
       throw new BackupError('Off-host backup credentials are empty', 409, 'off-host-backup-unconfigured');
     }
@@ -212,9 +206,13 @@ function createBackupManager({
       throw new BackupError('S3 secret access key is required', 400, 'backup-credential-required');
     }
     ensureDirectory(recoveryRoot);
-    ensureDirectory(credentialsRoot);
-    atomicWriteSecret(accessKeyFile, input.accessKeyId.trim() + '\n');
-    atomicWriteSecret(secretKeyFile, input.secretAccessKey.trim() + '\n');
+    encryptionStore.atomicWriteBuffer(
+      credentialsFile,
+      encryptionStore.encryptBuffer(Buffer.from(JSON.stringify({
+        accessKeyId: input.accessKeyId.trim(),
+        secretAccessKey: input.secretAccessKey.trim()
+      }), 'utf8'), credentialsContext)
+    );
     atomicWriteJson(configFile, {
       schemaVersion: CONFIG_SCHEMA_VERSION,
       adapter: 's3-compatible',
@@ -338,7 +336,7 @@ function createBackupManager({
   ensureDirectory(recoveryRoot);
   return {
     configureS3,
-    paths: { accessKeyFile, archivesRoot, configFile, credentialsRoot, recoveryRoot, secretKeyFile },
+    paths: { archivesRoot, configFile, credentialsFile, recoveryRoot },
     protectArchive,
     status
   };

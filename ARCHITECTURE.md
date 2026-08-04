@@ -169,9 +169,10 @@ the HTTPS path no longer serves the app, then removes the target, retains the
 named volume, restores the original container name and state, and proves the
 source runtime. Failed backup, target or route proof prevents cutover or
 triggers an automatic source restoration attempt, depending on the transaction
-stage. Secret values are decrypted only in memory for comparison and target
-creation; local records, manifests, plans, operations and APIs contain
-references and metadata only. The route record is schema-versioned under the
+stage. Secret values and off-host adapter credentials are decrypted only in
+memory when required; local records, manifests, plans, operations and APIs
+contain encrypted envelopes, references or non-sensitive metadata only. The
+route record is schema-versioned under the
 FoxOS data root and depends only on FoxOS Caddy, FoxOS state and Docker Engine.
 This pilot does not import provider routes or TLS state, databases, write-heavy
 persistence or provider networks, and it does not detach or delete provider

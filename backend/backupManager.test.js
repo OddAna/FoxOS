@@ -108,7 +108,7 @@ test('downloaded ciphertext tampering fails before restore', async () => {
   }
 });
 
-test('S3 configuration stores credentials separately with owner-only permissions', () => {
+test('S3 configuration encrypts credentials separately with owner-only permissions', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-backup-test-'));
   try {
     const manager = createBackupManager({
@@ -126,8 +126,10 @@ test('S3 configuration stores credentials separately with owner-only permissions
     });
 
     assert.equal(status.ready, true);
-    assert.equal(fs.statSync(manager.paths.accessKeyFile).mode & 0o777, 0o600);
-    assert.equal(fs.statSync(manager.paths.secretKeyFile).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(manager.paths.credentialsFile).mode & 0o777, 0o600);
+    const encryptedCredentials = fs.readFileSync(manager.paths.credentialsFile);
+    assert.equal(encryptedCredentials.includes('scoped-access-key'), false);
+    assert.equal(encryptedCredentials.includes('scoped-secret-key'), false);
     const config = fs.readFileSync(manager.paths.configFile, 'utf8');
     assert.equal(config.includes('scoped-access-key'), false);
     assert.equal(config.includes('scoped-secret-key'), false);
