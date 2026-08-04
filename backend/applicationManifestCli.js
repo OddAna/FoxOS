@@ -6,12 +6,14 @@ const {
   createApplicationManifestManager
 } = require('./applicationManifestManager');
 const { createBackupManager } = require('./backupManager');
+const { createComposeDeploymentManager } = require('./composeDeploymentManager');
 const { createDockerClient } = require('./dockerClient');
 const { createEncryptionStore } = require('./encryptionStore');
 const { createImageUpdateManager } = require('./imageUpdateManager');
 const { createResourceRegistry } = require('./resourceRegistry');
 const { createRouteManager } = require('./routeManager');
 const { createSecretManager } = require('./secretManager');
+const { createSourceDeploymentManager } = require('./sourceDeploymentManager');
 
 function flagValue(args, name, fallback = null) {
   const index = args.indexOf(name);
@@ -39,12 +41,26 @@ function main() {
     gatewayHost: process.env.FOXOS_ROUTE_GATEWAY_HOST || 'foxos-gateway'
   });
   const imageUpdateManager = createImageUpdateManager({ dataRoot, dockerRequest: docker.request });
+  const sourceDeploymentManager = createSourceDeploymentManager({
+    dataRoot,
+    dockerRequest: docker.request,
+    dockerBuildRequest: docker.requestBuild
+  });
+  const composeDeploymentManager = createComposeDeploymentManager({
+    dataRoot,
+    dockerRequest: docker.request,
+    dockerBuildRequest: docker.requestBuild,
+    autoStartQueue: false,
+    recoverInterruptedJobs: false
+  });
   const manager = createApplicationManifestManager({
     dataRoot,
     resourceRegistry,
     getEnvironmentRevision: (resourceId) => secretManager.getEnvironmentRevision(resourceId),
     routeStatus: () => routeManager.status(),
     backupStatus: () => backupManager.status(),
+    sourceDeploymentStatus: () => sourceDeploymentManager.status(),
+    composeDeploymentStatus: () => composeDeploymentManager.status(),
     imageUpdateStatus: () => imageUpdateManager.status()
   });
 

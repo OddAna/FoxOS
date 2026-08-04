@@ -575,6 +575,8 @@ function createSourceDeploymentManager({
         immutableCommitRequired: true,
         pinnedBaseImagesRequired: true,
         buildSecretsSupported: false,
+        environmentSupported: false,
+        runtimeSecretsSupported: false,
         buildNetwork: 'none',
         candidateHealthBeforeCutover: true,
         providerAuthorityRequired: false,

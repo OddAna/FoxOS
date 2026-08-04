@@ -11,6 +11,10 @@ const {
 
 const RESOURCE_ID = 'res_' + '1'.repeat(32);
 const DEPENDENCY_ID = 'res_' + '2'.repeat(32);
+const SOURCE_RESOURCE_ID = 'res_' + 'a'.repeat(32);
+const COMPOSE_API_RESOURCE_ID = 'res_' + 'b'.repeat(32);
+const COMPOSE_WEB_RESOURCE_ID = 'res_' + 'c'.repeat(32);
+const COMPOSE_GROUP_RESOURCE_ID = 'res_' + 'd'.repeat(32);
 const IMAGE_DIGEST = 'sha256:' + 'a'.repeat(64);
 
 function resource(overrides = {}) {
@@ -83,11 +87,117 @@ function imageProof(currentResource = resource()) {
   };
 }
 
-function snapshot(currentResource = resource(), relationships = []) {
+function sourceProof(currentResource) {
+  const healthProof = imageProof(currentResource).current.healthProof;
+  const currentOperationId = 'dop_' + 'a'.repeat(32);
+  const revisionId = 'drev_' + 'b'.repeat(32);
+  const source = {
+    adapter: 'public-git-https',
+    repository: 'https://github.com/example/foxos-source-canary.git',
+    ref: 'main',
+    refType: 'branch',
+    commit: 'c'.repeat(40),
+    contextPath: '.',
+    dockerfile: 'Dockerfile',
+    contextDigest: 'sha256:' + 'd'.repeat(64),
+    dockerfileDigest: 'sha256:' + 'e'.repeat(64),
+    fileCount: 3,
+    totalBytes: 4096
+  };
+  return {
+    guarantees: { environmentSupported: false },
+    current: {
+      resourceId: currentResource.id,
+      operationId: currentOperationId,
+      revisionId,
+      containerId: currentResource.runtime.containerId,
+      imageId: currentResource.runtime.imageId,
+      source,
+      healthProof
+    },
+    plans: [{ revisionId, source }],
+    operations: [{
+      operationId: 'dop_' + 'f'.repeat(32),
+      status: 'rolled-back',
+      previous: { operationId: currentOperationId },
+      rollback: { proof: healthProof }
+    }]
+  };
+}
+
+function composeProof(apiResource, webResource) {
+  const healthProof = imageProof(webResource).current.healthProof;
+  const currentOperationId = 'cop_' + '1'.repeat(32);
+  const revisionId = 'crev_' + '2'.repeat(32);
+  const source = {
+    adapter: 'public-git-https',
+    repository: 'https://github.com/example/foxos-compose-canary.git',
+    ref: 'main',
+    refType: 'branch',
+    commit: '3'.repeat(40),
+    manifestPath: 'compose.yaml',
+    manifestDigest: 'sha256:' + '4'.repeat(64),
+    manifestBytes: 2048
+  };
+  const services = [
+    {
+      name: 'api',
+      build: { contextPath: 'api', dockerfile: 'Dockerfile' },
+      dependsOn: [],
+      privatePort: 3000,
+      contextDigest: 'sha256:' + '5'.repeat(64),
+      dockerfileDigest: 'sha256:' + '6'.repeat(64),
+      fileCount: 2,
+      totalBytes: 2048
+    },
+    {
+      name: 'web',
+      build: { contextPath: 'web', dockerfile: 'Dockerfile' },
+      dependsOn: ['api'],
+      privatePort: 8080,
+      contextDigest: 'sha256:' + '7'.repeat(64),
+      dockerfileDigest: 'sha256:' + '8'.repeat(64),
+      fileCount: 2,
+      totalBytes: 2048
+    }
+  ];
+  return {
+    guarantees: { environmentSupported: false },
+    current: {
+      resourceId: COMPOSE_GROUP_RESOURCE_ID,
+      operationId: currentOperationId,
+      revisionId,
+      services: [
+        { name: 'api', containerId: apiResource.runtime.containerId, imageId: apiResource.runtime.imageId },
+        { name: 'web', containerId: webResource.runtime.containerId, imageId: webResource.runtime.imageId }
+      ],
+      startOrder: ['api', 'web'],
+      ingressService: 'web',
+      source,
+      healthProof
+    },
+    plans: [{
+      revisionId,
+      source,
+      workflow: {
+        graphDigest: 'sha256:' + '9'.repeat(64),
+        graph: { ingressService: 'web', services, startOrder: ['api', 'web'] }
+      }
+    }],
+    operations: [{
+      operationId: 'cop_' + 'a'.repeat(32),
+      status: 'rolled-back',
+      previous: { operationId: currentOperationId },
+      rollback: { proof: healthProof }
+    }]
+  };
+}
+
+function snapshot(currentResources = [resource()], relationships = []) {
   return {
     schemaVersion: 1,
     snapshotId: 'snap_' + '6'.repeat(24),
-    resources: [currentResource],
+    resources: currentResources,
     relationships,
     inventory: { images: [], networks: [], volumes: [] }
   };
@@ -95,22 +205,25 @@ function snapshot(currentResource = resource(), relationships = []) {
 
 function harness(options = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-app-manifest-'));
-  let currentResource = options.currentResource || resource();
+  let currentResources = options.currentResources || [options.currentResource || resource()];
   let currentRelationships = options.relationships || [];
   const manager = createApplicationManifestManager({
     dataRoot: root,
-    resourceRegistry: { getLatest: () => snapshot(currentResource, currentRelationships) },
+    resourceRegistry: { getLatest: () => snapshot(currentResources, currentRelationships) },
     getEnvironmentRevision: options.getEnvironmentRevision || (() => null),
     routeStatus: options.routeStatus || (() => ({ configured: false, routes: [] })),
     backupStatus: options.backupStatus || (() => ({ configured: false, ready: false, offHost: false, adapter: null })),
-    imageUpdateStatus: options.imageUpdateStatus || (() => imageProof(currentResource)),
+    sourceDeploymentStatus: options.sourceDeploymentStatus || (() => ({ current: null, plans: [], operations: [] })),
+    composeDeploymentStatus: options.composeDeploymentStatus || (() => ({ current: null, plans: [], operations: [] })),
+    imageUpdateStatus: options.imageUpdateStatus || (() => imageProof(currentResources[0])),
     clock: () => new Date('2026-08-04T20:30:00.000Z'),
     randomUUID: () => '00000000-0000-4000-8000-000000000007'
   });
   return {
     manager,
     root,
-    setResource: (value) => { currentResource = value; },
+    setResource: (value) => { currentResources = [value, ...currentResources.slice(1)]; },
+    setResources: (value) => { currentResources = value; },
     setRelationships: (value) => { currentRelationships = value; }
   };
 }
@@ -183,16 +296,162 @@ test('external applications become redacted blocked import drafts and cannot be 
   assert.equal(blockerCodes.includes('external-provider-authority'), true);
   assert.equal(blockerCodes.includes('foxos-route-missing'), true);
   assert.equal(blockerCodes.includes('restore-proof-missing'), true);
-  assert.equal(blockerCodes.includes('dependency-manifest-missing:' + DEPENDENCY_ID), true);
+  assert.equal(blockerCodes.includes('dependency-manifest-missing:' + DEPENDENCY_ID), false);
   assert.equal(blockerCodes.includes('runtime-resource-limits-missing'), true);
   assert.equal(serialized.includes(secretValue), false);
   assert.equal(draft.desired.environment.ordinaryNames[0], 'SITE_TITLE');
   assert.equal(draft.provenance.importedFrom, 'coolify');
   assert.equal(draft.provenance.providerIdentifiersRequired, false);
+  assert.equal(draft.desired.dependencies[0].observed, true);
+  assert.equal(draft.desired.dependencies[0].required, false);
   assert.throws(
     () => manager.finalizeDraft(draft.draftId, draft.confirmation),
     (error) => error.code === 'manifest-blocked'
   );
+
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('a FoxOS public Git build revision becomes the immutable application source', () => {
+  const sourceResource = resource({
+    id: SOURCE_RESOURCE_ID,
+    name: 'foxos-deployment-lab',
+    runtime: {
+      ...resource().runtime,
+      containerId: 'a'.repeat(64),
+      image: 'foxos-deployment-lab:drev-test',
+      imageId: 'sha256:' + 'c'.repeat(64),
+      environmentVariableCount: 3
+    }
+  });
+  const state = sourceProof(sourceResource);
+  const { manager, root } = harness({
+    currentResources: [sourceResource],
+    sourceDeploymentStatus: () => state,
+    imageUpdateStatus: () => ({ current: null, operations: [] })
+  });
+
+  const draft = manager.createDraft({
+    resourceId: SOURCE_RESOURCE_ID,
+    confirmation: PLAN_APPLICATION_MANIFEST_CONFIRMATION
+  });
+  assert.equal(draft.gates.status, 'ready');
+  assert.equal(draft.desired.source.type, 'foxos-source-build-revision');
+  assert.equal(draft.desired.source.commit, 'c'.repeat(40));
+  assert.equal(draft.desired.source.context.digest, 'sha256:' + 'd'.repeat(64));
+  assert.equal(draft.desired.source.build.imageId, sourceResource.runtime.imageId);
+  assert.equal(draft.desired.environment.sourceDefaultVariableCount, 3);
+  assert.equal(draft.desired.environment.managedVariableCount, 0);
+  assert.equal(draft.evidence.sourceAuthority, 'foxos-source-deployment');
+  assert.equal(draft.evidence.updateRollbackProof.verified, true);
+  assert.equal(manager.finalizeDraft(draft.draftId, draft.confirmation).lifecycle, 'foxos-managed');
+
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('corrupted FoxOS source revision evidence fails closed', () => {
+  const sourceResource = resource({
+    id: SOURCE_RESOURCE_ID,
+    name: 'foxos-deployment-lab',
+    runtime: {
+      ...resource().runtime,
+      containerId: 'a'.repeat(64),
+      image: 'foxos-deployment-lab:drev-test',
+      imageId: 'sha256:' + 'c'.repeat(64),
+      environmentVariableCount: 0
+    }
+  });
+  const state = sourceProof(sourceResource);
+  state.plans[0].source.contextDigest = null;
+  const { manager, root } = harness({
+    currentResources: [sourceResource],
+    sourceDeploymentStatus: () => state,
+    imageUpdateStatus: () => ({ current: null, operations: [] })
+  });
+
+  const draft = manager.createDraft({
+    resourceId: SOURCE_RESOURCE_ID,
+    confirmation: PLAN_APPLICATION_MANIFEST_CONFIRMATION
+  });
+  assert.equal(draft.gates.status, 'blocked');
+  assert.equal(
+    draft.gates.blockers.some((blocker) => blocker.code === 'foxos-source-revision-missing'),
+    true
+  );
+  assert.throws(
+    () => manager.finalizeDraft(draft.draftId, draft.confirmation),
+    (error) => error.code === 'manifest-blocked'
+  );
+
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('Compose service manifests share one immutable graph and enforce directed dependencies only', () => {
+  const apiResource = resource({
+    id: COMPOSE_API_RESOURCE_ID,
+    name: 'foxos-compose-lab-api',
+    runtime: {
+      ...resource().runtime,
+      containerId: 'b'.repeat(64),
+      image: 'foxos-compose-lab-api:crev-test',
+      imageId: 'sha256:' + 'd'.repeat(64),
+      environmentVariableCount: 2
+    },
+    ports: [{ privatePort: 3000, protocol: 'tcp', hostIp: null, hostPort: null }]
+  });
+  const webResource = resource({
+    id: COMPOSE_WEB_RESOURCE_ID,
+    name: 'foxos-compose-lab-web',
+    runtime: {
+      ...resource().runtime,
+      containerId: 'c'.repeat(64),
+      image: 'foxos-compose-lab-web:crev-test',
+      imageId: 'sha256:' + 'e'.repeat(64),
+      environmentVariableCount: 2
+    }
+  });
+  const state = composeProof(apiResource, webResource);
+  const sharedNetwork = {
+    id: 'rel_' + 'b'.repeat(24),
+    type: 'shared-network',
+    resourceIds: [COMPOSE_API_RESOURCE_ID, COMPOSE_WEB_RESOURCE_ID]
+  };
+  const { manager, root } = harness({
+    currentResources: [apiResource, webResource],
+    relationships: [sharedNetwork],
+    composeDeploymentStatus: () => state,
+    imageUpdateStatus: () => ({ current: null, operations: [] })
+  });
+
+  const apiDraft = manager.createDraft({
+    resourceId: COMPOSE_API_RESOURCE_ID,
+    confirmation: PLAN_APPLICATION_MANIFEST_CONFIRMATION
+  });
+  assert.equal(apiDraft.gates.status, 'ready');
+  assert.equal(apiDraft.desired.source.type, 'foxos-compose-deployment-revision');
+  assert.equal(apiDraft.desired.source.graph.services.length, 2);
+  assert.equal(apiDraft.desired.dependencies.length, 1);
+  assert.equal(apiDraft.desired.dependencies[0].required, false);
+  manager.finalizeDraft(apiDraft.draftId, apiDraft.confirmation);
+
+  const webDraft = manager.createDraft({
+    resourceId: COMPOSE_WEB_RESOURCE_ID,
+    confirmation: PLAN_APPLICATION_MANIFEST_CONFIRMATION
+  });
+  const directed = webDraft.desired.dependencies.find((dependency) => dependency.type === 'compose-depends-on');
+  assert.equal(webDraft.gates.status, 'ready');
+  assert.equal(directed.sourceResourceId, COMPOSE_WEB_RESOURCE_ID);
+  assert.equal(directed.targetResourceId, COMPOSE_API_RESOURCE_ID);
+  assert.equal(directed.required, true);
+  assert.equal(webDraft.desired.environment.sourceDefaultVariableCount, 2);
+  assert.equal(manager.finalizeDraft(webDraft.draftId, webDraft.confirmation).lifecycle, 'foxos-managed');
+  assert.equal(manager.status().summary.finalized, 2);
+  assert.deepEqual(manager.status().guarantees.sourceTypes, [
+    'oci-image',
+    'foxos-source-build-revision',
+    'foxos-compose-deployment-revision'
+  ]);
+  assert.equal(manager.status().guarantees.sharedNetworkImpliesDependency, false);
 
   fs.rmSync(root, { recursive: true, force: true });
 });

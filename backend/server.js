@@ -432,6 +432,8 @@ const applicationManifestManager = createApplicationManifestManager({
   getEnvironmentRevision: (resourceId) => secretManager.getEnvironmentRevision(resourceId),
   routeStatus: () => routeManager.status(),
   backupStatus: () => backupManager.status(),
+  sourceDeploymentStatus: () => sourceDeploymentManager.status(),
+  composeDeploymentStatus: () => composeDeploymentManager.status(),
   imageUpdateStatus: () => imageUpdateManager.status()
 });
 

@@ -295,18 +295,27 @@ production workloads or Store update controls.
 ### Implemented boundary: Application Manifest v1
 
 Application Manifest v1 joins the previously separate resource, environment,
-secret-reference, route, recovery and image-operation records into one local
-desired-state document per stable resource ID. Docker, Compose and Coolify data
-remain observed inputs and provenance; no provider identifier is required by
-the desired document.
+secret-reference, route, recovery, image-operation, source-deployment and
+Compose-deployment records into one local desired-state document per stable
+resource ID. Docker, Compose and Coolify data remain observed inputs and
+provenance; no provider identifier is required by the desired document.
 
 The compiler reads the latest registry snapshot and FoxOS-owned records. It
-persists an owner-only import draft containing an immutable OCI reference,
-runtime state and limits, environment revision reference, encrypted secret
-metadata, persistence policy, FoxOS route/TLS references, relationships and
+persists an owner-only import draft containing one immutable source union:
+repository-digest OCI, the fixed public-Git build revision, or a service within
+the fixed strict Compose graph revision. The same document includes runtime
+state and limits, environment revision reference, encrypted secret metadata,
+persistence policy, FoxOS route/TLS references, dependencies and
 health/update/rollback evidence. Ordinary environment values remain in the
 environment revision; secret values remain encrypted and neither appears in
 the manifest API or files.
+
+Every Compose service retains a separate stable resource ID and embeds the same
+immutable graph digest, manifest digest, service build inputs and current image
+IDs. Only normalized `depends_on` edges are required manifest dependencies and
+are finalized in dependency order. Shared Docker networks, volumes and provider
+projects remain observed relationships; they do not invent dependency direction
+or imply ownership.
 
 Import drafting never writes to Docker or a provider. Finalization also makes
 no runtime change: it is allowed only for an already FoxOS-managed resource
