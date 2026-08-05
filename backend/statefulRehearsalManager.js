@@ -1,6 +1,5 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
-const http = require('node:http');
 const path = require('node:path');
 const { tarContentDigest } = require('./adoptionManager');
 const {
@@ -9,6 +8,7 @@ const {
   statefulRehearsalResourceFingerprint
 } = require('./applicationManifestManager');
 const { atomicWriteJson } = require('./resourceRegistry');
+const { defaultHostProbe, validateHealthPath } = require('./sourceDeploymentManager');
 
 const STATEFUL_REHEARSAL_SCHEMA_VERSION = 1;
 const PLAN_STATEFUL_REHEARSAL_CONFIRMATION = 'PLAN STATEFUL REHEARSAL';
@@ -86,37 +86,22 @@ function runConfirmation(planId) {
 }
 
 function validateHttpHealthPath(value) {
-  const healthPath = String(value || '');
-  if (
-    healthPath.length < 1 || healthPath.length > 256 ||
-    !/^\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$/.test(healthPath) ||
-    healthPath.split('/').includes('..')
-  ) {
+  if (typeof value !== 'string' || !value.length) {
     throw new StatefulRehearsalError(
       'HTTP health path must be a bounded absolute path without query, fragment or traversal',
       400,
       'invalid-http-health-path'
     );
   }
-  return healthPath;
-}
-
-function probeLoopbackHttp({ port, healthPath, timeoutMs = 3000 }) {
-  return new Promise((resolve, reject) => {
-    const request = http.get({
-      hostname: '127.0.0.1',
-      port,
-      path: healthPath,
-      method: 'GET',
-      headers: { Host: 'localhost', Connection: 'close' },
-      timeout: timeoutMs
-    }, (response) => {
-      response.resume();
-      resolve({ statusCode: response.statusCode || 0 });
-    });
-    request.on('timeout', () => request.destroy(new Error('Loopback HTTP health probe timed out')));
-    request.on('error', reject);
-  });
+  try {
+    return validateHealthPath(value);
+  } catch {
+    throw new StatefulRehearsalError(
+      'HTTP health path must be a bounded absolute path without query, fragment or traversal',
+      400,
+      'invalid-http-health-path'
+    );
+  }
 }
 
 function processStartToken(pid) {
@@ -230,7 +215,7 @@ function createStatefulRehearsalManager({
   resourceRegistry,
   encryptionStore,
   secretManager,
-  httpProbe = probeLoopbackHttp,
+  httpProbe = defaultHostProbe,
   clock = () => new Date(),
   randomUUID = () => crypto.randomUUID(),
   wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))
