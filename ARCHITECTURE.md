@@ -422,10 +422,12 @@ Adapter proof objects are allowlisted before persistence so an unexpected
 credential, environment value or response header cannot leak into plans,
 operations, APIs or CLI output.
 
-The production server intentionally constructs this manager without execution
-adapters or an approval verifier. Its execution gate reports `sealed`, startup
-never replays an interrupted operation, and only authenticated status/plan/get
-review endpoints exist. There is no run or approve endpoint.
+The initial production-server milestone constructed this manager without
+execution adapters or an approval verifier. At that boundary its execution gate
+reported `sealed`, startup never replayed an interrupted operation, and only
+authenticated status/plan/get review endpoints existed. The later run
+coordinator below adds the one-click orchestration and in-memory approval path;
+the general execution adapter remains sealed.
 
 The first real adapter is restricted to an explicitly confirmed disposable
 Docker lab. It pulls one reviewed immutable image digest, creates a separately
@@ -668,15 +670,32 @@ plan, registry snapshot, resource, manifest revision, evidence fingerprint and
 execution contract. Registry or contract drift makes it stale.
 
 The scan screen does not call an evidence-incomplete candidate ready to run. It
-calls the safe read-only audit class eligible for migration preparation, allows
-that preparation set to be saved server-side, and keeps unresolved contract
-evidence visible in the same detail page. Execution readiness and approval
-remain separate and false.
+calls the safe read-only audit class eligible for migration preparation and
+keeps unresolved contract evidence visible in the same detail page. Checkbox
+state alone is not authority and is not a terminal user action.
 
-This boundary remains plan-and-review-only. A certificate adapter selection is
-intent, not a credential or active provider binding. Production still receives
-no execution adapter or approval verifier, exposes no run or approve endpoint
-and cannot mutate Docker, routes, DNS, TLS or provider state. Burak's later
-authorization is required before a short-lived one-time execution approval or
-any action affecting an existing workload, traffic, domain or provider
-authority is added.
+### Implemented boundary: one-click migration run coordinator
+
+The authenticated Settings action is now `Geçişi Başlat`, not a separate
+selection-save action. One request atomically persists the exact selected IDs as
+server-local intent, binds them to the whole-server plan and current Registry
+snapshot, and creates an owner-only run under `.foxos-data/migration-runs/`.
+Snapshot drift stops the run before any runtime action. Every selected resource
+is prepared and preflighted before the first candidate can be created, so a
+blocked member prevents partial group execution.
+
+Only explicit required-dependency edges may order selected resources; shared
+networks and provider projects remain non-ordering observations. Once all
+resources are ready, execution is serial. Each resource receives a just-in-time,
+short-lived, one-use grant bound to the authenticated FoxOS session, exact plan,
+resource and evidence fingerprint. The raw grant and session token stay in
+memory and are never returned or persisted. The existing stateless transaction
+retains zero-unavailable-sample health gates and automatic rollback.
+
+This adds the real start/run orchestration surface without pretending missing
+adapters are complete. Production still receives no general Docker/route/TLS
+execution adapter. Therefore current evidence-incomplete or adapter-blocked
+resources finish the preflight run as `blocked`, with zero candidate, route or
+traffic mutation. There is no separate approve endpoint, source-stop,
+provider-detach or destructive-cleanup path. A certificate adapter selection is
+still intent, not a credential or active provider binding.

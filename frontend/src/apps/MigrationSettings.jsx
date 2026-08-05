@@ -112,6 +112,19 @@ const AVAILABILITY_LABELS = {
   'unknown-blocked': 'Belirsiz — engelli'
 };
 
+const ACTIVE_RUN_STATUSES = new Set(['queued', 'preparing', 'executing']);
+
+const RUN_STATUS_LABELS = {
+  queued: 'Sıraya alındı',
+  preparing: 'Ön kontroller yapılıyor',
+  executing: 'Geçiş yürütülüyor',
+  completed: 'Tamamlandı',
+  blocked: 'Güvenlik kapısında durdu',
+  failed: 'Başarısız — sıra durduruldu',
+  'interrupted-before-execution': 'Çalıştırılmadan kesildi',
+  'interrupted-recovery-required': 'Kurtarma incelemesi gerekli'
+};
+
 const CERTIFICATE_ADAPTER_LABELS = {
   'acme-http-01': 'ACME HTTP-01',
   'acme-dns-01': 'ACME DNS-01',
@@ -230,7 +243,8 @@ const MigrationSettings = () => {
   const [detailResourceId, setDetailResourceId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [latestRun, setLatestRun] = useState(null);
   const [message, setMessage] = useState(null);
   const [reviewPlan, setReviewPlan] = useState(null);
   const [reviewStatus, setReviewStatus] = useState(null);
@@ -239,7 +253,7 @@ const MigrationSettings = () => {
   const [reviewSaving, setReviewSaving] = useState(false);
   const [reviewMessage, setReviewMessage] = useState(null);
 
-  const applyLoadedState = useCallback((registryPayload, orchestratorPayload, selectionPayload) => {
+  const applyLoadedState = useCallback((registryPayload, orchestratorPayload, selectionPayload, runsPayload) => {
     const currentSnapshot = registryPayload.snapshot || null;
     const latestPlan = orchestratorPayload.latest || null;
     const currentPlan = currentSnapshot && latestPlan?.sourceSnapshotId === currentSnapshot.snapshotId
@@ -256,6 +270,7 @@ const MigrationSettings = () => {
     setPlan(currentPlan);
     setSelectionStatus(selectionPayload);
     setSelectedIds(selectionMatches ? currentSelection.selectedResourceIds : []);
+    setLatestRun(runsPayload.latest || null);
     setDetailResourceId(null);
   }, []);
 
@@ -263,17 +278,19 @@ const MigrationSettings = () => {
     setLoading(true);
     setMessage(null);
     try {
-      const [registryResponse, orchestratorResponse, selectionResponse] = await Promise.all([
+      const [registryResponse, orchestratorResponse, selectionResponse, runsResponse] = await Promise.all([
         apiFetch('/api/resources'),
         apiFetch('/api/migration-orchestrator'),
-        apiFetch('/api/migration-selections/current')
+        apiFetch('/api/migration-selections/current'),
+        apiFetch('/api/migration-runs')
       ]);
-      const [registryPayload, orchestratorPayload, selectionPayload] = await Promise.all([
+      const [registryPayload, orchestratorPayload, selectionPayload, runsPayload] = await Promise.all([
         registryResponse.json(),
         orchestratorResponse.json(),
-        selectionResponse.json()
+        selectionResponse.json(),
+        runsResponse.json()
       ]);
-      applyLoadedState(registryPayload, orchestratorPayload, selectionPayload);
+      applyLoadedState(registryPayload, orchestratorPayload, selectionPayload, runsPayload);
     } catch (error) {
       setMessage({ type: 'error', text: error.message });
     } finally {
@@ -284,6 +301,48 @@ const MigrationSettings = () => {
   useEffect(() => {
     load();
   }, [load]);
+
+  const latestRunId = latestRun?.runId;
+  const latestRunStatus = latestRun?.status;
+
+  useEffect(() => {
+    if (!latestRunId || !ACTIVE_RUN_STATUSES.has(latestRunStatus)) return undefined;
+    let active = true;
+    const poll = async () => {
+      try {
+        const response = await apiFetch(`/api/migration-runs/${latestRunId}`);
+        const payload = await response.json();
+        if (!active) return;
+        setLatestRun(payload.run);
+        if (!ACTIVE_RUN_STATUSES.has(payload.run.status)) {
+          if (payload.run.status === 'completed') {
+            setMessage({
+              type: 'success',
+              text: `${payload.run.summary.completed} kaynak doğrulanmış olarak FoxOS trafiğine geçirildi.`
+            });
+          } else if (payload.run.status === 'blocked') {
+            setMessage({
+              type: 'error',
+              text: `Geçiş güvenlik kapısında durdu. ${payload.run.summary.blocked} kaynakta tamamlanması gereken önkoşul var; hiçbir kaynak çalıştırılmadı.`
+            });
+          } else {
+            setMessage({
+              type: 'error',
+              text: 'Geçiş sırası durduruldu. Ayrıntılı işlem kaydı sunucuda korundu.'
+            });
+          }
+        }
+      } catch (error) {
+        if (active) setMessage({ type: 'error', text: error.message });
+      }
+    };
+    const timer = window.setInterval(poll, 1000);
+    poll();
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [latestRunId, latestRunStatus]);
 
   useEffect(() => {
     const scrollContainer = rootRef.current?.closest('[data-settings-content]');
@@ -339,11 +398,6 @@ const MigrationSettings = () => {
     .filter((resource) => reviewState(resource) === 'ready')
     .map((resource) => resource.resourceId), [resources]);
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
-  const savedIds = selectionStatus?.current && !selectionStatus.stale &&
-    selectionStatus.current.serverPlanId === plan?.planId
-    ? selectionStatus.current.selectedResourceIds
-    : [];
-  const selectionChanged = JSON.stringify([...selectedIds].sort()) !== JSON.stringify([...savedIds].sort());
   const counts = useMemo(() => resources.reduce((result, resource) => {
     const state = reviewState(resource);
     result[state] += 1;
@@ -364,10 +418,13 @@ const MigrationSettings = () => {
       const planPayload = await planResponse.json();
       const selectionResponse = await apiFetch('/api/migration-selections/current');
       const selectionPayload = await selectionResponse.json();
+      const runsResponse = await apiFetch('/api/migration-runs');
+      const runsPayload = await runsResponse.json();
       applyLoadedState(
         { snapshot: scanPayload.snapshot },
         { latest: planPayload.plan },
-        selectionPayload
+        selectionPayload,
+        runsPayload
       );
       setMessage({
         type: 'success',
@@ -393,33 +450,32 @@ const MigrationSettings = () => {
     setMessage(null);
   };
 
-  const saveSelection = async () => {
+  const startMigration = async () => {
     if (!plan) return;
-    setSaving(true);
+    setStarting(true);
     setMessage(null);
     try {
-      const response = await apiFetch('/api/migration-selections/current', {
-        method: 'PUT',
+      const response = await apiFetch('/api/migration-runs', {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           serverPlanId: plan.planId,
           resourceIds: selectedIds,
-          confirmation: 'SAVE MIGRATION SELECTION'
+          confirmation: 'START SERVER MIGRATION'
         })
       });
       const payload = await response.json();
-      setSelectionStatus(payload.status);
-      setSelectedIds(payload.selection.selectedResourceIds);
+      setLatestRun(payload.run);
+      const selectionResponse = await apiFetch('/api/migration-selections/current');
+      setSelectionStatus(await selectionResponse.json());
       setMessage({
         type: 'success',
-        text: selectedIds.length
-          ? `${selectedIds.length} kaynak inceleme planına eklendi. Geçiş başlatılmadı.`
-          : 'Kaydedilmiş inceleme seçimi temizlendi. Geçiş başlatılmadı.'
+        text: `${selectedIds.length} kaynak için geçiş işlemi başlatıldı. Değişmez ön kontroller tamamlanmadan hiçbir trafik değiştirilmeyecek.`
       });
     } catch (error) {
       setMessage({ type: 'error', text: error.message });
     } finally {
-      setSaving(false);
+      setStarting(false);
     }
   };
 
@@ -817,18 +873,23 @@ const MigrationSettings = () => {
           </section>
 
           <section style={{ padding: '26px 0 0 0' }}>
-            <h2 style={{ margin: '0 0 6px 0', fontSize: '16px' }}>İnceleme Seçimi</h2>
+            <h2 style={{ margin: '0 0 6px 0', fontSize: '16px' }}>Geçiş</h2>
             <div style={{ marginBottom: '14px', color: '#888', fontSize: '13px', lineHeight: 1.5 }}>
-              Seçim bu tarama sonucuna bağlı olarak sunucuda saklanır. Kaydetmek geçişi başlatmaz.
+              Seçilen kaynakların değişmez ön kontrolleri birlikte tamamlanır; ardından uygun kaynaklar sağlık ve geri alma doğrulamasıyla sırayla geçirilir.
             </div>
+            {latestRun && (
+              <div style={{ marginBottom: '14px', color: '#888', fontSize: '12px' }}>
+                Son işlem: {RUN_STATUS_LABELS[latestRun.status] || latestRun.status} · {latestRun.summary?.completed || 0}/{latestRun.summary?.selected || 0} tamamlandı
+              </div>
+            )}
             <button
               type="button"
-              onClick={saveSelection}
-              disabled={saving || !selectionChanged}
-              style={{ ...PRIMARY_BUTTON_STYLE, cursor: saving || !selectionChanged ? 'not-allowed' : 'pointer', opacity: saving || !selectionChanged ? 0.5 : 1 }}
+              onClick={startMigration}
+              disabled={starting || !selectedIds.length || ACTIVE_RUN_STATUSES.has(latestRun?.status)}
+              style={{ ...PRIMARY_BUTTON_STYLE, cursor: starting || !selectedIds.length || ACTIVE_RUN_STATUSES.has(latestRun?.status) ? 'not-allowed' : 'pointer', opacity: starting || !selectedIds.length || ACTIVE_RUN_STATUSES.has(latestRun?.status) ? 0.5 : 1 }}
             >
-              {saving ? <Loader2 size={15} className="spin" /> : <CheckCircle2 size={15} />}
-              {selectedIds.length ? 'Seçilenleri Kaydet' : 'Kaydedilmiş Seçimi Temizle'}
+              {starting || ACTIVE_RUN_STATUSES.has(latestRun?.status) ? <Loader2 size={15} className="spin" /> : <CheckCircle2 size={15} />}
+              {starting || ACTIVE_RUN_STATUSES.has(latestRun?.status) ? 'Geçiş Başlatılıyor…' : 'Geçişi Başlat'}
             </button>
           </section>
         </>

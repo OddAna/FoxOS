@@ -65,7 +65,7 @@ target blocks only adoption/migration operations that require restore proof.
 - [x] Expose the read-only whole-server scan in the existing Settings window
   without changing its visual language; keep every repeated instance separate,
   show class/authority/routes/storage/blockers, and persist only eligible
-  snapshot-bound review selections with no migration action.
+  snapshot-bound intent on the server.
 
 ### Milestone 2 progress: Disposable Adoption v1
 
@@ -200,7 +200,8 @@ target blocks only adoption/migration operations that require restore proof.
   switch atomically under a continuous availability/identity probe, preserve
   exact source runtime continuity, roll back explicitly, inject one unavailable
   sample, roll back automatically and remove every operation-owned object.
-  Production construction remains sealed and no existing workload is migrated.
+  Production execution remained sealed at this proof milestone and no existing
+  workload was migrated.
 - [x] Compile a normal evidence-ready stateless OCI Application Manifest into a
   deterministic production candidate specification and arbitrary FoxOS-owned
   domain/path/TLS authority review contract. Bind every observed route to its
@@ -209,8 +210,8 @@ target blocks only adoption/migration operations that require restore proof.
   and DNS implementations replaceable.
 - [x] Keep the authenticated API and standalone CLI on the same read-only
   planning/compiler context. Status inspection stays lazy and does not contact
-  Docker, create encryption state, recover operations or expose an execution
-  adapter, approval endpoint or run action.
+  Docker, create encryption state or recover operations. The later UI run
+  coordinator does not change this standalone CLI/planning boundary.
 - [x] Add the read-only Settings scan and server-authoritative selection layer:
   classify all observed resources, distinguish safe stateless preparation
   candidates from evidence-complete execution readiness, allow candidates to be
@@ -222,10 +223,16 @@ target blocks only adoption/migration operations that require restore proof.
   only the allowlisted configuration on the server, bind it to the exact
   snapshot/resource/manifest/execution contract, invalidate it on drift and
   keep the production execution gate sealed.
-- [ ] After Burak separately authorizes production execution, add a short-lived
-  one-time approval bound to the complete reviewed contract. Only then may a
-  production Docker/route adapter be injected and a run action be exposed;
-  source stop, provider detach and destructive cleanup remain separate gates.
+- [x] Replace the user-visible selection-save action with one authenticated
+  `Geçişi Başlat` run. Persist/revalidate its exact selection and snapshot
+  internally, preflight every selected member before mutation, order only by
+  explicit dependencies, execute ready resources serially, and issue a
+  short-lived one-time in-memory grant per resource. Blocked runs execute zero
+  resources; source stop, provider detach and destructive cleanup remain absent.
+- [ ] Implement and inject the provider-neutral production Docker/route/TLS
+  adapter. The run coordinator and approval path now exist, but current live
+  resources must remain preflight-blocked until candidate creation, arbitrary
+  FoxOS route/TLS switching and rollback are proven for their real class.
 - [ ] Expand the implemented disposable dry-run, conflict detection, verified
   cutover and reversible rollback to real application classes one safety gate at
   a time.
