@@ -492,11 +492,12 @@ test('a matching stateful rehearsal closes only the local restore blocker while 
       pauseState: 'unpaused',
       pauseDurationMs: 120,
       stopped: false,
-      recreated: false
+      recreated: false,
+      healthAfterProof: { status: 'running', paused: false, health: null }
     },
     backups: [{ authenticated: true, plaintextStored: false, offHost: false }],
     restore: { verified: true, volumes: [{ verified: true }] },
-    candidate: { health: 'healthy', removedAfterProof: true },
+    candidate: { health: 'healthy', healthMode: 'loopback-http', removedAfterProof: true },
     cleanup: { completed: true },
     guarantees: {
       routeMutated: false,

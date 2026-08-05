@@ -402,11 +402,14 @@ The stateful-rehearsal manager is the first production-resource mutation that
 addresses one persistence gate without taking workload authority. It accepts
 only a running, fully inspected, provider-owned `application` classified as
 `stateful`, with one to four writable named volumes, an existing healthy Docker
-health check, a captured FoxOS environment revision and an explicitly selected
-observed TCP port. Every named volume must be classified as persistent or
-empty-ephemeral. Databases, bind/unknown/read-only mounts, protected resources,
-custom command/entrypoint/user/workdir overrides and privileged or host-level
-runtime access are outside this boundary.
+health check or an explicit bounded loopback HTTP path, a captured FoxOS
+environment revision and an explicitly selected observed TCP port. The HTTP
+fallback requests only the temporary candidate's Docker-assigned
+`127.0.0.1` port; it accepts neither arbitrary hosts nor commands. Every named
+volume must be classified as persistent or empty-ephemeral. Databases,
+bind/unknown/read-only mounts, protected resources, custom
+command/entrypoint/user/workdir overrides and privileged or host-level runtime
+access are outside this boundary.
 
 Planning is read-only and stores resource/runtime/environment/health
 fingerprints plus names and references, never environment or secret values. An

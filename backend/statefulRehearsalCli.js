@@ -52,6 +52,7 @@ async function main() {
         `Usage: statefulRehearsalCli.js plan <resource-id> ` +
         `--persistent-volume <name> [--persistent-volume <name>] ` +
         `[--empty-volume <name>] --private-port <port> ` +
+        `[--health-http-path </path>] ` +
         `--confirm "${PLAN_STATEFUL_REHEARSAL_CONFIRMATION}"`
       );
     }
@@ -60,6 +61,7 @@ async function main() {
       persistentVolumes: flagValues(args, '--persistent-volume'),
       emptyVolumes: flagValues(args, '--empty-volume'),
       privatePort: flagValue(args, '--private-port'),
+      httpHealthPath: flagValue(args, '--health-http-path'),
       confirmation: flagValue(args, '--confirm')
     }));
   }

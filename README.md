@@ -601,8 +601,11 @@ The first real stateful safety transaction is deliberately narrow. It accepts
 only a running, fully inspected, provider-owned application whose writable
 mounts are one to four named Docker volumes. The operator must classify every
 volume as either persistent or empty-ephemeral and must identify an observed
-TCP application port. Bind mounts, databases, protected resources, custom
-command/user overrides, privileged or host access and unhealthy sources fail
+TCP application port. A source with Docker health must currently be healthy. If
+the image has no Docker health definition, the operator must provide a bounded
+absolute HTTP path that FoxOS will request only through the temporary
+candidate's dynamic loopback binding. Bind mounts, databases, protected
+resources, custom command/user overrides and privileged or host access fail
 closed.
 
 Planning is Docker `GET` only. Running requires a plan-specific exact
@@ -627,6 +630,7 @@ docker compose exec -T foxos node /app/statefulRehearsalCli.js plan RESOURCE_ID 
   --persistent-volume APP_DATA_VOLUME \
   --empty-volume OPTIONAL_EMPTY_SOCKET_VOLUME \
   --private-port 8090 \
+  --health-http-path / \
   --confirm "PLAN STATEFUL REHEARSAL"
 
 # Use the returned plan ID and its exact confirmation.
@@ -635,6 +639,10 @@ docker compose exec -T foxos node /app/statefulRehearsalCli.js run PLAN_ID \
 
 docker compose exec -T foxos node /app/statefulRehearsalCli.js status
 ```
+
+Omit `--health-http-path` when the source already has a Docker healthcheck. The
+fallback accepts only a path without a query, fragment or traversal; FoxOS does
+not execute an operator-provided command or request an arbitrary host.
 
 This proves a same-host restore and closes only the Application Manifest's local
 restore-test blocker. The encrypted archive and master key are on the same

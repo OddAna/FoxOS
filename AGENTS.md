@@ -83,8 +83,9 @@
   persistent/empty classification for every writable named volume, exact plan
   and run confirmations, pre-pause drift checks, persisted pause intent,
   immediate unpause, authenticated local encryption, exact-image temporary
-  restore, internal-network/dynamic-loopback candidate health proof, source
-  health re-proof and exact cleanup. It must not accept databases, bind mounts,
+  restore, existing healthy Docker health or an explicit bounded candidate-only
+  loopback HTTP path, source liveness/health re-proof and exact cleanup. It must
+  not accept arbitrary health hosts or operator commands, databases, bind mounts,
   unsafe runtime overrides or protected resources; stop/recreate the source;
   change routes/traffic/provider state; detach authority; claim off-host
   recovery; or replay an interrupted operation. Do not widen this contract

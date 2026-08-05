@@ -362,12 +362,16 @@ function statefulRestoreProofDescriptor(operation, rehearsalResourceFingerprintV
     operation.source.imageId !== resource.runtime.imageId ||
     operation.source.stopped !== false || operation.source.recreated !== false ||
     operation.source.pauseState !== 'unpaused' ||
+    !operation.source.healthAfterProof || operation.source.healthAfterProof.status !== 'running' ||
+    operation.source.healthAfterProof.paused !== false ||
     !operation.restore || operation.restore.verified !== true ||
     !Array.isArray(operation.backups) || operation.backups.length < 1 ||
     operation.backups.some((backup) => (
       backup.authenticated !== true || backup.plaintextStored !== false || backup.offHost !== false
     )) ||
     !operation.candidate || operation.candidate.health !== 'healthy' ||
+    !['docker-healthcheck', 'loopback-http'].includes(operation.candidate.healthMode) ||
+    (operation.candidate.healthMode === 'docker-healthcheck' && operation.source.healthAfterProof.health !== 'healthy') ||
     operation.candidate.removedAfterProof !== true ||
     !operation.cleanup || operation.cleanup.completed !== true ||
     !operation.guarantees || operation.guarantees.routeMutated !== false ||
@@ -386,6 +390,7 @@ function statefulRestoreProofDescriptor(operation, rehearsalResourceFingerprintV
     volumeCount: operation.backups.length,
     restoredVolumeCount: (operation.restore.volumes || []).filter((volume) => volume.verified).length,
     candidateHealth: operation.candidate.health,
+    candidateHealthMode: operation.candidate.healthMode,
     candidateRemovedAfterProof: true,
     sourcePauseDurationMs: operation.source.pauseDurationMs,
     localEncryptedArchive: true,
