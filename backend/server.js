@@ -18,6 +18,10 @@ const {
   createMigrationOrchestrator
 } = require('./migrationOrchestrator');
 const {
+  MigrationSelectionError,
+  createMigrationSelectionManager
+} = require('./migrationSelectionManager');
+const {
   StatelessMigrationError,
   createStatelessMigrationManager
 } = require('./statelessMigrationManager');
@@ -501,6 +505,11 @@ const migrationOrchestrator = createMigrationOrchestrator({
   resourceRegistry,
   compileApplicationManifest: (resourceId) => applicationManifestManager.compile(resourceId)
 });
+const migrationSelectionManager = createMigrationSelectionManager({
+  dataRoot: DATA_ROOT,
+  getServerMigrationPlan: (planId) => migrationOrchestrator.getPlan(planId),
+  getLatestRegistrySnapshot: () => resourceRegistry.getLatest()
+});
 const statelessMigrationManifestCompiler = createStatelessMigrationManifestCompiler({
   resourceRegistry,
   compileApplicationManifest: (resourceId) => applicationManifestManager.compile(resourceId)
@@ -612,6 +621,17 @@ function sendMigrationOrchestratorError(res, error, action) {
       ? 'Server migration planning failed'
       : error.message,
     code: error.code || 'migration-orchestrator-error'
+  });
+}
+
+function sendMigrationSelectionError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof MigrationSelectionError)
+      ? 'Migration selection operation failed'
+      : error.message,
+    code: error.code || 'migration-selection-error'
   });
 }
 
@@ -1551,6 +1571,23 @@ app.get('/api/migration-orchestrator/plans/:planId', (req, res) => {
     res.json({ plan: migrationOrchestrator.getPlan(req.params.planId) });
   } catch (error) {
     sendMigrationOrchestratorError(res, error, 'Could not read server migration plan');
+  }
+});
+
+app.get('/api/migration-selections/current', (req, res) => {
+  try {
+    res.json(migrationSelectionManager.status());
+  } catch (error) {
+    sendMigrationSelectionError(res, error, 'Could not read the current migration selection');
+  }
+});
+
+app.put('/api/migration-selections/current', (req, res) => {
+  try {
+    const selection = migrationSelectionManager.save(req.body || {});
+    res.json({ selection, status: migrationSelectionManager.status() });
+  } catch (error) {
+    sendMigrationSelectionError(res, error, 'Could not save the migration selection');
   }
 });
 

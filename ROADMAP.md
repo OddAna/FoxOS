@@ -62,8 +62,10 @@ target blocks only adoption/migration operations that require restore proof.
 - [x] Define the separate desired-state manifest and import-draft schema used by
   an adoption plan, with immutable image input and provider-neutral desired
   runtime state.
-- [ ] Expose the audit in the existing FoxOS interface without changing its
-  visual language.
+- [x] Expose the read-only whole-server scan in the existing Settings window
+  without changing its visual language; keep every repeated instance separate,
+  show class/authority/routes/storage/blockers, and persist only eligible
+  snapshot-bound review selections with no migration action.
 
 ### Milestone 2 progress: Disposable Adoption v1
 
@@ -209,6 +211,10 @@ target blocks only adoption/migration operations that require restore proof.
   planning/compiler context. Status inspection stays lazy and does not contact
   Docker, create encryption state, recover operations or expose an execution
   adapter, approval endpoint or run action.
+- [x] Add the read-only Settings scan and server-authoritative selection layer:
+  classify all observed resources, allow checkboxes only for evidence-complete
+  stateless review candidates, invalidate saved selections after snapshot
+  drift, and expose no apply, approval, source-stop or provider-detach action.
 - [ ] Add the reviewed FoxOS interface for health target, runtime defaults,
   every route and certificate adapter selection. Only after that interface
   supplies a short-lived one-time approval may a production Docker/route
