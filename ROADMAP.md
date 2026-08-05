@@ -187,6 +187,16 @@ target blocks only adoption/migration operations that require restore proof.
   non-ordering coordination hints; separate authority, evidence and
   implementation blockers; persist deterministic owner-only redacted plans;
   and expose authenticated API/CLI with no apply or runtime mutation path.
+- [x] Add the sealed stateless migration transaction core: bind one evidenced
+  blue/green resource to a deterministic review plan; require one-time FoxOS UI
+  approval; model separate candidate, health, route/TLS staging, atomic switch,
+  zero unavailable samples, exact rollback and operation-owned cleanup; persist
+  allowlisted redacted proofs; and expose no run/approve endpoint while live
+  adapters are absent.
+- [ ] Implement and disposable-lab-prove the real provider-neutral Docker
+  candidate, arbitrary FoxOS route/TLS, continuous availability probe and
+  rollback adapters. Keep the production gate sealed and migrate no existing
+  workload until Burak explicitly approves the later UI flow.
 - [ ] Expand the implemented disposable dry-run, conflict detection, verified
   cutover and reversible rollback to real application classes one safety gate at
   a time.

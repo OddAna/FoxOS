@@ -414,6 +414,19 @@ test('health is public while management APIs require a session', async () => {
     body: '{}'
   });
   assert.equal(migrationPlanResponse.status, 401);
+  const statelessMigrationsResponse = await fetch(baseUrl() + '/api/stateless-migrations');
+  assert.equal(statelessMigrationsResponse.status, 401);
+  const statelessMigrationPlanResponse = await fetch(baseUrl() + '/api/stateless-migrations/plans', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}'
+  });
+  assert.equal(statelessMigrationPlanResponse.status, 401);
+  const statelessMigrationRunResponse = await fetch(
+    baseUrl() + '/api/stateless-migrations/plans/smplan_' + '1'.repeat(32) + '/run',
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }
+  );
+  assert.equal(statelessMigrationRunResponse.status, 401);
 });
 
 test('setup creates an authenticated session and unlocks the workspace', async () => {
@@ -716,6 +729,46 @@ test('setup creates an authenticated session and unlocks the workspace', async (
     serverMigrationPlan.planId + '.json'
   );
   assert.equal(fs.statSync(migrationPlanFile).mode & 0o777, 0o600);
+
+  dockerRequestLog.length = 0;
+  const statelessStatusResponse = await fetch(baseUrl() + '/api/stateless-migrations', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(statelessStatusResponse.status, 200);
+  const statelessStatus = await statelessStatusResponse.json();
+  assert.equal(statelessStatus.executionGate.status, 'sealed');
+  assert.equal(statelessStatus.executionGate.uiApprovalRequired, true);
+  assert.equal(statelessStatus.executionGate.runEndpointExposed, false);
+  assert.equal(statelessStatus.executionGate.approveEndpointExposed, false);
+  assert.equal(statelessStatus.summary.operations, 0);
+  assert.equal(statelessStatus.guarantees.sourceStopAllowed, false);
+  assert.equal(statelessStatus.guarantees.providerDetachIncluded, false);
+  assert.equal(dockerRequestLog.length, 0);
+
+  const blockedStatelessPlanResponse = await fetch(baseUrl() + '/api/stateless-migrations/plans', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      serverPlanId: serverMigrationPlan.planId,
+      resourceId: serverMigrationPlan.resources[0].resourceId,
+      confirmation: 'PREPARE STATELESS MIGRATION'
+    })
+  });
+  assert.equal(blockedStatelessPlanResponse.status, 403);
+  assert.equal((await blockedStatelessPlanResponse.json()).code, 'unsupported-resource-class');
+  assert.equal(dockerRequestLog.length, 0);
+
+  const absentStatelessRunResponse = await fetch(
+    baseUrl() + '/api/stateless-migrations/plans/smplan_' + '1'.repeat(32) + '/run',
+    { method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json' }, body: '{}' }
+  );
+  assert.equal(absentStatelessRunResponse.status, 404);
+  const absentStatelessApprovalResponse = await fetch(baseUrl() + '/api/stateless-migrations/approvals', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: '{}'
+  });
+  assert.equal(absentStatelessApprovalResponse.status, 404);
 
   dockerRequestLog.length = 0;
   const blockedAdoptionResponse = await fetch(

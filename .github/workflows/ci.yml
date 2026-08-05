@@ -482,3 +482,29 @@ jobs:
               if(!plan.guarantees.zeroDowntimeStatefulPostRoadmap) process.exit(1);
             });
           '
+          server_migration_plan_id=$(printf '%s' "$migration_plan" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).planId))')
+          stateless_status=$(docker compose exec -T foxos node /app/statelessMigrationCli.js status)
+          printf '%s' "$stateless_status" | node -e '
+            let s="";
+            process.stdin.on("data",c=>s+=c);
+            process.stdin.on("end",()=>{
+              const status=JSON.parse(s);
+              if(status.summary.plans || status.summary.operations || status.summary.active || status.summary.recoveryRequired) process.exit(1);
+              if(status.executionGate.status!=="sealed" || !status.executionGate.uiApprovalRequired) process.exit(1);
+              if(status.executionGate.uiApprovalConfigured || status.executionGate.runtimeAdapterConfigured) process.exit(1);
+              if(status.executionGate.runEndpointExposed || status.executionGate.approveEndpointExposed) process.exit(1);
+              if(status.guarantees.sourceStopAllowed || status.guarantees.sourceRecreationAllowed) process.exit(1);
+              if(status.guarantees.providerDetachIncluded || status.guarantees.destructiveCleanupIncluded) process.exit(1);
+              if(status.guarantees.startupOperationReplay || status.guarantees.secretValuesIncluded || status.guarantees.ordinaryEnvironmentValuesIncluded) process.exit(1);
+            });
+          '
+          if docker compose exec -T foxos node /app/statelessMigrationCli.js plan \
+            --server-plan "$server_migration_plan_id" --resource "$image_resource_id" \
+            --confirm "PREPARE STATELESS MIGRATION" >/dev/null 2>&1; then
+            echo 'FoxOS-owned disposable resource unexpectedly entered provider migration planning.' >&2
+            exit 1
+          fi
+          if docker compose exec -T foxos node /app/statelessMigrationCli.js run >/dev/null 2>&1; then
+            echo 'Sealed stateless migration CLI unexpectedly exposed a run command.' >&2
+            exit 1
+          fi

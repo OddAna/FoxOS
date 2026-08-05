@@ -390,6 +390,39 @@ route or provider state, contains no ordinary environment or secret values and
 has no apply endpoint. A resource whose evidence is complete is reported as
 `evidence-complete-apply-unavailable`, never as migrated or approved.
 
+### Implemented boundary: sealed stateless transaction core
+
+The first apply-side slice is a provider-neutral transaction state machine,
+not permission to migrate a live resource. It accepts only an unprotected,
+provider-owned resource classified as `stateless` with the
+`blue-green-atomic-route` strategy. Planning binds the whole-server plan,
+registry snapshot, manifest evidence, classification, dependencies and
+conflicts into a deterministic evidence fingerprint.
+
+Execution is dependency-injected and requires reviewed adapters for separate
+candidate creation, candidate health, conflict-free TLS route staging, atomic
+traffic switch, availability/identity probing, exact traffic rollback and
+operation-owned cleanup. The adapter contract deliberately contains no source
+stop, source recreation, provider mutation, provider detach or destructive
+source cleanup capability. One unavailable sample is failure and triggers
+automatic route rollback plus candidate cleanup.
+
+Every apply or rollback also requires a short-lived, one-time approval grant
+whose source is `foxos-ui` and whose plan ID, resource ID and evidence
+fingerprint match exactly. Raw approval material is never stored; only a
+fingerprint and bounded metadata may enter the owner-only operation record.
+Adapter proof objects are allowlisted before persistence so an unexpected
+credential, environment value or response header cannot leak into plans,
+operations, APIs or CLI output.
+
+The production server intentionally constructs this manager without execution
+adapters or an approval verifier. Its execution gate reports `sealed`, startup
+never replays an interrupted operation, and only authenticated status/plan/get
+review endpoints exist. There is no run or approve endpoint. Real Docker,
+route, TLS and availability adapters must be implemented and proven in the
+disposable lab before Burak can authorize interface work or any live workload
+transition.
+
 ### Implemented boundary: server-owned workload source and environment evidence
 
 The workload-evidence source path is restricted to the same running, fully
