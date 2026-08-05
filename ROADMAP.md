@@ -97,8 +97,8 @@ target blocks only adoption/migration operations that require restore proof.
   network and verify the public HTTPS response before completing apply.
 - [x] Disconnect the route, prove the public path is unavailable and restore the
   preserved source during rollback.
-- [ ] Generalize the fixed pilot path into conflict-checked domain/path records
-  for normal applications.
+- [x] Generalize the fixed pilot path into conflict-checked domain/path records
+  for normal stateless applications through FoxOS Caddy and HAProxy.
 
 ### Milestone 4 progress: Secrets, persistence and recovery gate
 
@@ -189,19 +189,19 @@ target blocks only adoption/migration operations that require restore proof.
   non-ordering coordination hints; separate authority, evidence and
   implementation blockers; persist deterministic owner-only redacted plans;
   and expose authenticated API/CLI with no apply or runtime mutation path.
-- [x] Add the sealed stateless migration transaction core: bind one evidenced
+- [x] Add the stateless migration transaction core: bind one evidenced
   blue/green resource to a deterministic review plan; require one-time FoxOS UI
   approval; model separate candidate, health, route/TLS staging, atomic switch,
   zero unavailable samples, exact rollback and operation-owned cleanup; persist
-  allowlisted redacted proofs; and expose no run/approve endpoint while live
-  adapters are absent.
+  allowlisted redacted proofs; and keep approval inside the authenticated
+  server-run coordinator rather than exposing a separate approve endpoint.
 - [x] Prove the transaction against real Docker in an explicitly disposable
   lab: create a constrained candidate, stage an operation-scoped TLS route,
   switch atomically under a continuous availability/identity probe, preserve
   exact source runtime continuity, roll back explicitly, inject one unavailable
   sample, roll back automatically and remove every operation-owned object.
-  Production execution remained sealed at this proof milestone and no existing
-  workload was migrated.
+  The lab remains isolated from production domains and cannot authorize a live
+  migration.
 - [x] Compile a normal evidence-ready stateless OCI Application Manifest into a
   deterministic production candidate specification and arbitrary FoxOS-owned
   domain/path/TLS authority review contract. Bind every observed route to its
@@ -221,18 +221,21 @@ target blocks only adoption/migration operations that require restore proof.
 - [x] Add the reviewed FoxOS interface for health target, applied runtime
   defaults, every route and replaceable certificate adapter selection. Persist
   only the allowlisted configuration on the server, bind it to the exact
-  snapshot/resource/manifest/execution contract, invalidate it on drift and
-  keep the production execution gate sealed.
+  snapshot/resource/manifest/execution contract, and invalidate it on drift.
 - [x] Replace the user-visible selection-save action with one authenticated
   `Geçişi Başlat` run. Persist/revalidate its exact selection and snapshot
   internally, preflight every selected member before mutation, order only by
   explicit dependencies, execute ready resources serially, and issue a
   short-lived one-time in-memory grant per resource. Blocked runs execute zero
   resources; source stop, provider detach and destructive cleanup remain absent.
-- [ ] Implement and inject the provider-neutral production Docker/route/TLS
-  adapter. The run coordinator and approval path now exist, but current live
-  resources must remain preflight-blocked until candidate creation, arbitrary
-  FoxOS route/TLS switching and rollback are proven for their real class.
+- [x] Implement and inject the provider-neutral production Docker/route/TLS
+  adapter: exact-image candidate creation, encrypted environment resolution,
+  operation-scoped dependency bridges, FoxOS routing plus egress networks,
+  browser-trusted certificate import, Caddy route staging, HAProxy domain
+  switching, reversible host ingress, public identity probes and rollback.
+- [ ] Complete the first fresh UI-authorized production stateless migration and
+  record source continuity, zero unavailable samples, rollback availability and
+  unchanged non-selected workloads before calling the live boundary complete.
 - [ ] Expand the implemented disposable dry-run, conflict detection, verified
   cutover and reversible rollback to real application classes one safety gate at
   a time.
@@ -276,15 +279,16 @@ target blocks only adoption/migration operations that require restore proof.
 ## Domains, proxy and TLS
 
 - [x] Add the first FoxOS-owned control-panel gateway: an isolated Caddy service,
-  DNS-01 certificate issuance/renewal, owner-only persistent TLS state, secure
+  provider-neutral HTTP-01 certificate issuance/renewal, owner-only persistent TLS state, secure
   cookies and a loopback-only direct agent port. It does not use the Coolify
   proxy, API, network, labels or certificate store.
-- [ ] Manage arbitrary domains and routes through the FoxOS-owned Caddy layer;
-  the fixed disposable pilot route is implemented.
-- [ ] Detect domain and port collisions before deployment.
-- [ ] Support HTTP-to-HTTPS redirects, WebSockets, path routes and reviewed middleware.
-- [ ] Issue and automatically renew ACME certificates; support custom certificates
-  and expose renewal failures clearly.
+- [x] Manage arbitrary observed domains and path routes for eligible stateless
+  migrations through FoxOS-owned Caddy.
+- [x] Detect observed domain and port collisions before migration.
+- [x] Support HTTP-to-HTTPS redirects, WebSockets and path routes.
+- [x] Issue and automatically renew provider-neutral ACME HTTP-01 certificates.
+- [ ] Add reviewed custom middleware/custom certificate controls and expose
+  renewal failures clearly in the interface.
 - [ ] Migrate existing routes one by one with DNS, TLS and application health proof
   before the Coolify proxy is stopped.
 

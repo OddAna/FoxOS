@@ -1,6 +1,5 @@
 {
-	admin off
-	auto_https disable_redirects
+	admin 127.0.0.1:2019
 	email {$FOXOS_ACME_EMAIL}
 	skip_install_trust
 	servers {
@@ -8,12 +7,9 @@
 	}
 }
 
-{$FOXOS_DOMAIN} {
-	tls {
-		dns cloudflare {env.CLOUDFLARE_API_TOKEN}
-		resolvers 1.1.1.1
-	}
+import /etc/caddy/runtime/*.caddy
 
+{$FOXOS_DOMAIN} {
 	encode zstd gzip
 
 	header {

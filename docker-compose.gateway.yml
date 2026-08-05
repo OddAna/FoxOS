@@ -5,7 +5,10 @@ services:
       FOXOS_TRUST_PROXY: "1"
       FOXOS_ROUTE_BASE_URL: "https://${FOXOS_DOMAIN}:${FOXOS_HTTPS_PORT:-8443}"
       FOXOS_ROUTE_NETWORK: "${FOXOS_ROUTE_NETWORK:-foxos-routing}"
+      FOXOS_EGRESS_NETWORK: "${FOXOS_EGRESS_NETWORK:-foxos-egress}"
       FOXOS_ROUTE_GATEWAY_HOST: "foxos-gateway"
+      FOXOS_INGRESS_HTTP_PORT: "${FOXOS_INGRESS_HTTP_PORT:-9080}"
+      FOXOS_INGRESS_HTTPS_PORT: "${FOXOS_INGRESS_HTTPS_PORT:-9443}"
 
   foxos-gateway:
     build:
@@ -17,6 +20,7 @@ services:
       foxos:
         condition: service_healthy
     ports:
+      - "${FOXOS_HTTP_BIND_ADDRESS:-0.0.0.0}:${FOXOS_HTTP_PORT:-8082}:80/tcp"
       - "${FOXOS_HTTPS_BIND_ADDRESS:-0.0.0.0}:${FOXOS_HTTPS_PORT:-8443}:443/tcp"
     environment:
       FOXOS_DOMAIN: "${FOXOS_DOMAIN:?Set FOXOS_DOMAIN in .env}"
@@ -24,8 +28,7 @@ services:
     networks:
       - default
       - foxos-routing
-    secrets:
-      - cloudflare_api_token
+      - foxos-egress
     volumes:
       - type: bind
         source: ./.foxos-data/gateway/caddy-data
@@ -33,6 +36,10 @@ services:
       - type: bind
         source: ./.foxos-data/gateway/caddy-config
         target: /config
+      - type: bind
+        source: ./.foxos-data/gateway/runtime
+        target: /etc/caddy/runtime
+        read_only: true
     labels:
       com.foxos.core: "true"
       com.foxos.gateway: "true"
@@ -57,10 +64,6 @@ services:
       start_period: 20s
       retries: 5
 
-secrets:
-  cloudflare_api_token:
-    file: ./.foxos-data/gateway/secrets/cloudflare-api-token
-
 networks:
   foxos-routing:
     name: "${FOXOS_ROUTE_NETWORK:-foxos-routing}"
@@ -68,3 +71,8 @@ networks:
     labels:
       com.foxos.core: "true"
       com.foxos.routing: "true"
+  foxos-egress:
+    name: "${FOXOS_EGRESS_NETWORK:-foxos-egress}"
+    labels:
+      com.foxos.core: "true"
+      com.foxos.egress: "true"

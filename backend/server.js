@@ -15,6 +15,7 @@ const {
 } = require('./independenceAuditManager');
 const {
   MigrationOrchestratorError,
+  PLAN_SERVER_MIGRATION_CONFIRMATION,
   createMigrationOrchestrator
 } = require('./migrationOrchestrator');
 const {
@@ -33,9 +34,13 @@ const {
   createStatelessMigrationManifestCompiler
 } = require('./statelessMigrationManifestCompiler');
 const {
+  SAVE_STATELESS_MIGRATION_REVIEW_CONFIRMATION,
   StatelessMigrationReviewError,
   createStatelessMigrationReviewManager
 } = require('./statelessMigrationReviewManager');
+const { createIngressAuthorityManager } = require('./ingressAuthorityManager');
+const { createProductionStatelessMigrationAdapter } = require('./productionStatelessMigrationAdapter');
+const { createTraefikCertificateImporter } = require('./traefikCertificateImporter');
 const { createUiApprovalManager } = require('./uiApprovalManager');
 const { createBackupManager } = require('./backupManager');
 const { createDockerClient } = require('./dockerClient');
@@ -420,6 +425,41 @@ function runHostCommand(command, cwd = '/') {
   });
 }
 
+function runExactHostFile(file, args) {
+  if (!['iptables', 'ip6tables'].includes(file) || !Array.isArray(args) || args.some((entry) => (
+    typeof entry !== 'string' || entry.length > 128 || /[\r\n\0]/.test(entry)
+  ))) {
+    return Promise.resolve({ success: false, exitCode: 1, output: 'Host command is outside FoxOS ingress policy.\n' });
+  }
+  const hostExecutable = [
+    '/usr/sbin/' + file,
+    '/usr/bin/' + file,
+    '/sbin/' + file,
+    '/bin/' + file
+  ].find((candidate) => fs.existsSync(path.resolve(HOST_ROOT, '.' + candidate)));
+  if (HOST_EXECUTION === 'nsenter' && !hostExecutable) {
+    return Promise.resolve({ success: false, exitCode: 127, output: 'Host firewall command is unavailable.\n' });
+  }
+  return new Promise((resolve) => {
+    const executable = HOST_EXECUTION === 'nsenter' ? hostExecutable : file;
+    const invocation = HOST_EXECUTION === 'nsenter' ? {
+      executable: 'nsenter',
+      args: ['--target', '1', '--mount', '--uts', '--ipc', '--net', '--pid', '--', executable, ...args]
+    } : { executable, args };
+    execFile(invocation.executable, invocation.args, {
+      timeout: 15000,
+      maxBuffer: 256 * 1024,
+      windowsHide: true
+    }, (error, stdout, stderr) => {
+      resolve({
+        success: !error,
+        exitCode: error && Number.isInteger(error.code) ? error.code : error ? 1 : 0,
+        output: String(stdout || '') + String(stderr || '')
+      });
+    });
+  });
+}
+
 const dockerClient = createDockerClient(DOCKER_SOCKET);
 const dockerRequest = dockerClient.request;
 
@@ -463,6 +503,33 @@ const workloadEvidenceManager = createWorkloadEvidenceManager({
   resourceRegistry,
   encryptionStore,
   secretManager
+});
+const certificateImporter = createTraefikCertificateImporter({
+  dataRoot: DATA_ROOT,
+  dockerRequest,
+  hostRoot: HOST_ROOT
+});
+const ingressAuthorityManager = createIngressAuthorityManager({
+  dataRoot: DATA_ROOT,
+  dockerRequest,
+  dockerExec: dockerClient.exec,
+  hostCommand: runExactHostFile,
+  routingNetwork: process.env.FOXOS_ROUTE_NETWORK || 'foxos-routing',
+  gatewayContainer: process.env.FOXOS_ROUTE_GATEWAY_HOST || 'foxos-gateway',
+  ingressHttpPort: Number.parseInt(process.env.FOXOS_INGRESS_HTTP_PORT || '9080', 10),
+  ingressHttpsPort: Number.parseInt(process.env.FOXOS_INGRESS_HTTPS_PORT || '9443', 10)
+});
+const productionStatelessMigrationAdapter = createProductionStatelessMigrationAdapter({
+  dataRoot: DATA_ROOT,
+  dockerRequest,
+  dockerExec: dockerClient.exec,
+  resourceRegistry,
+  secretManager,
+  certificateImporter,
+  ingressAuthority: ingressAuthorityManager,
+  routingNetwork: process.env.FOXOS_ROUTE_NETWORK || 'foxos-routing',
+  egressNetwork: process.env.FOXOS_EGRESS_NETWORK || 'foxos-egress',
+  gatewayContainer: process.env.FOXOS_ROUTE_GATEWAY_HOST || 'foxos-gateway'
 });
 const statefulRehearsalManager = createStatefulRehearsalManager({
   dataRoot: DATA_ROOT,
@@ -528,6 +595,7 @@ const statelessMigrationManager = createStatelessMigrationManager({
   dataRoot: DATA_ROOT,
   getServerMigrationPlan: (planId) => migrationOrchestrator.getPlan(planId),
   compileExecutionContract: (input) => statelessMigrationManifestCompiler.compile(input),
+  executionAdapter: productionStatelessMigrationAdapter,
   approvalVerifier: (input) => uiApprovalManager.verify(input)
 });
 const statelessMigrationReviewManager = createStatelessMigrationReviewManager({
@@ -542,6 +610,37 @@ const migrationRunManager = createMigrationRunManager({
   saveSelection: (input) => migrationSelectionManager.save(input),
   prepareStatelessPlan: (input) => statelessMigrationManager.createPlan(input),
   getStatelessReviewStatus: (planId) => statelessMigrationReviewManager.status(planId),
+  prepareResourceEvidence: async (resourceIds) => {
+    const snapshot = resourceRegistry.getLatest();
+    for (const resourceId of resourceIds) {
+      const resource = snapshot && (snapshot.resources || []).find((entry) => entry.id === resourceId);
+      if (!resource) throw new MigrationRunError('Selected resource disappeared before evidence capture', 409, 'resource-not-found');
+      if (Number(resource.runtime && resource.runtime.environmentVariableCount || 0) > 0) {
+        await workloadEvidenceManager.captureEnvironmentForMigration(resourceId);
+      }
+    }
+  },
+  refreshServerMigrationPlan: () => migrationOrchestrator.createPlan({
+    confirmation: PLAN_SERVER_MIGRATION_CONFIRMATION
+  }),
+  prepareStatelessReview: (plan) => {
+    const routes = plan.executionContract.routes || [];
+    if (!routes.length) throw new MigrationRunError('No production route is available for review', 409, 'production-route-missing');
+    return statelessMigrationReviewManager.save({
+      statelessPlanId: plan.planId,
+      serverPlanId: plan.serverPlanId,
+      resourceId: plan.resource.resourceId,
+      executionContractId: plan.executionContract.contractId,
+      healthRouteId: routes[0].routeId,
+      runtimeConfirmed: true,
+      routes: routes.map((route) => ({
+        routeId: route.routeId,
+        confirmed: true,
+        certificateAdapter: 'imported-certificate'
+      })),
+      confirmation: SAVE_STATELESS_MIGRATION_REVIEW_CONFIRMATION
+    });
+  },
   executeStatelessMigration: (planId, approval) => statelessMigrationManager.execute(planId, approval),
   issueApproval: (input) => uiApprovalManager.issue(input)
 });
@@ -1647,9 +1746,9 @@ app.get('/api/migration-runs', (req, res) => {
   }
 });
 
-app.post('/api/migration-runs', (req, res) => {
+app.post('/api/migration-runs', async (req, res) => {
   try {
-    const run = migrationRunManager.start(req.body || {}, {
+    const run = await migrationRunManager.start(req.body || {}, {
       type: 'foxos-session',
       username: req.session.username,
       sessionToken: req.session.token

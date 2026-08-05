@@ -395,24 +395,39 @@ running, fully inspected, provider-owned stateless application may be marked
 `reviewEligible` and selected so the operator can work through its missing
 source, environment, route and proof requirements. `evidenceComplete` remains a
 separate, stricter state. Selection changes no runtime and can never bypass the
-sealed approval or execution gates.
+one-time authenticated approval or execution preflight gates.
 
-### Implemented boundary: sealed stateless transaction core
+### Implemented boundary: stateless production transaction
 
-The first apply-side slice is a provider-neutral transaction state machine,
-not permission to migrate a live resource. It accepts only an unprotected,
-provider-owned resource classified as `stateless` with the
+The apply-side transaction accepts only an unprotected, provider-owned resource
+classified as `stateless` with the
 `blue-green-atomic-route` strategy. Planning binds the whole-server plan,
 registry snapshot, manifest evidence, classification, dependencies and
 conflicts into a deterministic evidence fingerprint.
 
-Execution is dependency-injected and requires reviewed adapters for separate
-candidate creation, candidate health, conflict-free TLS route staging, atomic
-traffic switch, availability/identity probing, exact traffic rollback and
-operation-owned cleanup. The adapter contract deliberately contains no source
-stop, source recreation, provider mutation, provider detach or destructive
-source cleanup capability. One unavailable sample is failure and triggers
-automatic route rollback plus candidate cleanup.
+The production adapter creates a separate constrained Docker candidate from the
+exact content-addressed image, resolves encrypted environment references only
+in memory, and places the candidate on FoxOS-owned internal routing plus a
+dedicated egress network. Server-local URL dependencies are reached through
+operation-scoped TCP bridges that span the observed source network and
+`foxos-routing`; the candidate itself never joins a provider network. Bridge
+aliases include the operation identity so common names such as `db` cannot
+cross-connect unrelated migrations.
+
+FoxOS Caddy owns candidate routes and future ACME HTTP-01 renewal. For the first
+legacy adapter, the exact matching browser-trusted certificate is imported from
+readable Traefik ACME storage as one-time migration input without calling a
+provider API or mutating the legacy proxy. FoxOS-owned HAProxy listens on
+separate host ports and selects `foxos` or `legacy` per SNI/Host through a
+runtime map. A temporary FoxOS TCP bridge carries unselected domains to the
+still-running legacy proxy. Reversible host `iptables`/`ip6tables` chains place
+HAProxy in front only at the traffic-switch phase.
+
+Execution proves candidate health before staging, validates TLS directly at
+Caddy, then requires eight public browser-trusted samples to contain both the
+expected FoxOS route identity and operation-bound candidate identity. One
+unavailable or mismatched sample is failure and triggers automatic map rollback,
+public source verification and exact operation-owned cleanup.
 
 Every apply or rollback also requires a short-lived, one-time approval grant
 whose source is `foxos-ui` and whose plan ID, resource ID and evidence
@@ -422,15 +437,13 @@ Adapter proof objects are allowlisted before persistence so an unexpected
 credential, environment value or response header cannot leak into plans,
 operations, APIs or CLI output.
 
-The initial production-server milestone constructed this manager without
-execution adapters or an approval verifier. At that boundary its execution gate
-reported `sealed`, startup never replayed an interrupted operation, and only
-authenticated status/plan/get review endpoints existed. The later run
-coordinator below adds the one-click orchestration and in-memory approval path;
-the general execution adapter remains sealed.
+The adapter contract deliberately contains no source stop, source recreation,
+provider mutation, provider detach or destructive source cleanup capability.
+The original container and legacy proxy remain running. Startup never replays
+an interrupted operation; recovery requires a new explicit UI action.
 
-The first real adapter is restricted to an explicitly confirmed disposable
-Docker lab. It pulls one reviewed immutable image digest, creates a separately
+The independent disposable Docker lab remains a regression adapter. It pulls
+one reviewed immutable image digest, creates a separately
 constrained candidate and an operation-owned TLS gateway on loopback ports,
 uses only a reserved `.foxos.invalid` hostname and operation-scoped path, pins
 the ephemeral certificate and hostname, and samples route availability and
@@ -438,14 +451,7 @@ upstream identity every 10 ms across the switch. Source container ID,
 `StartedAt` and restart count remain invariant. The proof covers a clean switch
 with zero unavailable samples, explicit rollback, an injected unavailable
 sample with verified automatic rollback, and exact labeled cleanup.
-
-This lab gateway is not a production certificate or arbitrary-domain adapter.
-It has no production API route, cannot accept a real domain, cannot detach a
-provider and is never injected into the production manager. The remaining
-backend boundary is compiling an evidence-complete normal stateless manifest
-into a candidate plus a provider-neutral FoxOS domain/route/TLS transaction;
-only after that boundary is proven can interface work authorize a live
-transition.
+It cannot accept a real domain or authorize a production transition.
 
 ### Implemented boundary: server-owned workload source and environment evidence
 
@@ -629,9 +635,10 @@ interrupted transaction is never replayed.
 The normal stateless planning path now recompiles the latest Application
 Manifest immediately before it creates a review plan. The registry snapshot,
 whole-server plan evidence and manifest revision must match exactly; drift or a
-corrupt identity fails before any contract is written. The first generic source
-boundary accepts only an immutable OCI repository digest bound to the observed
-running image ID. Writable mounts, required dependency transactions,
+corrupt identity fails before any contract is written. The source boundary
+accepts an immutable OCI repository digest or the exact local content-addressed
+Docker image ID bound to the observed running container. Writable mounts,
+required dependency transactions,
 privileged runtimes, incomplete inspection, invalid or redacted routes and
 ambiguous upstream ports remain blocking.
 
@@ -650,7 +657,7 @@ resilient restart policy, non-privileged execution, no-new-privileges and
 dropped capabilities. Environment state contains only ordinary names,
 revision-pinned encrypted secret references and allowlisted provider-metadata
 exclusions. Values are resolved only during a later candidate-creation
-transaction and never enter the plan, API or fingerprint.
+transaction and never enter the plan, API, fingerprint or operation record.
 
 Application Manifest blockers that the blue/green transaction itself must prove
 are separated from true preconditions. Route ownership, candidate health,
@@ -660,7 +667,7 @@ environment, persistence, dependency and classification failures still block.
 The contract is fingerprinted into the stateless review plan and cannot be
 changed after UI approval without invalidating that approval.
 
-Production construction now also exposes a review-only Settings interface. It
+Production construction also exposes a Settings review interface. It
 selects one observed route as the bounded HTTP health target, displays and
 confirms the complete compiler-owned candidate runtime specification, and
 requires separate confirmation plus a replaceable certificate adapter choice
@@ -668,6 +675,11 @@ for every compiled route. The browser is not authority: the allowlisted record
 is owner-only on the server and is bound to the stateless plan, whole-server
 plan, registry snapshot, resource, manifest revision, evidence fingerprint and
 execution contract. Registry or contract drift makes it stale.
+
+The one-click run may populate the same allowlisted review automatically from
+unambiguous observed routes and compiler-owned runtime defaults. This is not a
+browser-side bypass: it occurs on the server after fresh evidence capture and
+is bound to the newly compiled contract before the one-time grant is issued.
 
 The scan screen does not call an evidence-incomplete candidate ready to run. It
 calls the safe read-only audit class eligible for migration preparation and
@@ -692,10 +704,8 @@ resource and evidence fingerprint. The raw grant and session token stay in
 memory and are never returned or persisted. The existing stateless transaction
 retains zero-unavailable-sample health gates and automatic rollback.
 
-This adds the real start/run orchestration surface without pretending missing
-adapters are complete. Production still receives no general Docker/route/TLS
-execution adapter. Therefore current evidence-incomplete or adapter-blocked
-resources finish the preflight run as `blocked`, with zero candidate, route or
-traffic mutation. There is no separate approve endpoint, source-stop,
-provider-detach or destructive-cleanup path. A certificate adapter selection is
-still intent, not a credential or active provider binding.
+The production Docker/route/TLS adapter is injected into this server path.
+Evidence-incomplete or unsupported resources still finish preflight as
+`blocked`, with zero candidate, route or traffic mutation. Eligible stateless
+resources continue into the verified transaction. There is no separate approve
+endpoint, source-stop, provider-detach or destructive-cleanup path.

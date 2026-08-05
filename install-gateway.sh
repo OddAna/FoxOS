@@ -29,11 +29,10 @@ read_env_value() {
 
 domain="${FOXOS_DOMAIN:-$(read_env_value FOXOS_DOMAIN)}"
 acme_email="${FOXOS_ACME_EMAIL:-$(read_env_value FOXOS_ACME_EMAIL)}"
+http_port="${FOXOS_HTTP_PORT:-$(read_env_value FOXOS_HTTP_PORT)}"
+http_port="${http_port:-80}"
 https_port="${FOXOS_HTTPS_PORT:-$(read_env_value FOXOS_HTTPS_PORT)}"
-https_port="${https_port:-8443}"
-dns_token="${CLOUDFLARE_API_TOKEN:-}"
-secret_path=".foxos-data/gateway/secrets/cloudflare-api-token"
-reuse_secret=false
+https_port="${https_port:-443}"
 
 if [[ -z "$domain" ]]; then
   read -r -p "FoxOS HTTPS domain: " domain
@@ -41,13 +40,6 @@ fi
 
 if [[ -z "$acme_email" ]]; then
   read -r -p "ACME contact email: " acme_email
-fi
-
-if [[ -z "$dns_token" && -s "$secret_path" ]]; then
-  reuse_secret=true
-elif [[ -z "$dns_token" ]]; then
-  read -r -s -p "Cloudflare DNS API token: " dns_token
-  echo
 fi
 
 if [[ ! "$domain" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] || [[ "$domain" != *.* ]]; then
@@ -60,47 +52,31 @@ if [[ ! "$acme_email" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]]; the
   exit 1
 fi
 
-if [[ ! "$https_port" =~ ^[0-9]+$ ]] || (( https_port < 1 || https_port > 65535 )); then
-  echo "FOXOS_HTTPS_PORT must be between 1 and 65535." >&2
-  exit 1
-fi
-
-if [[ "$reuse_secret" == false && -z "$dns_token" ]]; then
-  echo "The DNS API token cannot be empty." >&2
+if [[ ! "$http_port" =~ ^[0-9]+$ ]] || (( http_port < 1 || http_port > 65535 )) ||
+   [[ ! "$https_port" =~ ^[0-9]+$ ]] || (( https_port < 1 || https_port > 65535 )); then
+  echo "FOXOS_HTTP_PORT and FOXOS_HTTPS_PORT must be between 1 and 65535." >&2
   exit 1
 fi
 
 mkdir -p \
-  .foxos-data/gateway/secrets \
   .foxos-data/gateway/caddy-data \
-  .foxos-data/gateway/caddy-config
+  .foxos-data/gateway/caddy-config \
+  .foxos-data/gateway/runtime
 chmod 700 .foxos-data .foxos-data/gateway \
-  .foxos-data/gateway/secrets \
   .foxos-data/gateway/caddy-data \
-  .foxos-data/gateway/caddy-config
+  .foxos-data/gateway/caddy-config \
+  .foxos-data/gateway/runtime
+touch .foxos-data/gateway/runtime/00-empty.caddy
+chmod 600 .foxos-data/gateway/runtime/00-empty.caddy
 
-secret_tmp=""
 env_tmp=""
 
 cleanup() {
-  if [[ -n "$secret_tmp" ]]; then
-    rm -f -- "$secret_tmp"
-  fi
   if [[ -n "$env_tmp" ]]; then
     rm -f -- "$env_tmp"
   fi
 }
 trap cleanup EXIT
-
-if [[ "$reuse_secret" == false ]]; then
-  secret_tmp="$(mktemp .foxos-data/gateway/secrets/.cloudflare-api-token.XXXXXX)"
-  chmod 600 "$secret_tmp"
-  printf '%s' "$dns_token" > "$secret_tmp"
-  mv -f -- "$secret_tmp" "$secret_path"
-  secret_tmp=""
-fi
-chmod 600 "$secret_path"
-unset dns_token CLOUDFLARE_API_TOKEN
 
 touch .env
 chmod 600 .env
@@ -131,11 +107,21 @@ set_env_value FOXOS_SECURE_COOKIE true
 set_env_value FOXOS_TRUST_PROXY 1
 set_env_value FOXOS_DOMAIN "$domain"
 set_env_value FOXOS_ACME_EMAIL "$acme_email"
+set_env_value FOXOS_HTTP_BIND_ADDRESS 0.0.0.0
+set_env_value FOXOS_HTTP_PORT "$http_port"
 set_env_value FOXOS_HTTPS_BIND_ADDRESS 0.0.0.0
 set_env_value FOXOS_HTTPS_PORT "$https_port"
 
-docker compose -f docker-compose.yml -f docker-compose.gateway.yml up -d --build
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.gateway.yml \
+  -f docker-compose.ingress.yml \
+  up -d --build
 
 echo
-echo "FoxOS HTTPS gateway is starting at https://${domain}:${https_port}"
+if [[ "$https_port" == 443 ]]; then
+  echo "FoxOS HTTPS gateway is starting at https://${domain}"
+else
+  echo "FoxOS HTTPS gateway is starting at https://${domain}:${https_port}"
+fi
 echo "The direct FoxOS agent port remains loopback-only."

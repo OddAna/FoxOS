@@ -191,6 +191,33 @@ test('generic OCI manifest compiles to a deterministic, multi-route and value-fr
   assert.equal(serialized.toLowerCase().includes('cloudflare'), false);
 });
 
+test('exact local Docker image ID compiles without inventing a registry digest', () => {
+  const resource = observedResource({
+    ports: [{ privatePort: 8080, protocol: 'tcp', hostIp: null, hostPort: null }],
+    routes: [{ domain: 'app.example.test', path: '/', tls: true, privatePort: 8080 }]
+  });
+  const manifest = applicationManifest(resource, {
+    desired: {
+      source: {
+        type: 'docker-image-id',
+        requestedReference: 'provider-build:current',
+        immutableReference: null,
+        imageId: IMAGE_ID,
+        contentAddressed: true,
+        localDockerAuthority: true,
+        providerRequiredAtRuntime: false
+      }
+    }
+  });
+  const contract = harness({ resource, manifest }).compile();
+  assert.equal(contract.readiness.status, 'backend-contract-ready-ui-configuration-required');
+  assert.equal(contract.source.type, 'docker-image-id');
+  assert.equal(contract.source.imageId, IMAGE_ID);
+  assert.equal(contract.source.immutableReference, null);
+  assert.equal(contract.source.localDockerAuthority, true);
+  assert.equal(contract.source.providerRequiredAtRuntime, false);
+});
+
 test('snapshot and manifest drift fail before a contract can be persisted or executed', () => {
   const current = harness();
   current.serverPlan.sourceSnapshotId = 'snap_' + 'c'.repeat(32);

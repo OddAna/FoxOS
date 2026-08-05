@@ -744,17 +744,26 @@ function createApplicationManifestManager({
       }
     } else {
       const immutableReference = immutableImageFor(resource, snapshot);
-      source = {
+      source = immutableReference ? {
         type: 'oci-image',
         requestedReference: resource.runtime.image,
         immutableReference,
-        imageId: resource.runtime.imageId || null
+        imageId: resource.runtime.imageId || null,
+        providerRequiredAtRuntime: false
+      } : {
+        type: 'docker-image-id',
+        requestedReference: resource.runtime.image,
+        immutableReference: null,
+        imageId: resource.runtime.imageId || null,
+        contentAddressed: SHA256_PATTERN.test(String(resource.runtime.imageId || '')),
+        localDockerAuthority: true,
+        providerRequiredAtRuntime: false
       };
-      if (!immutableReference) {
+      if (!immutableReference && !source.contentAddressed) {
         sourceBlockers.push({
           code: 'immutable-image-missing',
           section: 'source',
-          message: 'No repository digest can reconstruct this image immutably.'
+          message: 'The observed image has neither a repository digest nor a content-addressed Docker image ID.'
         });
       }
     }
@@ -973,7 +982,11 @@ function createApplicationManifestManager({
       routeIds: ownedRoutes.map((route) => route.routeId).sort(),
       sourceAuthority,
       classificationRevision: classification && classification.revision || null,
-      sourceRevision: source && source.type !== 'oci-image' ? {
+      sourceRevision: source && [
+        'foxos-source-build-revision',
+        'foxos-compose-deployment-revision',
+        'foxos-encrypted-source-archive-revision'
+      ].includes(source.type) ? {
         type: source.type,
         revisionId: source.revisionId,
         operationId: source.operationId,

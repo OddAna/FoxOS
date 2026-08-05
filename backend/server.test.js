@@ -812,7 +812,8 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   });
   assert.equal(statelessStatusResponse.status, 200);
   const statelessStatus = await statelessStatusResponse.json();
-  assert.equal(statelessStatus.executionGate.status, 'sealed');
+  assert.equal(statelessStatus.executionGate.status, 'ui-approval-required');
+  assert.equal(statelessStatus.executionGate.runtimeAdapterConfigured, true);
   assert.equal(statelessStatus.executionGate.manifestCompilerConfigured, true);
   assert.equal(statelessStatus.executionGate.uiApprovalRequired, true);
   assert.equal(statelessStatus.executionGate.runEndpointExposed, false);
