@@ -21,7 +21,8 @@ test('secret and environment revisions persist references without plaintext secr
     const secret = manager.putSecret('pilot-token', 'highly-sensitive-value');
     const environment = manager.createEnvironmentRevision(RESOURCE_ID, {
       ordinary: { FOXOS_PILOT_MODE: 'disposable' },
-      secretRefs: { FOXOS_PILOT_TOKEN: 'pilot-token' }
+      secretRefs: { FOXOS_PILOT_TOKEN: 'pilot-token' },
+      excluded: { COOLIFY_FQDN: 'provider-runtime-metadata' }
     });
 
     assert.equal(secret.valueIncluded, false);
@@ -30,6 +31,10 @@ test('secret and environment revisions persist references without plaintext secr
       'FOXOS_PILOT_MODE=disposable',
       'FOXOS_PILOT_TOKEN=highly-sensitive-value'
     ]);
+    assert.deepEqual(environment.excluded, [{
+      name: 'COOLIFY_FQDN',
+      reason: 'provider-runtime-metadata'
+    }]);
     assert.equal(manager.listSecrets()[0].encryptedValue, undefined);
     const persisted = fs.readFileSync(
       path.join(manager.paths.recordsRoot, secret.secretId, 'latest.json'),
@@ -58,6 +63,30 @@ test('sensitive-looking names cannot be stored as ordinary environment values', 
       }),
       (error) => error.code === 'sensitive-environment-must-be-secret'
     );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('schema 1 environment revisions remain readable with an empty exclusion set', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-secret-test-'));
+  try {
+    const manager = createSecretManager({
+      dataRoot: root,
+      encryptionStore: createEncryptionStore({ dataRoot: root })
+    });
+    const resourceRoot = path.join(manager.paths.environmentsRoot, RESOURCE_ID);
+    fs.mkdirSync(resourceRoot, { recursive: true });
+    fs.writeFileSync(path.join(resourceRoot, 'latest.json'), JSON.stringify({
+      schemaVersion: 1,
+      resourceId: RESOURCE_ID,
+      revision: 'env_rev_' + 'f'.repeat(32),
+      ordinary: [{ name: 'NODE_ENV', value: 'production' }],
+      secretRefs: [],
+      secretValuesIncluded: false,
+      createdAt: '2026-08-04T00:00:00.000Z'
+    }));
+    assert.deepEqual(manager.getEnvironmentRevision(RESOURCE_ID).excluded, []);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

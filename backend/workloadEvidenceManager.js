@@ -11,7 +11,7 @@ const {
   validateRepositoryUrl
 } = require('./sourceDeploymentManager');
 
-const WORKLOAD_EVIDENCE_SCHEMA_VERSION = 1;
+const WORKLOAD_EVIDENCE_SCHEMA_VERSION = 2;
 const PLAN_SOURCE_CONFIRMATION = 'PLAN WORKLOAD SOURCE EVIDENCE';
 const PLAN_ENVIRONMENT_CONFIRMATION = 'PLAN WORKLOAD ENVIRONMENT EVIDENCE';
 const RESOURCE_ID_PATTERN = /^res_[a-f0-9]{32}$/;
@@ -127,11 +127,22 @@ function redactedEnvironment(record) {
       revision: entry.revision,
       keyId: entry.keyId
     })).sort((left, right) => left.name.localeCompare(right.name)),
-    variableCount: (record.ordinary || []).length + (record.secretRefs || []).length,
+    excluded: (record.excluded || []).map((entry) => ({
+      name: entry.name,
+      reason: entry.reason
+    })).sort((left, right) => left.name.localeCompare(right.name)),
+    variableCount: (record.ordinary || []).length + (record.secretRefs || []).length + (record.excluded || []).length,
+    managedVariableCount: (record.ordinary || []).length + (record.secretRefs || []).length,
+    excludedVariableCount: (record.excluded || []).length,
     secretValuesIncluded: false,
     ordinaryValuesIncluded: false,
     createdAt: record.createdAt
   };
+}
+
+function providerRuntimeEnvironmentName(provider, name) {
+  if (provider === 'coolify') return /^COOLIFY_[A-Z0-9_]*$/.test(name);
+  return false;
 }
 
 function createWorkloadEvidenceManager({
@@ -326,6 +337,9 @@ function createWorkloadEvidenceManager({
 
   async function captureSource(planId, confirmation) {
     const plan = getRecord(sourcePlansRoot, planId, 'Source evidence plan');
+    if (plan.schemaVersion !== WORKLOAD_EVIDENCE_SCHEMA_VERSION) {
+      throw new WorkloadEvidenceError('Source evidence plan schema is unsupported', 409, 'unsupported-evidence-plan');
+    }
     if (confirmation !== plan.confirmation) {
       throw new WorkloadEvidenceError('Exact workload source capture confirmation is required', 400, 'confirmation-required');
     }
@@ -433,8 +447,23 @@ function createWorkloadEvidenceManager({
       }
     }
     const names = Array.from(values.keys()).sort();
-    const secretNames = names.filter((name) => explicitSecretNames.has(name) || isSensitiveEnvironmentName(name));
-    const ordinaryNames = names.filter((name) => !secretNames.includes(name));
+    const excludedNames = names.filter((name) => providerRuntimeEnvironmentName(resource.provider, name));
+    if (excludedNames.some((name) => explicitSecretNames.has(name))) {
+      throw new WorkloadEvidenceError(
+        'Provider runtime metadata cannot become a managed application secret',
+        400,
+        'provider-environment-cannot-be-managed'
+      );
+    }
+    const managedNames = names.filter((name) => !excludedNames.includes(name));
+    const secretNames = managedNames.filter((name) => explicitSecretNames.has(name) || isSensitiveEnvironmentName(name));
+    const ordinaryNames = managedNames.filter((name) => !secretNames.includes(name));
+    for (const name of names) {
+      const value = values.get(name);
+      if (Buffer.byteLength(value) > 64 * 1024 || (secretNames.includes(name) && !value.length)) {
+        throw new WorkloadEvidenceError('Observed environment value exceeds the safe capture policy', 409, 'invalid-observed-environment-value');
+      }
+    }
     const planId = 'wep_' + randomUUID().replace(/-/g, '');
     const plan = {
       schemaVersion: WORKLOAD_EVIDENCE_SCHEMA_VERSION,
@@ -449,6 +478,7 @@ function createWorkloadEvidenceManager({
       variableCount: values.size,
       ordinaryNames,
       secretNames,
+      excludedNames,
       valuesIncluded: false,
       confirmation: environmentCaptureConfirmation(planId),
       createdAt: now(),
@@ -468,6 +498,9 @@ function createWorkloadEvidenceManager({
 
   async function captureEnvironment(planId, confirmation) {
     const plan = getRecord(environmentPlansRoot, planId, 'Environment evidence plan');
+    if (plan.schemaVersion !== WORKLOAD_EVIDENCE_SCHEMA_VERSION || !Array.isArray(plan.excludedNames)) {
+      throw new WorkloadEvidenceError('Environment evidence plan schema is unsupported', 409, 'unsupported-evidence-plan');
+    }
     if (confirmation !== plan.confirmation) {
       throw new WorkloadEvidenceError('Exact workload environment capture confirmation is required', 400, 'confirmation-required');
     }
@@ -488,16 +521,20 @@ function createWorkloadEvidenceManager({
     }
     const ordinary = {};
     const secretRefs = {};
+    const excluded = {};
     const secretNames = new Set(plan.secretNames);
+    const excludedNames = new Set(plan.excludedNames);
     for (const [name, value] of values) {
-      if (secretNames.has(name)) {
+      if (excludedNames.has(name)) {
+        excluded[name] = 'provider-runtime-metadata';
+      } else if (secretNames.has(name)) {
         const secret = secretManager.putSecret('workload/' + resource.id + '/' + name, value);
         secretRefs[name] = { secretId: secret.secretId, revision: secret.revision };
       } else {
         ordinary[name] = value;
       }
     }
-    const environment = secretManager.createEnvironmentRevision(resource.id, { ordinary, secretRefs });
+    const environment = secretManager.createEnvironmentRevision(resource.id, { ordinary, secretRefs, excluded });
     const captureId = 'wec_' + randomUUID().replace(/-/g, '');
     const capture = {
       schemaVersion: WORKLOAD_EVIDENCE_SCHEMA_VERSION,
@@ -598,5 +635,6 @@ module.exports = {
   environmentCaptureConfirmation,
   parseEnvironment,
   redactedEnvironment,
+  providerRuntimeEnvironmentName,
   sourceCaptureConfirmation
 };

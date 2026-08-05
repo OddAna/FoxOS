@@ -550,7 +550,9 @@ fingerprint. Sensitive-looking names are always encrypted; `--secret-name`
 classifies additional application-specific names as secrets. Capture repeats
 the inspection, rejects any value/name/container drift, encrypts secret values
 into revision-pinned references and stores the complete local environment
-revision. CLI/API output includes neither secret nor ordinary values.
+revision. Provider-injected `COOLIFY_*` runtime metadata is recorded by name as
+excluded and is not copied into FoxOS desired environment state. Evidence
+plan/capture output includes neither secret nor ordinary values.
 
 ```bash
 # Use a repository-scoped read-only credential. Its value comes from stdin.

@@ -48,7 +48,7 @@ function resource() {
         nanoCpus: null,
         pidsLimit: null
       },
-      environmentVariableCount: 4,
+      environmentVariableCount: 5,
       inspection: 'complete'
     },
     ports: [{ privatePort: 3000, protocol: 'tcp', hostIp: null, hostPort: null }],
@@ -95,6 +95,7 @@ function harness() {
         Env: [
           'NODE_ENV=production',
           'CRM_TARGET=dual',
+          'COOLIFY_FQDN=site.example.test',
           'DAAS_HUB_SHARED_SECRET=' + RUNTIME_SECRET_VALUE,
           'HIGHLEVEL_API_TOKEN=another-encrypted-runtime-value'
         ]
@@ -189,12 +190,19 @@ test('environment capture classifies sensitive names, rejects drift and persists
     });
     assert.deepEqual(plan.ordinaryNames, ['CRM_TARGET', 'NODE_ENV']);
     assert.deepEqual(plan.secretNames, ['DAAS_HUB_SHARED_SECRET', 'HIGHLEVEL_API_TOKEN']);
+    assert.deepEqual(plan.excludedNames, ['COOLIFY_FQDN']);
     assert.equal(plan.valuesIncluded, false);
     assert.equal(JSON.stringify(plan).includes(RUNTIME_SECRET_VALUE), false);
     assert.deepEqual(dockerCalls.map((call) => call.method), ['GET']);
 
     const capture = await manager.captureEnvironment(plan.planId, plan.confirmation);
-    assert.equal(capture.environment.variableCount, 4);
+    assert.equal(capture.environment.variableCount, 5);
+    assert.equal(capture.environment.managedVariableCount, 4);
+    assert.equal(capture.environment.excludedVariableCount, 1);
+    assert.deepEqual(capture.environment.excluded, [{
+      name: 'COOLIFY_FQDN',
+      reason: 'provider-runtime-metadata'
+    }]);
     assert.equal(capture.environment.secretValuesIncluded, false);
     assert.equal(capture.environment.ordinaryValuesIncluded, false);
     assert.equal(capture.guarantees.runtimeMutated, false);
@@ -202,6 +210,10 @@ test('environment capture classifies sensitive names, rejects drift and persists
     const environment = secretManager.getEnvironmentRevision(RESOURCE_ID);
     assert.equal(environment.revision, capture.environment.revision);
     assert.equal(environment.secretRefs.length, 2);
+    assert.deepEqual(environment.excluded, [{
+      name: 'COOLIFY_FQDN',
+      reason: 'provider-runtime-metadata'
+    }]);
     assert.equal(JSON.stringify(capture).includes(RUNTIME_SECRET_VALUE), false);
     const persistedSecrets = fs.readdirSync(secretManager.paths.recordsRoot, { recursive: true })
       .filter((entry) => String(entry).endsWith('.json'))

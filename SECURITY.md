@@ -135,6 +135,8 @@ operator-designated names become encrypted secret revisions; returned evidence
 contains references only. Ordinary environment values remain private local
 environment-revision data and are not copied into workload-evidence records,
 Application Manifests, independence reports or API/CLI capture output.
+Provider-injected `COOLIFY_*` metadata is stored only as excluded names and is
+never promoted into the managed application environment.
 
 Neither evidence operation builds an image, starts/stops a container, changes a
 route, calls a provider API, detaches authority or approves migration.

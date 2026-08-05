@@ -283,7 +283,7 @@ test('an external stateless workload uses its authenticated local source archive
     runtime: {
       ...resource().runtime,
       image: 'provider-site:latest',
-      environmentVariableCount: 2,
+      environmentVariableCount: 3,
       constraints: {
         ...resource().runtime.constraints,
         memoryBytes: null,
@@ -295,7 +295,7 @@ test('an external stateless workload uses its authenticated local source archive
   });
   external.classification = classifyResource(external);
   const environment = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     resourceId: external.id,
     revision: 'env_rev_' + '1'.repeat(32),
     ordinary: [{ name: 'NODE_ENV', value: 'production' }],
@@ -305,10 +305,11 @@ test('an external stateless workload uses its authenticated local source archive
       revision: 'secret_rev_' + '3'.repeat(32),
       keyId: 'key_' + '4'.repeat(24)
     }],
+    excluded: [{ name: 'COOLIFY_FQDN', reason: 'provider-runtime-metadata' }],
     secretValuesIncluded: false
   };
   const sourceRevision = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     type: 'foxos-encrypted-source-archive-revision',
     revisionId: 'wsr_' + '5'.repeat(32),
     resourceId: external.id,
@@ -373,6 +374,13 @@ test('an external stateless workload uses its authenticated local source archive
     assert.equal(draft.desired.source.archive.externalGitRequiredToReconstructRevision, false);
     assert.equal(draft.desired.source.credential.valueIncluded, false);
     assert.equal(draft.desired.environment.revision, environment.revision);
+    assert.equal(draft.desired.environment.observedVariableCount, 3);
+    assert.equal(draft.desired.environment.managedVariableCount, 2);
+    assert.equal(draft.desired.environment.excludedProviderVariableCount, 1);
+    assert.deepEqual(draft.desired.environment.excluded, [{
+      name: 'COOLIFY_FQDN',
+      reason: 'provider-runtime-metadata'
+    }]);
     assert.equal(blockerCodes.includes('immutable-image-missing'), false);
     assert.equal(blockerCodes.includes('environment-revision-missing'), false);
     assert.equal(blockerCodes.includes('source-runtime-binding-missing'), true);

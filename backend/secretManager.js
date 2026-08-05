@@ -4,7 +4,7 @@ const path = require('node:path');
 const { atomicWriteJson } = require('./resourceRegistry');
 
 const SECRET_SCHEMA_VERSION = 1;
-const ENVIRONMENT_SCHEMA_VERSION = 1;
+const ENVIRONMENT_SCHEMA_VERSION = 2;
 const RESOURCE_ID_PATTERN = /^res_[a-f0-9]{32}$/;
 const SECRET_ID_PATTERN = /^secret_[a-f0-9]{32}$/;
 const SECRET_REVISION_PATTERN = /^secret_rev_[a-f0-9]{32}$/;
@@ -197,6 +197,9 @@ function createSecretManager({
     const secretInput = input.secretRefs && typeof input.secretRefs === 'object' && !Array.isArray(input.secretRefs)
       ? input.secretRefs
       : {};
+    const excludedInput = input.excluded && typeof input.excluded === 'object' && !Array.isArray(input.excluded)
+      ? input.excluded
+      : {};
     const ordinary = Object.entries(ordinaryInput).map(([rawName, rawValue]) => {
       const name = validateEnvironmentName(rawName);
       if (SENSITIVE_ENV_NAME.test(name)) {
@@ -221,11 +224,24 @@ function createSecretManager({
       };
     }).sort((left, right) => left.name.localeCompare(right.name));
 
+    const excluded = Object.entries(excludedInput).map(([rawName, rawReason]) => {
+      const name = validateEnvironmentName(rawName);
+      const reason = String(rawReason || '');
+      if (reason !== 'provider-runtime-metadata') {
+        throw new SecretError('Environment exclusion reason is unsupported', 400, 'unsupported-environment-exclusion');
+      }
+      return { name, reason };
+    }).sort((left, right) => left.name.localeCompare(right.name));
+
     const ordinaryNames = new Set(ordinary.map((entry) => entry.name));
+    const secretNames = new Set(secretRefs.map((entry) => entry.name));
     if (secretRefs.some((entry) => ordinaryNames.has(entry.name))) {
       throw new SecretError('An environment name cannot be both ordinary and secret', 400, 'duplicate-environment-name');
     }
-    if (!ordinary.length && !secretRefs.length) {
+    if (excluded.some((entry) => ordinaryNames.has(entry.name) || secretNames.has(entry.name))) {
+      throw new SecretError('An environment name cannot be managed and excluded', 400, 'duplicate-environment-name');
+    }
+    if (!ordinary.length && !secretRefs.length && !excluded.length) {
       throw new SecretError('Environment revision must classify at least one value', 400, 'empty-environment-revision');
     }
 
@@ -234,6 +250,7 @@ function createSecretManager({
       resourceId,
       ordinary,
       secretRefs,
+      excluded,
       secretValuesIncluded: false
     };
     const revision = 'env_rev_' + hash(canonicalJson(core), 32);
@@ -254,10 +271,10 @@ function createSecretManager({
   function getEnvironmentRevision(resourceId) {
     const record = readJson(environmentLatestPath(resourceId), null);
     if (!record) return null;
-    if (record.schemaVersion !== ENVIRONMENT_SCHEMA_VERSION || record.resourceId !== resourceId) {
+    if (![1, ENVIRONMENT_SCHEMA_VERSION].includes(record.schemaVersion) || record.resourceId !== resourceId) {
       throw new SecretError('Environment revision schema is unsupported', 409, 'unsupported-environment-schema');
     }
-    return record;
+    return { ...record, excluded: record.excluded || [] };
   }
 
   function resolveEnvironment(environment) {

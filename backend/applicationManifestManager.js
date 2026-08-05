@@ -553,7 +553,11 @@ function createApplicationManifestManager({
       (currentUpdate || currentSourceDeployment || currentComposeDeployment) &&
       sourceGuarantees.environmentSupported === false
     );
-    const managedEnvironmentCount = imageDefaultEnvironmentOnly ? 0 : environmentCount;
+    const excludedEnvironment = environment ? environment.excluded || [] : [];
+    const excludedEnvironmentCount = excludedEnvironment.length;
+    const managedEnvironmentCount = imageDefaultEnvironmentOnly
+      ? 0
+      : Math.max(0, Number(environmentCount || 0) - excludedEnvironmentCount);
     const sourceDefaultEnvironmentCount = imageDefaultEnvironmentOnly ? environmentCount : 0;
     const classifiedCount = environment
       ? (environment.ordinary || []).length + (environment.secretRefs || []).length
@@ -697,9 +701,14 @@ function createApplicationManifestManager({
           revision: entry.revision,
           keyId: entry.keyId
         })).sort((left, right) => left.name.localeCompare(right.name)) : [],
+        excluded: excludedEnvironment.map((entry) => ({
+          name: entry.name,
+          reason: entry.reason
+        })).sort((left, right) => left.name.localeCompare(right.name)),
         observedVariableCount: environmentCount,
         sourceDefaultVariableCount: sourceDefaultEnvironmentCount,
         managedVariableCount: managedEnvironmentCount,
+        excludedProviderVariableCount: excludedEnvironmentCount,
         valuesIncluded: false
       },
       persistence: {

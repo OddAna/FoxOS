@@ -381,7 +381,9 @@ values. Exact-confirmation capture repeats the read, rejects container or
 environment drift, writes ordinary configuration to a local environment
 revision and converts every sensitive or explicitly classified name into an
 encrypted secret revision. Returned plans, captures, manifests and audits expose
-names/references only.
+names/references only. Provider-injected `COOLIFY_*` variables are retained only
+as excluded-name evidence with `provider-runtime-metadata` reason codes; their
+values and provider-specific desired configuration are not carried forward.
 
 The source archive is immutable source evidence, not proof that the provider's
 current image came from that source. Application Manifest records
