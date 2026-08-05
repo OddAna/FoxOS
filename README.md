@@ -255,6 +255,8 @@ The authenticated API exposes:
 | `GET /api/resources/export` | Download a redacted provider-neutral migration plan |
 | `GET /api/migration-selections/current` | Read the current snapshot-bound, review-only interface selection |
 | `PUT /api/migration-selections/current` | Save eligible resource IDs for later review without starting a migration |
+| `GET /api/stateless-migrations/plans/:planId/review` | Read the server-owned reviewed configuration and drift state for one stateless plan |
+| `PUT /api/stateless-migrations/plans/:planId/review` | Save health target, runtime confirmation, every route confirmation and certificate adapter choice without applying them |
 | `POST /api/resources/:resourceId/adoption-plan` | Create a deterministic import draft for the strictly disposable pilot |
 | `GET /api/secrets` | Read encrypted-secret metadata without returning values |
 | `POST /api/secrets` | Create a new encrypted secret revision |
@@ -608,6 +610,16 @@ change makes that selection stale instead of silently applying it to different
 runtime state. Browser storage is never the authority. The interface exposes no
 start, apply, approve, source-stop or provider-detach action.
 
+Opening an eligible resource prepares its deterministic stateless review plan
+in the same Settings page. The interface selects a health target from observed
+routes, shows the compiler-owned CPU, memory, PID, restart, filesystem and
+host-port policy, and requires every route plus its certificate adapter to be
+reviewed separately. `Kaydet ve Yeniden Değerlendir` writes only an allowlisted
+owner-only record under `.foxos-data/stateless-migration-reviews/`. It is bound
+to the exact server plan, snapshot, resource, manifest revision, evidence
+fingerprint and execution contract; drift invalidates it. Saving does not
+create a candidate, change a route, issue an approval or start a migration.
+
 ## Sealed stateless transaction core
 
 The next migration slice implements the provider-neutral state machine for one
@@ -637,10 +649,12 @@ docker compose exec -T foxos node /app/statelessMigrationCli.js get STATELESS_PL
 
 Authenticated clients can use `GET /api/stateless-migrations`, create a
 review-only plan with `POST /api/stateless-migrations/plans`, and read one with
-`GET /api/stateless-migrations/plans/:planId`. There is intentionally no API or
-CLI operation that starts a migration. The later FoxOS interface must supply a
-short-lived, one-time, plan/resource/evidence-bound approval and the reviewed
-runtime/route adapters before execution can be enabled.
+`GET /api/stateless-migrations/plans/:planId`. Its reviewed configuration is
+available through `GET` and `PUT`
+`/api/stateless-migrations/plans/:planId/review`. There is intentionally no API
+or CLI operation that starts a migration. A later, separately authorized FoxOS
+step must supply a short-lived, one-time, complete-contract-bound approval and
+the reviewed runtime/route adapters before execution can be enabled.
 
 The transaction is exercised against real Docker by a separate, deliberately
 non-production lab command:
@@ -667,14 +681,14 @@ ID, retains every observed domain/path plus its Traefik service private port,
 and describes a separate constrained candidate with no host port or writable
 mount. Environment output contains names and encrypted references only.
 
-Each route declares FoxOS as desired authority and requires browser-trusted TLS,
-but deliberately leaves the certificate adapter unselected. DNS and certificate
+Each route declares FoxOS as desired authority and requires browser-trusted TLS.
+The Settings review stores the operator's replaceable adapter selection without
+storing adapter credentials or activating a provider. DNS and certificate
 implementations remain replaceable; FoxOS does not infer Cloudflare or any other
 provider and the clean base installation still needs no domain, token, external
-account or paid service. Health target, runtime defaults, routes and certificate
-adapter must be reviewed in the later FoxOS interface. Production still has no
-runtime adapter, approval verifier, run endpoint or approve endpoint, so
-creating this contract cannot start a migration or change traffic.
+account or paid service. Production still has no runtime adapter, approval
+verifier, run endpoint or approve endpoint, so creating or reviewing this
+contract cannot start a migration or change traffic.
 
 The authenticated API and standalone CLI use the same compiler context. A CLI
 status read initializes no Docker connection or encryption key; the heavier

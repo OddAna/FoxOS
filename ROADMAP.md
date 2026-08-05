@@ -215,11 +215,15 @@ target blocks only adoption/migration operations that require restore proof.
   classify all observed resources, allow checkboxes only for evidence-complete
   stateless review candidates, invalidate saved selections after snapshot
   drift, and expose no apply, approval, source-stop or provider-detach action.
-- [ ] Add the reviewed FoxOS interface for health target, runtime defaults,
-  every route and certificate adapter selection. Only after that interface
-  supplies a short-lived one-time approval may a production Docker/route
-  adapter be injected and a run action be exposed; until then the production
-  execution gate remains sealed.
+- [x] Add the reviewed FoxOS interface for health target, applied runtime
+  defaults, every route and replaceable certificate adapter selection. Persist
+  only the allowlisted configuration on the server, bind it to the exact
+  snapshot/resource/manifest/execution contract, invalidate it on drift and
+  keep the production execution gate sealed.
+- [ ] After Burak separately authorizes production execution, add a short-lived
+  one-time approval bound to the complete reviewed contract. Only then may a
+  production Docker/route adapter be injected and a run action be exposed;
+  source stop, provider detach and destructive cleanup remain separate gates.
 - [ ] Expand the implemented disposable dry-run, conflict detection, verified
   cutover and reversible rollback to real application classes one safety gate at
   a time.
