@@ -577,6 +577,7 @@ test('a current isolated stateful shadow supplies tested health and runtime limi
   external.classification = classifyResource(external);
   const operation = {
     schemaVersion: 1,
+    action: 'refresh',
     operationId: 'sso_' + '3'.repeat(32),
     planId: 'ssp_' + '4'.repeat(32),
     sourceResourceId: external.id,
@@ -593,6 +594,16 @@ test('a current isolated stateful shadow supplies tested health and runtime limi
       recreated: false
     },
     runtimeLimits: { memoryBytes: 268435456, nanoCpus: 500000000, pidsLimit: 256 },
+    refresh: {
+      previousRehearsalOperationId: 'sro_' + '1'.repeat(32),
+      rehearsalOperationId: 'sro_' + '2'.repeat(32),
+      previousSnapshotAt: '2026-08-05T02:00:00.000Z',
+      snapshotAt: '2026-08-05T02:59:00.000Z',
+      newerSnapshotVerified: true,
+      inPlaceVolumeMutation: false,
+      finalSynchronizationProven: false,
+      sourceWritesMayContinueAfterSnapshot: true
+    },
     shadow: {
       containerId: 'd'.repeat(64),
       internalNetworkVerified: true,
@@ -651,6 +662,9 @@ test('a current isolated stateful shadow supplies tested health and runtime limi
     assert.equal(draft.evidence.healthProof.type, 'foxos-persistent-stateful-shadow-health');
     assert.equal(draft.evidence.statefulShadowProof.trafficCutover, false);
     assert.equal(draft.evidence.statefulShadowProof.providerDetached, false);
+    assert.equal(draft.evidence.statefulShadowProof.pointInTimeSnapshot, true);
+    assert.equal(draft.evidence.statefulShadowProof.refresh.newerSnapshotVerified, true);
+    assert.equal(draft.evidence.statefulShadowProof.finalSynchronizationProven, false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

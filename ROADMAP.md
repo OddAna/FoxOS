@@ -250,8 +250,13 @@ target blocks only adoption/migration operations that require restore proof.
   no-traffic shadow on separate volumes and a separate identity; registry proof
   must confirm its restart policy, limits, mounts, absent host port and internal
   network before it becomes current.
-- [ ] Add controlled shadow refresh/final synchronization before route cutover;
-  the current point-in-time shadow is not live replication.
+- [x] Add controlled point-in-time shadow refresh from a newer authenticated
+  rehearsal. The previous healthy generation stays current until separate
+  volumes/network/container pass digest, isolation, health and registry proof;
+  failure before promotion leaves it untouched.
+- [ ] Couple final source quiesce/synchronization to reversible route cutover;
+  controlled refresh is still not live replication and does not prove that no
+  writes occurred after the snapshot.
 - [ ] Back up resource manifests, deployment metadata, environment configuration
   and proxy/TLS state without exposing secrets.
 - [ ] Provide per-resource restore and full-disaster restore workflows.

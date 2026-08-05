@@ -411,6 +411,8 @@ function statefulRestoreProofDescriptor(operation, rehearsalResourceFingerprintV
 
 function statefulShadowProofDescriptor(operation, rehearsalResourceFingerprintValue, resource) {
   const limits = operation && operation.runtimeLimits || {};
+  const refresh = operation && operation.refresh || null;
+  if ((operation && operation.action === 'refresh') !== Boolean(refresh)) return null;
   if (
     !operation || operation.status !== 'active' ||
     operation.sourceResourceId !== resource.id ||
@@ -438,7 +440,11 @@ function statefulShadowProofDescriptor(operation, rehearsalResourceFingerprintVa
     operation.guarantees.externalNetworkIncluded !== false || operation.guarantees.routeCreated !== false ||
     operation.guarantees.trafficCutover !== false || operation.guarantees.providerMutationIncluded !== false ||
     operation.guarantees.providerDetachIncluded !== false || operation.guarantees.environmentValuesIncluded !== false ||
-    operation.guarantees.secretValuesIncluded !== false
+    operation.guarantees.secretValuesIncluded !== false ||
+    (refresh && (
+      refresh.newerSnapshotVerified !== true || refresh.inPlaceVolumeMutation !== false ||
+      refresh.finalSynchronizationProven !== false || refresh.sourceWritesMayContinueAfterSnapshot !== true
+    ))
   ) return null;
   return {
     type: 'foxos-persistent-stateful-shadow',
@@ -465,6 +471,18 @@ function statefulShadowProofDescriptor(operation, rehearsalResourceFingerprintVa
     trafficCutover: false,
     providerDetached: false,
     localSnapshot: true,
+    pointInTimeSnapshot: true,
+    refresh: refresh ? {
+      previousRehearsalOperationId: refresh.previousRehearsalOperationId,
+      rehearsalOperationId: refresh.rehearsalOperationId,
+      previousSnapshotAt: refresh.previousSnapshotAt,
+      snapshotAt: refresh.snapshotAt,
+      newerSnapshotVerified: true,
+      inPlaceVolumeMutation: false,
+      finalSynchronizationProven: false,
+      sourceWritesMayContinueAfterSnapshot: true
+    } : null,
+    finalSynchronizationProven: false,
     offHostRecoveryProven: false,
     verifiedAt: operation.completedAt
   };

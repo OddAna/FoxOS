@@ -8,6 +8,7 @@ const { createSecretManager } = require('./secretManager');
 const { createStatefulRehearsalManager } = require('./statefulRehearsalManager');
 const {
   PLAN_STATEFUL_SHADOW_CONFIRMATION,
+  PLAN_STATEFUL_SHADOW_REFRESH_CONFIRMATION,
   createStatefulShadowManager
 } = require('./statefulShadowManager');
 
@@ -67,6 +68,29 @@ async function main() {
     }
     return output(await manager.runPlan(planId, flagValue(args, '--confirm')));
   }
+  if (command === 'refresh-plan') {
+    const resourceId = args[1];
+    if (!resourceId) {
+      throw new Error(
+        `Usage: statefulShadowCli.js refresh-plan <resource-id> ` +
+        `--confirm "${PLAN_STATEFUL_SHADOW_REFRESH_CONFIRMATION}"`
+      );
+    }
+    return output(await manager.createRefreshPlan({
+      resourceId,
+      confirmation: flagValue(args, '--confirm')
+    }));
+  }
+  if (command === 'refresh-run') {
+    const planId = args[1];
+    if (!planId) {
+      throw new Error(
+        'Usage: statefulShadowCli.js refresh-run <plan-id> ' +
+        '--confirm "REFRESH STATEFUL SHADOW <plan-id>"'
+      );
+    }
+    return output(await manager.runRefreshPlan(planId, flagValue(args, '--confirm')));
+  }
   if (command === 'get-plan') {
     if (!args[1]) throw new Error('Usage: statefulShadowCli.js get-plan <plan-id>');
     return output(manager.getPlan(args[1]));
@@ -75,7 +99,10 @@ async function main() {
     if (!args[1]) throw new Error('Usage: statefulShadowCli.js get-operation <operation-id>');
     return output(manager.getOperation(args[1]));
   }
-  throw new Error('Usage: statefulShadowCli.js <status|plan|run|get-plan|get-operation>');
+  throw new Error(
+    'Usage: statefulShadowCli.js ' +
+    '<status|plan|run|refresh-plan|refresh-run|get-plan|get-operation>'
+  );
 }
 
 main().catch((error) => {

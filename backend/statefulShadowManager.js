@@ -12,8 +12,9 @@ const { defaultHostProbe } = require('./sourceDeploymentManager');
 
 const STATEFUL_SHADOW_SCHEMA_VERSION = 1;
 const PLAN_STATEFUL_SHADOW_CONFIRMATION = 'PLAN STATEFUL SHADOW';
+const PLAN_STATEFUL_SHADOW_REFRESH_CONFIRMATION = 'PLAN STATEFUL SHADOW REFRESH';
 const RESOURCE_ID_PATTERN = /^res_[a-f0-9]{32}$/;
-const RECORD_ID_PATTERN = /^(ssp|sso)_[a-f0-9]{24,64}$/;
+const RECORD_ID_PATTERN = /^(ssp|sso|ssrp|ssro)_[a-f0-9]{24,64}$/;
 const MAX_RECORDS = 100;
 const DEFAULT_MEMORY_BYTES = 256 * 1024 * 1024;
 const DEFAULT_NANO_CPUS = 500000000;
@@ -83,6 +84,10 @@ function runConfirmation(planId) {
   return 'RUN STATEFUL SHADOW ' + planId;
 }
 
+function refreshConfirmation(planId) {
+  return 'REFRESH STATEFUL SHADOW ' + planId;
+}
+
 function isNotFound(error) {
   return /not found|no such (?:container|network|volume)/i.test(String(error && error.message || ''));
 }
@@ -134,6 +139,23 @@ function shadowNames(resourceId, volumes) {
   };
 }
 
+function refreshedShadowNames(resourceId, planId, volumes) {
+  const sourceSuffix = hash(resourceId, 12);
+  const generationSuffix = hash(planId, 10);
+  const prefix = `foxos-stateful-shadow-${sourceSuffix}-r${generationSuffix}`;
+  return {
+    shadowResourceId: 'res_' + hash('stateful-shadow:' + resourceId, 32),
+    containerName: prefix,
+    networkName: prefix,
+    volumes: volumes.map((volume, index) => ({
+      sourceName: volume.name,
+      destination: volume.destination,
+      policy: volume.policy,
+      shadowName: `${prefix}-v${index + 1}`
+    }))
+  };
+}
+
 function createStatefulShadowManager({
   dataRoot,
   dockerRequest,
@@ -178,6 +200,21 @@ function createStatefulShadowManager({
     const record = readJson(recordPath(directory, id));
     if (!record) throw new StatefulShadowError(label + ' was not found', 404, 'shadow-record-not-found');
     return record;
+  }
+
+  function prunePlans() {
+    const protectedPlanIds = new Set(listJson(currentRoot).map((current) => current.planId).filter(Boolean));
+    const records = listJson(plansRoot).sort((left, right) => (
+      String(left.createdAt || '').localeCompare(String(right.createdAt || '')) ||
+      String(left.planId || '').localeCompare(String(right.planId || ''))
+    ));
+    let excess = Math.max(0, records.length - MAX_RECORDS);
+    for (const record of records) {
+      if (excess === 0) break;
+      if (!record.planId || protectedPlanIds.has(record.planId) || !RECORD_ID_PATTERN.test(record.planId)) continue;
+      fs.unlinkSync(path.join(plansRoot, record.planId + '.json'));
+      excess -= 1;
+    }
   }
 
   function writeOperation(operation) {
@@ -343,6 +380,41 @@ function createStatefulShadowManager({
     }));
   }
 
+  function shadowRecordFingerprint(record) {
+    return 'sha256:' + hash(canonicalJson({
+      operationId: record.operationId,
+      sourceResourceId: record.sourceResourceId,
+      sourceResourceFingerprint: record.sourceResourceFingerprint,
+      shadowResourceId: record.shadowResourceId,
+      rehearsalOperationId: record.rehearsal && record.rehearsal.operationId,
+      environmentRevision: record.environment && record.environment.revision,
+      runtimeLimits: record.runtimeLimits,
+      shadow: record.shadow && {
+        containerId: record.shadow.containerId,
+        containerName: record.shadow.containerName,
+        networkName: record.shadow.networkName,
+        volumes: record.shadow.volumes,
+        volumesRestored: record.shadow.volumesRestored,
+        health: record.shadow.health
+      }
+    }));
+  }
+
+  function verifiedCurrentFor(resourceId) {
+    const current = currentRecords().find((candidate) => candidate.sourceResourceId === resourceId);
+    if (!current) {
+      throw new StatefulShadowError('A current FoxOS stateful shadow is required', 409, 'stateful-shadow-current-missing');
+    }
+    if (current.status !== 'active' || !current.registryProof.verified) {
+      throw new StatefulShadowError(
+        'The current FoxOS stateful shadow must be healthy before refresh',
+        409,
+        'stateful-shadow-current-stale'
+      );
+    }
+    return current;
+  }
+
   async function createPlan(input = {}) {
     if (input.confirmation !== PLAN_STATEFUL_SHADOW_CONFIRMATION) {
       throw new StatefulShadowError('Exact stateful shadow planning confirmation is required', 400, 'confirmation-required');
@@ -370,6 +442,7 @@ function createStatefulShadowManager({
     const planId = 'ssp_' + randomUUID().replace(/-/g, '');
     const plan = {
       schemaVersion: STATEFUL_SHADOW_SCHEMA_VERSION,
+      action: 'create',
       planId,
       sourceResourceId: resource.id,
       sourceResourceName: resource.name,
@@ -436,7 +509,162 @@ function createStatefulShadowManager({
       }
     };
     atomicWriteJson(recordPath(plansRoot, planId), plan);
-    pruneJson(plansRoot);
+    prunePlans();
+    return plan;
+  }
+
+  async function createRefreshPlan(input = {}) {
+    if (input.confirmation !== PLAN_STATEFUL_SHADOW_REFRESH_CONFIRMATION) {
+      throw new StatefulShadowError(
+        'Exact stateful shadow refresh planning confirmation is required',
+        400,
+        'confirmation-required'
+      );
+    }
+    const { snapshot, resource } = latestResource(input.resourceId);
+    const current = verifiedCurrentFor(resource.id);
+    const rehearsal = rehearsalFor(resource);
+    const currentSnapshotAt = Date.parse(String(current.rehearsal && current.rehearsal.snapshotAt || ''));
+    const rehearsalSnapshotAt = Date.parse(String(rehearsal.operation.completedAt || ''));
+    if (
+      rehearsal.operation.operationId === (current.rehearsal && current.rehearsal.operationId) ||
+      !Number.isFinite(currentSnapshotAt) || !Number.isFinite(rehearsalSnapshotAt) ||
+      rehearsalSnapshotAt <= currentSnapshotAt
+    ) {
+      throw new StatefulShadowError(
+        'A newer verified stateful rehearsal is required before shadow refresh',
+        409,
+        'newer-stateful-rehearsal-required'
+      );
+    }
+    if (
+      current.sourceResourceFingerprint !== statefulRehearsalResourceFingerprint(resource) ||
+      !current.source || current.source.containerId !== resource.runtime.containerId ||
+      current.source.imageId !== resource.runtime.imageId
+    ) {
+      throw new StatefulShadowError(
+        'Source identity changed after the current shadow generation',
+        409,
+        'stateful-shadow-refresh-source-drift'
+      );
+    }
+    const environment = environmentFor(resource, rehearsal.operation);
+    if (!current.environment || current.environment.revision !== environment.revision) {
+      throw new StatefulShadowError(
+        'Environment revision changed after the current shadow generation',
+        409,
+        'stateful-shadow-refresh-environment-drift'
+      );
+    }
+    const currentVolumes = (current.shadow.volumes || []).map((volume) => ({
+      name: volume.sourceName,
+      destination: volume.destination,
+      policy: volume.policy
+    }));
+    const rehearsalVolumes = rehearsal.plan.volumes.map((volume) => ({
+      name: volume.name,
+      destination: volume.destination,
+      policy: volume.policy
+    }));
+    if (canonicalJson(currentVolumes) !== canonicalJson(rehearsalVolumes)) {
+      throw new StatefulShadowError(
+        'Volume classification changed after the current shadow generation',
+        409,
+        'stateful-shadow-refresh-volume-drift'
+      );
+    }
+    const planId = 'ssrp_' + randomUUID().replace(/-/g, '');
+    const names = refreshedShadowNames(resource.id, planId, rehearsal.plan.volumes);
+    if (names.shadowResourceId !== current.shadowResourceId) {
+      throw new StatefulShadowError('Stable shadow resource identity changed', 500, 'stateful-shadow-identity-drift');
+    }
+    const volumes = rehearsal.plan.volumes.map((volume) => ({
+      name: volume.name,
+      destination: volume.destination,
+      policy: volume.policy,
+      backup: backupForVolume(rehearsal.operation, volume)
+    }));
+    const plan = {
+      schemaVersion: STATEFUL_SHADOW_SCHEMA_VERSION,
+      action: 'refresh',
+      planId,
+      sourceResourceId: resource.id,
+      sourceResourceName: resource.name,
+      sourceProvider: resource.provider,
+      sourceContainerId: resource.runtime.containerId,
+      sourceImageId: resource.runtime.imageId,
+      sourceResourceFingerprint: statefulRehearsalResourceFingerprint(resource),
+      registrySnapshotId: snapshot.snapshotId,
+      previous: {
+        operationId: current.operationId,
+        shadowResourceId: current.shadowResourceId,
+        shadowContainerId: current.shadow.containerId,
+        shadowContainerName: current.shadow.containerName,
+        shadowNetworkName: current.shadow.networkName,
+        rehearsalOperationId: current.rehearsal.operationId,
+        snapshotAt: current.rehearsal.snapshotAt,
+        fingerprint: shadowRecordFingerprint(current)
+      },
+      rehearsal: {
+        operationId: rehearsal.operation.operationId,
+        planId: rehearsal.plan.planId,
+        verifiedAt: rehearsal.proof.verifiedAt,
+        snapshotAt: rehearsal.operation.completedAt,
+        sourceEnvironmentFingerprint: rehearsal.plan.environmentFingerprint,
+        sourceHealthFingerprint: rehearsal.plan.health.sourceFingerprint
+      },
+      environment: {
+        revision: environment.revision,
+        managedVariableCount: rehearsal.operation.environment.managedVariableCount,
+        excludedProviderVariableCount: rehearsal.operation.environment.excludedProviderVariableCount,
+        valuesIncluded: false
+      },
+      volumes: volumes.map((volume) => ({
+        name: volume.name,
+        destination: volume.destination,
+        policy: volume.policy,
+        backup: volume.backup ? {
+          archiveFile: path.relative(dataRoot, volume.backup.archiveFile),
+          contentDigest: volume.backup.contentDigest,
+          encryptedDigest: volume.backup.encryptedDigest,
+          keyId: volume.backup.keyId,
+          authenticated: true,
+          plaintextStored: false
+        } : null
+      })),
+      health: rehearsal.plan.health,
+      privatePort: rehearsal.plan.privatePort,
+      shadow: names,
+      runtimeLimits: { ...current.runtimeLimits },
+      confirmation: refreshConfirmation(planId),
+      createdAt: now(),
+      guarantees: {
+        sourceMutationIncluded: false,
+        sourcePauseIncluded: false,
+        sourceStopIncluded: false,
+        sourceRecreationIncluded: false,
+        sourceIdentityClaimed: false,
+        separateFoxOSIdentity: true,
+        internalNetworkOnly: true,
+        hostPortPublished: false,
+        externalNetworkIncluded: false,
+        routeCreated: false,
+        trafficCutover: false,
+        providerMutationIncluded: false,
+        providerDetachIncluded: false,
+        localEncryptedSnapshotUsed: true,
+        previousShadowPreservedUntilCandidateRegistryProof: true,
+        inPlaceVolumeMutation: false,
+        newerRehearsalRequired: true,
+        finalSynchronizationProven: false,
+        sourceWritesMayContinueAfterSnapshot: true,
+        offHostRecoveryProven: false,
+        environmentValuesIncluded: false,
+        secretValuesIncluded: false
+      }
+    };
+    atomicWriteJson(recordPath(plansRoot, planId), plan);
+    prunePlans();
     return plan;
   }
 
@@ -479,6 +707,73 @@ function createStatefulShadowManager({
     }
     const source = await inspectSource(plan);
     return { resource, rehearsal, environment, source };
+  }
+
+  async function inspectCurrentShadow(current) {
+    const currentPlan = getRecord(plansRoot, current.planId, 'Current stateful shadow plan');
+    const details = await waitForHealth(
+      current.shadow.containerId,
+      currentPlan.health,
+      currentPlan.privatePort,
+      current.shadow.networkName
+    );
+    const labels = details.Config && details.Config.Labels || {};
+    const networks = Object.keys(details.NetworkSettings && details.NetworkSettings.Networks || {});
+    const bindings = details.NetworkSettings && details.NetworkSettings.Ports &&
+      details.NetworkSettings.Ports[currentPlan.privatePort + '/tcp'] || [];
+    if (
+      details.Id !== current.shadow.containerId || details.State && details.State.Status !== 'running' ||
+      labels['com.foxos.stateful-shadow.operation'] !== current.shadow.ownerOperationId ||
+      labels['com.foxos.resource.id'] !== current.shadowResourceId ||
+      networks.length !== 1 || networks[0] !== current.shadow.networkName || bindings.length !== 0
+    ) {
+      throw new StatefulShadowError(
+        'The current stateful shadow runtime changed before refresh',
+        409,
+        'stateful-shadow-current-drift'
+      );
+    }
+    return details;
+  }
+
+  async function revalidateRefreshPlan(plan) {
+    const { resource } = latestResource(plan.sourceResourceId);
+    if (
+      plan.action !== 'refresh' || resource.runtime.containerId !== plan.sourceContainerId ||
+      resource.runtime.imageId !== plan.sourceImageId ||
+      statefulRehearsalResourceFingerprint(resource) !== plan.sourceResourceFingerprint
+    ) {
+      throw new StatefulShadowError('Source workload changed after refresh planning', 409, 'shadow-refresh-plan-stale');
+    }
+    const current = verifiedCurrentFor(resource.id);
+    if (
+      current.operationId !== plan.previous.operationId ||
+      current.shadow.containerId !== plan.previous.shadowContainerId ||
+      current.shadowResourceId !== plan.previous.shadowResourceId ||
+      shadowRecordFingerprint(current) !== plan.previous.fingerprint
+    ) {
+      throw new StatefulShadowError('Current shadow changed after refresh planning', 409, 'shadow-refresh-plan-stale');
+    }
+    const rehearsal = rehearsalFor(resource);
+    if (rehearsal.operation.operationId !== plan.rehearsal.operationId) {
+      throw new StatefulShadowError('The current restore rehearsal changed after refresh planning', 409, 'shadow-refresh-plan-stale');
+    }
+    const environment = environmentFor(resource, rehearsal.operation);
+    if (environment.revision !== plan.environment.revision) {
+      throw new StatefulShadowError('Environment revision changed after refresh planning', 409, 'shadow-refresh-plan-stale');
+    }
+    const source = await inspectSource(plan);
+    await inspectCurrentShadow(current);
+    if (
+      plan.shadow.containerName === current.shadow.containerName ||
+      plan.shadow.networkName === current.shadow.networkName ||
+      plan.shadow.volumes.some((volume) => (
+        (current.shadow.volumes || []).some((previous) => previous.shadowName === volume.shadowName)
+      ))
+    ) {
+      throw new StatefulShadowError('Refresh candidate must use separate Docker objects', 500, 'shadow-refresh-name-collision');
+    }
+    return { resource, current, rehearsal, environment, source };
   }
 
   async function ensureResourceAbsent(type, name, requestPath) {
@@ -610,9 +905,168 @@ function createStatefulShadowManager({
     return archive;
   }
 
+  async function materializeShadowCandidate(plan, operation, rehearsal, environment, source) {
+    await ensureShadowResourcesAbsent(plan);
+    const resolvedEnvironment = secretManager.resolveEnvironment(environment);
+    if (resolvedEnvironment.length !== plan.environment.managedVariableCount) {
+      throw new StatefulShadowError('Resolved environment count differs from the plan', 409, 'environment-resolution-mismatch');
+    }
+
+    const labels = {
+      'com.foxos.managed': 'true',
+      'com.foxos.stateful-shadow': 'true',
+      'com.foxos.stateful-shadow.source-resource-id': plan.sourceResourceId,
+      'com.foxos.stateful-shadow.operation': operation.operationId,
+      'com.foxos.resource.id': plan.shadow.shadowResourceId
+    };
+    operation.shadow.created.network = true;
+    writeOperation(operation);
+    const network = await dockerRequest('POST', '/networks/create', {
+      Name: plan.shadow.networkName,
+      CheckDuplicate: true,
+      Driver: 'bridge',
+      Internal: true,
+      Attachable: false,
+      Labels: labels
+    });
+    operation.shadow.networkId = network.Id;
+    writeOperation(operation);
+    const networkDetails = await dockerRequest('GET', '/networks/' + encodeURIComponent(network.Id));
+    if (
+      !networkDetails || networkDetails.Id !== network.Id ||
+      networkDetails.Name !== plan.shadow.networkName || networkDetails.Internal !== true ||
+      !networkDetails.Labels ||
+      networkDetails.Labels['com.foxos.stateful-shadow.operation'] !== operation.operationId
+    ) {
+      throw new StatefulShadowError('Stateful shadow network is not internal', 500, 'shadow-network-not-internal');
+    }
+    operation.shadow.internalNetworkVerified = true;
+    writeOperation(operation);
+
+    for (const volume of plan.shadow.volumes) {
+      operation.shadow.created.volumes.push(volume.shadowName);
+      writeOperation(operation);
+      await dockerRequest('POST', '/volumes/create', { Name: volume.shadowName, Labels: labels });
+      const volumeDetails = await dockerRequest('GET', '/volumes/' + encodeURIComponent(volume.shadowName));
+      if (
+        !volumeDetails || volumeDetails.Name !== volume.shadowName || !volumeDetails.Labels ||
+        volumeDetails.Labels['com.foxos.stateful-shadow.operation'] !== operation.operationId
+      ) {
+        throw new StatefulShadowError('Stateful shadow volume ownership verification failed', 500, 'shadow-volume-ownership-failed');
+      }
+    }
+
+    const portKey = `${plan.privatePort}/tcp`;
+    operation.shadow.created.container = true;
+    writeOperation(operation);
+    const created = await dockerRequest(
+      'POST',
+      '/containers/create?name=' + encodeURIComponent(plan.shadow.containerName),
+      {
+        Image: plan.sourceImageId,
+        Env: resolvedEnvironment,
+        Labels: labels,
+        ExposedPorts: { [portKey]: {} },
+        ...(plan.health.mode === 'docker-healthcheck' ? { Healthcheck: source.healthcheck } : {}),
+        HostConfig: {
+          Mounts: plan.shadow.volumes.map((volume) => ({
+            Type: 'volume',
+            Source: volume.shadowName,
+            Target: volume.destination,
+            ReadOnly: false,
+            VolumeOptions: { NoCopy: true }
+          })),
+          RestartPolicy: { Name: 'unless-stopped', MaximumRetryCount: 0 },
+          NetworkMode: plan.shadow.networkName,
+          SecurityOpt: ['no-new-privileges:true'],
+          Memory: plan.runtimeLimits.memoryBytes,
+          NanoCpus: plan.runtimeLimits.nanoCpus,
+          PidsLimit: plan.runtimeLimits.pidsLimit
+        },
+        NetworkingConfig: { EndpointsConfig: { [plan.shadow.networkName]: {} } }
+      }
+    );
+    operation.shadow.containerId = created.Id;
+    writeOperation(operation);
+
+    for (const volume of plan.volumes) {
+      if (volume.policy === 'empty-ephemeral') {
+        operation.shadow.volumesRestored.push({
+          sourceName: volume.name,
+          destination: volume.destination,
+          policy: volume.policy,
+          restored: true,
+          recreatedEmpty: true
+        });
+        continue;
+      }
+      const archive = decryptArchive(plan, rehearsal.operation, volume);
+      await dockerArchiveRequest(
+        'PUT',
+        '/containers/' + created.Id + '/archive?path=' + encodeURIComponent(volume.destination),
+        archive
+      );
+      const restored = await dockerArchiveRequest(
+        'GET',
+        '/containers/' + created.Id + '/archive?path=' + encodeURIComponent(volume.destination + '/.'),
+        null
+      );
+      const restoredDigest = tarContentDigest(restored);
+      if (restoredDigest !== volume.backup.contentDigest) {
+        throw new StatefulShadowError('Stateful shadow restored data digest does not match', 500, 'shadow-restore-digest-mismatch');
+      }
+      operation.shadow.volumesRestored.push({
+        sourceName: volume.name,
+        destination: volume.destination,
+        policy: volume.policy,
+        restored: true,
+        contentDigest: restoredDigest
+      });
+    }
+    writeOperation(operation);
+
+    await dockerRequest('POST', '/containers/' + created.Id + '/start');
+    const details = await waitForHealth(created.Id, plan.health, plan.privatePort, plan.shadow.networkName);
+    const networks = Object.keys(details.NetworkSettings && details.NetworkSettings.Networks || {});
+    const bindings = details.NetworkSettings && details.NetworkSettings.Ports &&
+      details.NetworkSettings.Ports[portKey] || [];
+    const endpoint = details.NetworkSettings && details.NetworkSettings.Networks &&
+      details.NetworkSettings.Networks[plan.shadow.networkName];
+    const host = details.HostConfig || {};
+    const observedLabels = details.Config && details.Config.Labels || {};
+    if (
+      networks.length !== 1 || networks[0] !== plan.shadow.networkName ||
+      bindings.length !== 0 || !endpoint || !isPrivateDockerIPv4(endpoint.IPAddress) ||
+      !host.RestartPolicy || host.RestartPolicy.Name !== 'unless-stopped' ||
+      host.Memory !== plan.runtimeLimits.memoryBytes || host.NanoCpus !== plan.runtimeLimits.nanoCpus ||
+      host.PidsLimit !== plan.runtimeLimits.pidsLimit || host.Privileged ||
+      !Array.isArray(host.SecurityOpt) || !host.SecurityOpt.includes('no-new-privileges:true') ||
+      observedLabels['com.foxos.managed'] !== 'true' ||
+      observedLabels['com.foxos.stateful-shadow'] !== 'true' ||
+      observedLabels['com.foxos.resource.id'] !== plan.shadow.shadowResourceId ||
+      observedLabels['com.foxos.stateful-shadow.source-resource-id'] !== plan.sourceResourceId ||
+      observedLabels['com.foxos.stateful-shadow.operation'] !== operation.operationId
+    ) {
+      throw new StatefulShadowError('Stateful shadow isolation or runtime verification failed', 500, 'shadow-runtime-verification-failed');
+    }
+    operation.shadow.health = {
+      verified: true,
+      mode: plan.health.mode,
+      privatePort: plan.privatePort,
+      hostPortPublished: false,
+      internalAddressObserved: true,
+      verifiedAt: now()
+    };
+    operation.shadow.hostPortPublished = false;
+    operation.shadow.externalNetwork = false;
+    operation.shadow.routeCreated = false;
+    writeOperation(operation);
+    return details;
+  }
+
   async function runPlan(planId, confirmation) {
     const plan = getRecord(plansRoot, planId, 'Stateful shadow plan');
-    if (plan.schemaVersion !== STATEFUL_SHADOW_SCHEMA_VERSION) {
+    if (plan.schemaVersion !== STATEFUL_SHADOW_SCHEMA_VERSION || plan.action === 'refresh') {
       throw new StatefulShadowError('Stateful shadow plan schema is unsupported', 409, 'unsupported-shadow-plan');
     }
     if (confirmation !== plan.confirmation) {
@@ -877,18 +1331,250 @@ function createStatefulShadowManager({
     return operation;
   }
 
+  async function runRefreshPlan(planId, confirmation) {
+    const plan = getRecord(plansRoot, planId, 'Stateful shadow refresh plan');
+    if (plan.schemaVersion !== STATEFUL_SHADOW_SCHEMA_VERSION || plan.action !== 'refresh') {
+      throw new StatefulShadowError('Stateful shadow refresh plan is unsupported', 409, 'unsupported-shadow-refresh-plan');
+    }
+    if (confirmation !== plan.confirmation) {
+      throw new StatefulShadowError('Exact stateful shadow refresh confirmation is required', 400, 'confirmation-required');
+    }
+    if (activeOperationId || listJson(operationsRoot).some((operation) => operation.status === 'running')) {
+      throw new StatefulShadowError('Another stateful shadow operation is already running', 409, 'stateful-shadow-busy');
+    }
+
+    const operationId = 'ssro_' + randomUUID().replace(/-/g, '');
+    const lockOwner = acquireOperationLock(operationId);
+    const currentFile = path.join(currentRoot, plan.sourceResourceId + '.json');
+    let lockReleased = false;
+    activeOperationId = operationId;
+    let operation = {
+      schemaVersion: STATEFUL_SHADOW_SCHEMA_VERSION,
+      action: 'refresh',
+      operationId,
+      planId: plan.planId,
+      sourceResourceId: plan.sourceResourceId,
+      sourceResourceFingerprint: plan.sourceResourceFingerprint,
+      shadowResourceId: plan.shadow.shadowResourceId,
+      status: 'running',
+      startedAt: now(),
+      source: {
+        containerId: plan.sourceContainerId,
+        imageId: plan.sourceImageId,
+        mutated: false,
+        paused: false,
+        stopped: false,
+        recreated: false
+      },
+      previous: {
+        operationId: plan.previous.operationId,
+        shadowResourceId: plan.previous.shadowResourceId,
+        shadowContainerId: plan.previous.shadowContainerId,
+        fingerprint: plan.previous.fingerprint,
+        preservedUntilCandidateRegistryProof: true,
+        shadow: null
+      },
+      rehearsal: plan.rehearsal,
+      environment: plan.environment,
+      runtimeLimits: plan.runtimeLimits,
+      shadow: {
+        ...plan.shadow,
+        containerId: null,
+        internalNetworkVerified: false,
+        volumesRestored: [],
+        health: null,
+        hostPortPublished: false,
+        externalNetwork: false,
+        routeCreated: false,
+        ownerOperationId: operationId,
+        created: { container: false, network: false, volumes: [] }
+      },
+      refresh: {
+        previousRehearsalOperationId: plan.previous.rehearsalOperationId,
+        rehearsalOperationId: plan.rehearsal.operationId,
+        previousSnapshotAt: plan.previous.snapshotAt,
+        snapshotAt: plan.rehearsal.snapshotAt,
+        newerSnapshotVerified: true,
+        inPlaceVolumeMutation: false,
+        finalSynchronizationProven: false,
+        sourceWritesMayContinueAfterSnapshot: true
+      },
+      promotion: {
+        candidateRegistryVerified: false,
+        currentWritten: false,
+        previousCleanupAttempted: false,
+        previousCleanupCompleted: false
+      },
+      cleanup: { attempted: false, completed: false, errors: [] },
+      guarantees: { ...plan.guarantees }
+    };
+    try {
+      writeOperation(operation);
+    } catch (error) {
+      releaseOperationLock(lockOwner);
+      activeOperationId = null;
+      throw error;
+    }
+
+    let primaryError = null;
+    try {
+      const { current, rehearsal, environment, source } = await revalidateRefreshPlan(plan);
+      operation.previous.shadow = current.shadow;
+      writeOperation(operation);
+
+      await materializeShadowCandidate(plan, operation, rehearsal, environment, source);
+      const candidateSnapshot = await resourceRegistry.scan();
+      const activeRecord = {
+        ...operation,
+        status: 'active',
+        completedAt: now(),
+        cleanup: { attempted: false, completed: false, errors: [] }
+      };
+      const candidateProof = verifyCurrentRecord(activeRecord, candidateSnapshot);
+      if (!candidateProof.verified) {
+        throw new StatefulShadowError(
+          'Resource Registry did not verify the refreshed FoxOS-owned shadow',
+          500,
+          'shadow-refresh-registry-verification-failed'
+        );
+      }
+      operation.promotion.candidateRegistryVerified = true;
+      operation.registryProof = candidateProof;
+      writeOperation(operation);
+
+      operation.promotion.currentWritten = true;
+      atomicWriteJson(currentFile, {
+        ...activeRecord,
+        promotion: { ...operation.promotion },
+        registryProof: candidateProof
+      });
+      writeOperation(operation);
+
+      operation.promotion.previousCleanupAttempted = true;
+      const cleanupErrors = await removeExactResources(current.shadow);
+      operation.cleanup = {
+        attempted: true,
+        completed: cleanupErrors.length === 0,
+        errors: cleanupErrors
+      };
+      operation.promotion.previousCleanupCompleted = cleanupErrors.length === 0;
+
+      try {
+        const finalSnapshot = await resourceRegistry.scan();
+        const finalProof = verifyCurrentRecord(activeRecord, finalSnapshot);
+        if (!finalProof.verified) cleanupErrors.push('registry:post-promotion-verification-failed');
+        else operation.registryProof = finalProof;
+      } catch (error) {
+        cleanupErrors.push('registry:post-promotion-scan-failed');
+      }
+      operation.cleanup.completed = cleanupErrors.length === 0;
+      operation.cleanup.errors = cleanupErrors;
+      operation.status = cleanupErrors.length ? 'active-cleanup-required' : 'active';
+      operation.completedAt = now();
+      writeOperation(operation);
+      atomicWriteJson(currentFile, operation);
+      pruneJson(operationsRoot);
+    } catch (error) {
+      primaryError = error;
+      const current = readJson(path.join(currentRoot, plan.sourceResourceId + '.json'), null);
+      const promoted = Boolean(current && current.operationId === operation.operationId);
+      const cleanupErrors = promoted
+        ? await removeExactResources(operation.previous.shadow || {})
+        : await removeExactResources(operation.shadow);
+      operation = {
+        ...operation,
+        status: promoted
+          ? 'active-recovery-required'
+          : cleanupErrors.length ? 'failed-cleanup-required' : 'failed-and-cleaned',
+        completedAt: now(),
+        cleanup: { attempted: true, completed: cleanupErrors.length === 0, errors: cleanupErrors },
+        failure: {
+          code: error.code || 'stateful-shadow-refresh-error',
+          message: error instanceof StatefulShadowError
+            ? error.message
+            : 'Stateful shadow refresh operation failed'
+        }
+      };
+      writeOperation(operation);
+      if (promoted) atomicWriteJson(currentFile, operation);
+      pruneJson(operationsRoot);
+    } finally {
+      if (!lockReleased) {
+        const lockError = releaseOperationLock(lockOwner);
+        if (!lockError) lockReleased = true;
+        else {
+          operation.cleanup = operation.cleanup || { attempted: false, completed: false, errors: [] };
+          operation.cleanup.completed = false;
+          operation.cleanup.errors = [...(operation.cleanup.errors || []), lockError];
+          if (operation.status === 'active') operation.status = 'active-cleanup-required';
+          writeOperation(operation);
+          const current = readJson(currentFile, null);
+          if (current && current.operationId === operation.operationId) atomicWriteJson(currentFile, operation);
+        }
+      }
+      activeOperationId = null;
+    }
+
+    if (primaryError) throw primaryError;
+    return operation;
+  }
+
   async function recoverInterruptedOperations({ clearStaleLock = false } = {}) {
     const lockOwner = acquireOperationLock('startup-recovery', clearStaleLock);
     try {
       const recovered = [];
-      for (let operation of listJson(operationsRoot).filter((candidate) => candidate.status === 'running')) {
-        const errors = await removeExactResources(operation.shadow);
-        operation = {
-          ...operation,
-          status: errors.length ? 'interrupted-cleanup-required' : 'interrupted-cleaned',
-          completedAt: now(),
-          cleanup: { attempted: true, completed: errors.length === 0, errors }
-        };
+      for (let operation of listJson(operationsRoot).filter((candidate) => (
+        candidate.status === 'running' ||
+        (candidate.action === 'refresh' && candidate.status === 'active-cleanup-required')
+      ))) {
+        if (operation.action === 'refresh') {
+          const currentFile = path.join(currentRoot, operation.sourceResourceId + '.json');
+          const current = readJson(currentFile, null);
+          const promoted = Boolean(current && current.operationId === operation.operationId);
+          const errors = promoted
+            ? await removeExactResources(operation.previous && operation.previous.shadow || {})
+            : await removeExactResources(operation.shadow);
+          if (promoted) {
+            try {
+              const snapshot = await resourceRegistry.scan();
+              const proof = verifyCurrentRecord(current, snapshot);
+              if (!proof.verified) errors.push('registry:startup-recovery-verification-failed');
+              else {
+                operation.registryProof = proof;
+                atomicWriteJson(currentFile, {
+                  ...current,
+                  registryProof: proof,
+                  cleanup: { attempted: true, completed: errors.length === 0, errors }
+                });
+              }
+            } catch {
+              errors.push('registry:startup-recovery-scan-failed');
+            }
+          }
+          operation = {
+            ...operation,
+            status: promoted
+              ? errors.length ? 'active-cleanup-required' : 'active'
+              : errors.length ? 'interrupted-cleanup-required' : 'interrupted-cleaned',
+            completedAt: now(),
+            cleanup: { attempted: true, completed: errors.length === 0, errors },
+            promotion: {
+              ...(operation.promotion || {}),
+              currentWritten: promoted,
+              previousCleanupAttempted: promoted,
+              previousCleanupCompleted: promoted && errors.length === 0
+            }
+          };
+          if (promoted) atomicWriteJson(currentFile, operation);
+        } else {
+          const errors = await removeExactResources(operation.shadow);
+          operation = {
+            ...operation,
+            status: errors.length ? 'interrupted-cleanup-required' : 'interrupted-cleaned',
+            completedAt: now(),
+            cleanup: { attempted: true, completed: errors.length === 0, errors }
+          };
+        }
         writeOperation(operation);
         recovered.push({ operationId: operation.operationId, status: operation.status });
       }
@@ -914,6 +1600,8 @@ function createStatefulShadowManager({
       summary: {
         plans: plans.length,
         operations: operations.length,
+        refreshPlans: plans.filter((plan) => plan.action === 'refresh').length,
+        refreshOperations: operations.filter((operation) => operation.action === 'refresh').length,
         active: current.filter((record) => record.registryProof.verified).length,
         stale: current.filter((record) => !record.registryProof.verified).length,
         running: operations.filter((operation) => operation.status === 'running').length
@@ -933,6 +1621,10 @@ function createStatefulShadowManager({
         providerMutationIncluded: false,
         providerDetachIncluded: false,
         localEncryptedSnapshotUsed: true,
+        controlledRefreshSupported: true,
+        inPlaceVolumeMutation: false,
+        finalSynchronizationProven: false,
+        sourceWritesMayContinueAfterSnapshot: true,
         offHostRecoveryProven: false,
         environmentValuesIncluded: false,
         secretValuesIncluded: false,
@@ -944,10 +1636,12 @@ function createStatefulShadowManager({
   ensureDirectory(root);
   return {
     createPlan,
+    createRefreshPlan,
     getOperation: (operationId) => getRecord(operationsRoot, operationId, 'Stateful shadow operation'),
     getPlan: (planId) => getRecord(plansRoot, planId, 'Stateful shadow plan'),
     paths: { currentRoot, operationLockFile, operationsRoot, plansRoot, root },
     recoverInterruptedOperations,
+    runRefreshPlan,
     runPlan,
     status
   };
@@ -955,9 +1649,12 @@ function createStatefulShadowManager({
 
 module.exports = {
   PLAN_STATEFUL_SHADOW_CONFIRMATION,
+  PLAN_STATEFUL_SHADOW_REFRESH_CONFIRMATION,
   STATEFUL_SHADOW_SCHEMA_VERSION,
   StatefulShadowError,
   createStatefulShadowManager,
+  refreshConfirmation,
+  refreshedShadowNames,
   runConfirmation,
   shadowNames
 };

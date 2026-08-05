@@ -1170,6 +1170,15 @@ app.post('/api/stateful-shadows/plans', async (req, res) => {
   }
 });
 
+app.post('/api/stateful-shadows/refresh-plans', async (req, res) => {
+  try {
+    const plan = await statefulShadowManager.createRefreshPlan(req.body || {});
+    res.status(201).json({ plan });
+  } catch (error) {
+    sendStatefulShadowError(res, error, 'Could not plan stateful shadow refresh');
+  }
+});
+
 app.get('/api/stateful-shadows/plans/:planId', (req, res) => {
   try {
     res.json({ plan: statefulShadowManager.getPlan(req.params.planId) });
@@ -1187,6 +1196,18 @@ app.post('/api/stateful-shadows/plans/:planId/run', async (req, res) => {
     res.status(201).json({ operation });
   } catch (error) {
     sendStatefulShadowError(res, error, 'Could not run stateful shadow');
+  }
+});
+
+app.post('/api/stateful-shadows/refresh-plans/:planId/run', async (req, res) => {
+  try {
+    const operation = await statefulShadowManager.runRefreshPlan(
+      req.params.planId,
+      req.body && req.body.confirmation
+    );
+    res.status(201).json({ operation });
+  } catch (error) {
+    sendStatefulShadowError(res, error, 'Could not run stateful shadow refresh');
   }
 });
 
