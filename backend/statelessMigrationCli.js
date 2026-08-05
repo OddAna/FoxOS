@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { createMigrationPlanningContext } = require('./migrationPlanningContext');
 const {
   PREPARE_STATELESS_MIGRATION_CONFIRMATION,
   createStatelessMigrationManager
@@ -20,6 +21,17 @@ function main() {
   const args = process.argv.slice(2);
   const command = args[0];
   const dataRoot = path.resolve(process.env.DATA_ROOT || path.join(__dirname, '..', '.foxos-data'));
+  let planningContext = null;
+  const compileExecutionContract = (input) => {
+    planningContext ||= createMigrationPlanningContext({
+      dataRoot,
+      dockerSocket: process.env.DOCKER_SOCKET || '/var/run/docker.sock',
+      routeBaseUrl: process.env.FOXOS_ROUTE_BASE_URL,
+      routeNetwork: process.env.FOXOS_ROUTE_NETWORK || 'foxos-routing',
+      routeGatewayHost: process.env.FOXOS_ROUTE_GATEWAY_HOST || 'foxos-gateway'
+    });
+    return planningContext.statelessMigrationManifestCompiler.compile(input);
+  };
   const manager = createStatelessMigrationManager({
     dataRoot,
     getServerMigrationPlan: (planId) => {
@@ -34,7 +46,8 @@ function main() {
         }
         throw error;
       }
-    }
+    },
+    compileExecutionContract
   });
 
   if (command === 'status') return output(manager.status());

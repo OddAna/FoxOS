@@ -331,3 +331,26 @@ test('a stale running operation is marked interrupted after an agent restart', (
 
   fs.rmSync(dataRoot, { recursive: true, force: true });
 });
+
+test('read-only planning context does not rewrite a stale image-update operation', () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-image-read-only-'));
+  const operationsRoot = path.join(dataRoot, 'image-updates', 'operations');
+  fs.mkdirSync(operationsRoot, { recursive: true, mode: 0o700 });
+  const operationId = 'iop_' + 'b'.repeat(32);
+  fs.writeFileSync(path.join(operationsRoot, operationId + '.json'), JSON.stringify({
+    schemaVersion: 1,
+    operationId,
+    status: 'running',
+    startedAt: '2026-08-04T00:00:00.000Z'
+  }));
+
+  const manager = createImageUpdateManager({
+    dataRoot,
+    dockerRequest: dockerHarness().dockerRequest,
+    recoverInterruptedOperations: false
+  });
+  const operation = manager.status().operations.find((entry) => entry.operationId === operationId);
+  assert.equal(operation.status, 'running');
+
+  fs.rmSync(dataRoot, { recursive: true, force: true });
+});

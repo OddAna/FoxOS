@@ -85,7 +85,8 @@ function createImageUpdateManager({
   probeHttp = defaultHostProbe,
   clock = () => new Date(),
   randomUUID = () => crypto.randomUUID(),
-  wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))
+  wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  recoverInterruptedOperations = true
 }) {
   if (!dataRoot || typeof dockerRequest !== 'function') {
     throw new Error('Image update manager requires a data root and Docker client');
@@ -810,7 +811,7 @@ function createImageUpdateManager({
     }
   }
 
-  if (!liveLockOwner()) {
+  if (recoverInterruptedOperations && !liveLockOwner()) {
     for (const operation of listRecords(operationsRoot)) {
       if (operation.status === 'running') {
         atomicWriteJson(recordPath(operationsRoot, operation.operationId), {
