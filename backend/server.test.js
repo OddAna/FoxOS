@@ -391,6 +391,8 @@ test('health is public while management APIs require a session', async () => {
   assert.equal(workloadEvidenceResponse.status, 401);
   const statefulRehearsalsResponse = await fetch(baseUrl() + '/api/stateful-rehearsals');
   assert.equal(statefulRehearsalsResponse.status, 401);
+  const statefulShadowsResponse = await fetch(baseUrl() + '/api/stateful-shadows');
+  assert.equal(statefulShadowsResponse.status, 401);
   const independenceAuditsResponse = await fetch(baseUrl() + '/api/independence-audits');
   assert.equal(independenceAuditsResponse.status, 401);
 });
@@ -709,4 +711,30 @@ test('rollback and source/Compose/image-update control containers stay out of St
       State: index === 0 ? 'running' : 'exited'
     }));
   assert.deepEqual(discoveredAppStates([rollbackContainer, ...deploymentContainers], []), []);
+});
+
+test('stateful shadows stay out of Store discovery even when their image has an app profile', () => {
+  const shadow = {
+    Id: 'e'.repeat(64),
+    Image: 'henrygd/beszel:latest',
+    Names: ['/foxos-stateful-shadow-example'],
+    State: 'running',
+    Status: 'Up 1 minute',
+    Labels: {
+      'com.foxos.managed': 'true',
+      'com.foxos.stateful-shadow': 'true',
+      'com.foxos.resource.id': 'res_' + '1'.repeat(32),
+      'com.foxos.stateful-shadow.source-resource-id': 'res_' + '2'.repeat(32)
+    },
+    Ports: [{ PrivatePort: 8090, Type: 'tcp' }]
+  };
+  assert.deepEqual(discoveredAppStates([shadow], []), []);
+  const beszel = { id: 'beszel', image: 'henrygd/beszel:latest', imageAliases: [] };
+  const source = {
+    ...shadow,
+    Id: 'f'.repeat(64),
+    Names: ['/provider-beszel'],
+    Labels: { 'coolify.managed': 'true' }
+  };
+  assert.equal(catalogContainerForApp([shadow, source], beszel).Id, source.Id);
 });

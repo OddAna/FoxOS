@@ -437,3 +437,40 @@ evidence. `recovery-target-unavailable` remains blocking because the archive and
 master key are on the same host. Off-host recovery, retention, key escrow,
 database consistency, route cutover, provider detachment and full-machine
 disaster recovery remain separate unimplemented gates.
+
+### Implemented boundary: persistent stateful shadow
+
+The stateful-shadow manager turns a current authenticated stateful-rehearsal
+snapshot into a persistent but non-authoritative FoxOS runtime. It is generic to
+the rehearsal contract and does not contain a Beszel-, Coolify- or provider-
+specific deployment path. Planning binds the source resource fingerprint,
+container and immutable image IDs, FoxOS environment revision, rehearsal
+operation, volume policies, archive digests, private port and health contract.
+An operation-specific exact confirmation revalidates all of them.
+
+The source is read through Docker `GET` only and is never paused, stopped,
+recreated, renamed, relabeled or detached. The shadow receives a distinct,
+deterministic FoxOS resource ID plus separate named volumes and an internal-only
+bridge. It publishes no host port, joins no external or provider network, creates
+no route and receives no production traffic. Provider-injected environment
+metadata classified as excluded is not copied. Persistent data comes from the
+rehearsal's authenticated encrypted point-in-time archive; plaintext exists only
+in memory during restore.
+
+The shadow uses the exact observed image, a resilient `unless-stopped` policy,
+`no-new-privileges` and fixed CPU, memory and PID limits. Restored content,
+health, internal address, absent port bindings, labels, limits, mounts and
+network isolation must pass before a new read-only Resource Registry scan may
+recognize the distinct FoxOS identity. Only that registry-verified record is a
+current shadow proof. Store discovery excludes shadow containers so a no-traffic
+copy cannot replace or duplicate the user-facing source application.
+
+Application Manifest may use a matching current shadow to close
+`foxos-health-proof-missing` and `runtime-resource-limits-missing` with tested
+FoxOS-owned desired-state evidence. It does not close
+`external-provider-authority`, `foxos-route-missing`,
+`recovery-target-unavailable` or `update-rollback-proof-missing`. It is neither
+live replication nor cutover: later source writes are not synchronized and the
+provider remains authoritative. Failure and startup recovery remove only exact
+resources recorded as created by the interrupted shadow operation and never
+replay it.

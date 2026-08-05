@@ -56,6 +56,10 @@ not use the host package manager for its own runtime.
   stateful application can prove a same-host encrypted named-volume restore in
   an isolated healthy candidate without stopping, recreating or routing traffic
   away from the source
+- **Persistent stateful shadow** — a verified rehearsal snapshot can become a
+  separately identified FoxOS-owned runtime with its own persistent volumes,
+  internal-only network, resilient restart policy and explicit limits while the
+  original application keeps all production traffic
 
 FoxOS is currently an **alpha**. See [Current limitations](#current-limitations)
 before exposing it to other users.
@@ -261,6 +265,11 @@ The authenticated API exposes:
 | `GET /api/stateful-rehearsals/plans/:planId` | Read one immutable rehearsal plan and its operation-specific run confirmation |
 | `POST /api/stateful-rehearsals/plans/:planId/run` | Revalidate drift, pause briefly, encrypt/restore, health-gate and clean the isolated candidate |
 | `GET /api/stateful-rehearsals/operations/:operationId` | Read one redacted rehearsal result and cleanup state |
+| `GET /api/stateful-shadows` | Read persistent FoxOS-owned shadow plans, operations, current registry proofs and guarantees |
+| `POST /api/stateful-shadows/plans` | Plan a no-traffic shadow from the current authenticated rehearsal snapshot |
+| `GET /api/stateful-shadows/plans/:planId` | Read one immutable shadow plan and its operation-specific run confirmation |
+| `POST /api/stateful-shadows/plans/:planId/run` | Restore separate FoxOS volumes, start the constrained internal runtime and verify its FoxOS identity |
+| `GET /api/stateful-shadows/operations/:operationId` | Read one redacted persistent shadow result and failure cleanup state |
 | `GET /api/recovery/status` | Read local encryption and off-host backup readiness without credentials |
 | `GET /api/deployments` | Read FoxOS-owned disposable source revisions, plans, operations and current state |
 | `POST /api/deployments/plans` | Resolve a public HTTPS Git branch/tag to an immutable commit and create a reviewed Dockerfile plan |
@@ -654,6 +663,50 @@ server, so it does **not** prove off-host recovery, key escrow, scheduled
 retention, database consistency, domain cutover, provider detachment or full
 machine disaster recovery. Those gates remain blocking.
 
+## Persistent stateful shadow
+
+A current stateful rehearsal can be materialized as a long-running FoxOS-owned
+shadow without changing the source application. Planning requires the exact
+`PLAN STATEFUL SHADOW` confirmation and binds the source resource, container,
+immutable image, captured environment revision, health contract and rehearsal
+operation. Running rechecks all of them before creating anything.
+
+The shadow receives a deterministic FoxOS resource ID that is different from
+the source ID. It has separate FoxOS-labeled named volumes, a dedicated internal
+Docker network, no host port, no proxy labels and no route. FoxOS decrypts the
+authenticated rehearsal archive only in memory, restores it into the shadow
+volumes, recreates explicitly empty-ephemeral volumes, starts the exact image
+with `unless-stopped`, `no-new-privileges`, 256 MiB memory, 0.5 CPU and a 256
+process limit, then verifies health and isolation. A fresh Resource Registry
+scan must recognize the running container as the expected FoxOS-owned identity
+before the operation becomes current. Store discovery deliberately hides this
+no-traffic shadow so it does not appear as a duplicate installed application.
+
+```bash
+docker compose exec -T foxos node /app/statefulShadowCli.js plan RESOURCE_ID \
+  --confirm "PLAN STATEFUL SHADOW"
+
+# Use the returned plan ID and its exact confirmation.
+docker compose exec -T foxos node /app/statefulShadowCli.js run PLAN_ID \
+  --confirm "RUN STATEFUL SHADOW PLAN_ID"
+
+docker compose exec -T foxos node /app/statefulShadowCli.js status
+```
+
+The source receives Docker `GET` requests only during this transaction: it is
+not paused, stopped, recreated, relabeled or detached. No domain, route,
+traffic, provider metadata or Coolify resource is changed. If creation fails,
+FoxOS removes only the exact shadow objects recorded as created by that
+operation; startup recovery uses the same bounded cleanup and never replays an
+interrupted deployment.
+
+The shadow uses the rehearsal's point-in-time snapshot, not a live replication
+stream. It proves that FoxOS can keep a persistent, constrained copy running and
+supplies tested health and runtime-limit evidence to the Application Manifest.
+It does **not** make the shadow production-authoritative, synchronize later
+source writes, publish a route, prove update/rollback, prove off-host recovery
+or detach the existing provider. Those remain separate gates before cutover.
+
 ## Disposable adoption pilot
 
 FoxOS now has the first provider-neutral import draft, dry-run plan, apply and
@@ -819,8 +872,10 @@ Do not copy its contents into Git or logs.
   is no scheduled retention policy, database-consistent backup, key escrow or
   full-machine disaster restore workflow yet
 - Real provider-owned stateful applications have a same-host, named-volume-only
-  restore rehearsal. It does not yet support bind mounts, databases, off-host
-  recovery, route cutover, adoption or provider detachment
+  restore rehearsal and may run an internal persistent FoxOS-owned shadow from
+  that point-in-time snapshot. This is not live replication and does not yet
+  support bind mounts, databases, off-host recovery, route cutover, source-write
+  synchronization, adoption or provider detachment
 - A fresh installation intentionally has no external backup adapter configured;
   ordinary FoxOS host management does not require one
 - The App Store catalog is intentionally small and reviewed; arbitrary Compose
@@ -885,6 +940,8 @@ FoxOS/
 │   ├── composeDeploymentManager.js # Strict service graph, serial queue, group cutover and rollback
 │   ├── imageUpdateManager.js # Reviewed registry digest, candidate health and exact rollback
 │   ├── workloadEvidenceManager.js # Encrypted source archive and environment evidence capture
+│   ├── statefulRehearsalManager.js # Same-host encrypted restore and isolated health proof
+│   ├── statefulShadowManager.js # Persistent internal FoxOS-owned stateful shadow
 │   ├── applicationManifestManager.js # Provider-neutral import drafts and desired revisions
 │   ├── adoptionManager.js     # Disposable plan/apply/rollback transaction
 │   └── package.json

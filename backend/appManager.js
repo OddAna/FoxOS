@@ -207,7 +207,10 @@ function catalogContainerForApp(containers, catalogApp) {
     ...(catalogApp.imageAliases || []).map(normalizedImageRepository)
   ]);
 
-  return containers.find((container) => repositories.has(normalizedImageRepository(container.Image))) || null;
+  return containers.find((container) => (
+    (!container.Labels || container.Labels['com.foxos.stateful-shadow'] !== 'true') &&
+    repositories.has(normalizedImageRepository(container.Image))
+  )) || null;
 }
 
 function externalUrlForContainer(container) {
@@ -273,6 +276,7 @@ function isDiscoverableApplication(container) {
   const runtimeName = dockerContainerName(container);
   if (
     labels['com.foxos.core'] === 'true' ||
+    labels['com.foxos.stateful-shadow'] === 'true' ||
     DISCOVERY_EXCLUDED_NAMES.has(name) ||
     /^foxos-(?:deployment|compose|image-update)-lab(?:-|$)/.test(runtimeName) ||
     /-foxos-rollback-[a-f0-9]{8,32}$/.test(runtimeName)

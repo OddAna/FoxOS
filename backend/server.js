@@ -27,6 +27,10 @@ const {
   createStatefulRehearsalManager
 } = require('./statefulRehearsalManager');
 const {
+  StatefulShadowError,
+  createStatefulShadowManager
+} = require('./statefulShadowManager');
+const {
   SourceDeploymentError,
   createSourceDeploymentManager
 } = require('./sourceDeploymentManager');
@@ -444,6 +448,15 @@ const statefulRehearsalManager = createStatefulRehearsalManager({
   encryptionStore,
   secretManager
 });
+const statefulShadowManager = createStatefulShadowManager({
+  dataRoot: DATA_ROOT,
+  dockerRequest,
+  dockerArchiveRequest: dockerClient.requestBuffer,
+  resourceRegistry,
+  encryptionStore,
+  secretManager,
+  statefulRehearsalStatus: () => statefulRehearsalManager.status()
+});
 const composeDeploymentManager = createComposeDeploymentManager({
   dataRoot: DATA_ROOT,
   dockerRequest,
@@ -463,7 +476,8 @@ const applicationManifestManager = createApplicationManifestManager({
   composeDeploymentStatus: () => composeDeploymentManager.status(),
   imageUpdateStatus: () => imageUpdateManager.status(),
   workloadEvidenceStatus: () => workloadEvidenceManager.status(),
-  statefulRehearsalStatus: () => statefulRehearsalManager.status()
+  statefulRehearsalStatus: () => statefulRehearsalManager.status(),
+  statefulShadowStatus: () => statefulShadowManager.status()
 });
 const independenceAuditManager = createIndependenceAuditManager({
   dataRoot: DATA_ROOT,
@@ -510,6 +524,17 @@ function sendStatefulRehearsalError(res, error, action) {
       ? 'Stateful rehearsal operation failed'
       : error.message,
     code: error.code || 'stateful-rehearsal-error'
+  });
+}
+
+function sendStatefulShadowError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof StatefulShadowError)
+      ? 'Stateful shadow operation failed'
+      : error.message,
+    code: error.code || 'stateful-shadow-error'
   });
 }
 
@@ -1128,6 +1153,51 @@ app.get('/api/stateful-rehearsals/operations/:operationId', (req, res) => {
   }
 });
 
+app.get('/api/stateful-shadows', (req, res) => {
+  try {
+    res.json(statefulShadowManager.status());
+  } catch (error) {
+    sendStatefulShadowError(res, error, 'Could not read stateful shadows');
+  }
+});
+
+app.post('/api/stateful-shadows/plans', async (req, res) => {
+  try {
+    const plan = await statefulShadowManager.createPlan(req.body || {});
+    res.status(201).json({ plan });
+  } catch (error) {
+    sendStatefulShadowError(res, error, 'Could not plan stateful shadow');
+  }
+});
+
+app.get('/api/stateful-shadows/plans/:planId', (req, res) => {
+  try {
+    res.json({ plan: statefulShadowManager.getPlan(req.params.planId) });
+  } catch (error) {
+    sendStatefulShadowError(res, error, 'Could not read stateful shadow plan');
+  }
+});
+
+app.post('/api/stateful-shadows/plans/:planId/run', async (req, res) => {
+  try {
+    const operation = await statefulShadowManager.runPlan(
+      req.params.planId,
+      req.body && req.body.confirmation
+    );
+    res.status(201).json({ operation });
+  } catch (error) {
+    sendStatefulShadowError(res, error, 'Could not run stateful shadow');
+  }
+});
+
+app.get('/api/stateful-shadows/operations/:operationId', (req, res) => {
+  try {
+    res.json({ operation: statefulShadowManager.getOperation(req.params.operationId) });
+  } catch (error) {
+    sendStatefulShadowError(res, error, 'Could not read stateful shadow operation');
+  }
+});
+
 app.get('/api/recovery/status', (req, res) => {
   try {
     res.json({ encryption: encryptionStore.status(), backup: backupManager.status() });
@@ -1643,6 +1713,15 @@ if (require.main === module) {
     })
     .catch((error) => {
       console.error('Initial stateful rehearsal recovery failed:', error.message);
+    })
+    .then(() => statefulShadowManager.recoverInterruptedOperations({ clearStaleLock: true }))
+    .then((recovery) => {
+      if (recovery.recovered.length) {
+        console.warn('Recovered interrupted stateful shadows:', recovery.recovered.length);
+      }
+    })
+    .catch((error) => {
+      console.error('Initial stateful shadow recovery failed:', error.message);
     })
     .finally(() => {
       app.listen(PORT, '0.0.0.0', () => {
