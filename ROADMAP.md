@@ -239,8 +239,9 @@ target blocks only adoption/migration operations that require restore proof.
   restore proof for every disposable adoption operation.
 - [x] Add an exact-confirmation same-host restore rehearsal for provider-owned
   stateful applications with explicitly classified named volumes, temporary
-  source pause, encrypted archives, isolated candidate health proof and complete
-  cleanup without traffic, route, provider or detach mutation.
+  source pause, encrypted archives, an internal-network candidate with no
+  published host port, bounded host-namespace health proof and complete cleanup
+  without traffic, route, provider or detach mutation.
 - [ ] Back up resource manifests, deployment metadata, environment configuration
   and proxy/TLS state without exposing secrets.
 - [ ] Provide per-resource restore and full-disaster restore workflows.

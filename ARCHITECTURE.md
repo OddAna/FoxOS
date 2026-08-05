@@ -402,11 +402,12 @@ The stateful-rehearsal manager is the first production-resource mutation that
 addresses one persistence gate without taking workload authority. It accepts
 only a running, fully inspected, provider-owned `application` classified as
 `stateful`, with one to four writable named volumes, an existing healthy Docker
-health check or an explicit bounded loopback HTTP path, a captured FoxOS
+health check or an explicit bounded internal HTTP path, a captured FoxOS
 environment revision and an explicitly selected observed TCP port. The HTTP
-fallback requests only the temporary candidate's Docker-assigned
-`127.0.0.1` port; it accepts neither arbitrary hosts nor commands. Every named
-volume must be classified as persistent or empty-ephemeral. Databases,
+fallback requests only the temporary candidate's Docker-observed private address
+on the FoxOS-created, verified internal network; it publishes no host port and
+accepts neither arbitrary hosts nor commands. Every named volume must be
+classified as persistent or empty-ephemeral. Databases,
 bind/unknown/read-only mounts, protected resources, custom
 command/entrypoint/user/workdir overrides and privileged or host-level runtime
 access are outside this boundary.
@@ -422,11 +423,11 @@ detach change.
 Persistent archives are authenticated server-local AES-256-GCM ciphertext. A
 temporary candidate uses the exact observed image ID, the resolved FoxOS-managed
 environment in memory, temporary named volumes, an internal Docker bridge and a
-dynamic loopback port with fixed CPU, memory and PID limits. Restored content
-digests, candidate health/isolation and source health must all pass. Every exact
-temporary container, volume and network is then removed before a current proof
-is published. Crash recovery can unpause and clean recorded objects but never
-replays an interrupted transaction.
+private RFC1918 address with no published host port and fixed CPU, memory and PID
+limits. Restored content digests, candidate health/isolation and source health
+must all pass. Every exact temporary container, volume and network is then
+removed before a current proof is published. Crash recovery can unpause and
+clean recorded objects but never replays an interrupted transaction.
 
 Application Manifest may use a matching current proof to close only
 `restore-proof-missing`. The proof fingerprint intentionally excludes volatile

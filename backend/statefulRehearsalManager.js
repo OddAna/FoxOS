@@ -1,5 +1,6 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const net = require('node:net');
 const path = require('node:path');
 const { tarContentDigest } = require('./adoptionManager');
 const {
@@ -10,7 +11,7 @@ const {
 const { atomicWriteJson } = require('./resourceRegistry');
 const { defaultHostProbe, validateHealthPath } = require('./sourceDeploymentManager');
 
-const STATEFUL_REHEARSAL_SCHEMA_VERSION = 1;
+const STATEFUL_REHEARSAL_SCHEMA_VERSION = 2;
 const PLAN_STATEFUL_REHEARSAL_CONFIRMATION = 'PLAN STATEFUL REHEARSAL';
 const RESOURCE_ID_PATTERN = /^res_[a-f0-9]{32}$/;
 const RECORD_ID_PATTERN = /^(srp|sro)_[a-f0-9]{24,64}$/;
@@ -102,6 +103,19 @@ function validateHttpHealthPath(value) {
       'invalid-http-health-path'
     );
   }
+}
+
+function isPrivateDockerIPv4(value) {
+  if (net.isIP(value) !== 4) return false;
+  const octets = value.split('.').map(Number);
+  return octets[0] === 10 ||
+    (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
+    (octets[0] === 192 && octets[1] === 168);
+}
+
+function safeProbeErrorCode(error) {
+  const code = String(error && error.code || 'probe-error');
+  return /^[a-zA-Z0-9_-]{1,40}$/.test(code) ? code : 'probe-error';
 }
 
 function processStartToken(pid) {
@@ -449,14 +463,14 @@ function createStatefulRehearsalManager({
     }
     const healthPath = validateHttpHealthPath(input.httpHealthPath);
     const fingerprint = encryptionStore.fingerprint(Buffer.from(canonicalJson({
-      mode: 'loopback-http',
+      mode: 'internal-http',
       healthPath,
       expectedStatus: 200,
       sourceFingerprint: source.healthFingerprint
     }), 'utf8'));
     return {
       configured: false,
-      mode: 'loopback-http',
+      mode: 'internal-http',
       healthPath,
       expectedStatus: 200,
       sourceFingerprint: source.healthFingerprint,
@@ -563,6 +577,7 @@ function createStatefulRehearsalManager({
         providerMutationIncluded: false,
         providerDetachIncluded: false,
         candidateExternalNetworkIncluded: false,
+        candidateHostPortIncluded: false,
         offHostRecoveryProven: false,
         environmentValuesIncluded: false,
         secretValuesIncluded: false
@@ -573,9 +588,16 @@ function createStatefulRehearsalManager({
     return plan;
   }
 
-  async function waitForHealth(containerId, plannedHealth, privatePort) {
+  async function waitForHealth(containerId, plannedHealth, privatePort, networkName) {
     const deadline = Date.now() + DEFAULT_HEALTH_TIMEOUT_SECONDS * 1000;
     let last = null;
+    let diagnostics = {
+      addressObserved: false,
+      attempted: false,
+      errorCode: null,
+      portPublished: false,
+      statusCode: null
+    };
     while (Date.now() < deadline) {
       last = await dockerRequest('GET', '/containers/' + containerId + '/json');
       const status = last.State && last.State.Status;
@@ -583,22 +605,34 @@ function createStatefulRehearsalManager({
       if (plannedHealth.mode === 'docker-healthcheck' && status === 'running' && health === 'healthy') {
         return last;
       }
-      if (plannedHealth.mode === 'loopback-http' && status === 'running') {
+      if (plannedHealth.mode === 'internal-http' && status === 'running') {
         const bindings = last.NetworkSettings && last.NetworkSettings.Ports &&
           last.NetworkSettings.Ports[privatePort + '/tcp'] || [];
-        const loopback = bindings.length === 1 && bindings[0].HostIp === '127.0.0.1'
-          ? Number(bindings[0].HostPort)
-          : 0;
-        if (Number.isSafeInteger(loopback) && loopback > 0 && loopback <= 65535) {
+        const endpoint = last.NetworkSettings && last.NetworkSettings.Networks &&
+          last.NetworkSettings.Networks[networkName];
+        const address = endpoint && endpoint.IPAddress || '';
+        diagnostics = {
+          ...diagnostics,
+          addressObserved: isPrivateDockerIPv4(address),
+          portPublished: bindings.length > 0
+        };
+        if (diagnostics.addressObserved && !diagnostics.portPublished) {
           try {
+            diagnostics.attempted = true;
             const result = await httpProbe({
-              port: loopback,
+              host: address,
+              port: privatePort,
               healthPath: plannedHealth.healthPath,
               timeoutMs: 3000
             });
+            diagnostics.errorCode = null;
+            diagnostics.statusCode = result && Number.isSafeInteger(result.statusCode)
+              ? result.statusCode
+              : null;
             if (result && result.statusCode === plannedHealth.expectedStatus) return last;
-          } catch {
-            // The bounded loopback endpoint may still be starting.
+          } catch (error) {
+            diagnostics.errorCode = safeProbeErrorCode(error);
+            diagnostics.statusCode = null;
           }
         }
       }
@@ -607,11 +641,13 @@ function createStatefulRehearsalManager({
     }
     const status = last && last.State && last.State.Status || 'unknown';
     const health = last && last.State && last.State.Health && last.State.Health.Status || 'none';
-    throw new StatefulRehearsalError(
+    const error = new StatefulRehearsalError(
       `Candidate health verification failed (state=${status}, health=${health})`,
       503,
       'candidate-health-failed'
     );
+    error.diagnostics = diagnostics;
+    throw error;
   }
 
   async function sourceHealthProof(containerId, requireHealthy) {
@@ -802,9 +838,10 @@ function createStatefulRehearsalManager({
       candidate: {
         containerId: null,
         internalNetwork: true,
-        hostBinding: '127.0.0.1:dynamic',
+        hostBinding: 'none',
         privatePort: plan.privatePort,
         healthMode: plan.health.mode,
+        healthProbe: plan.health.mode === 'internal-http' ? 'host-namespace-to-internal-ip' : 'docker-healthcheck',
         health: null,
         removedAfterProof: false
       },
@@ -818,6 +855,7 @@ function createStatefulRehearsalManager({
         providerMetadataMutated: false,
         providerDetached: false,
         candidateHadExternalNetwork: false,
+        candidateHostPortPublished: false,
         environmentValuesIncluded: false,
         secretValuesIncluded: false,
         plaintextArchiveStored: false,
@@ -930,6 +968,14 @@ function createStatefulRehearsalManager({
         Labels: labels
       });
       operation.temporary.networkId = network.Id;
+      const networkDetails = await dockerRequest('GET', '/networks/' + encodeURIComponent(network.Id));
+      if (
+        !networkDetails || networkDetails.Id !== network.Id ||
+        networkDetails.Name !== operation.temporary.networkName || networkDetails.Internal !== true
+      ) {
+        throw new StatefulRehearsalError('Candidate internal network verification failed', 500, 'candidate-network-not-internal');
+      }
+      operation.temporary.networkInternalVerified = true;
       for (const volume of operation.temporary.volumes) {
         await dockerRequest('POST', '/volumes/create', { Name: volume.temporaryName, Labels: labels });
       }
@@ -958,7 +1004,6 @@ function createStatefulRehearsalManager({
               ReadOnly: false,
               VolumeOptions: { NoCopy: true }
             })),
-            PortBindings: { [portKey]: [{ HostIp: '127.0.0.1', HostPort: '0' }] },
             RestartPolicy: { Name: 'no', MaximumRetryCount: 0 },
             NetworkMode: operation.temporary.networkName,
             SecurityOpt: ['no-new-privileges:true'],
@@ -1007,19 +1052,27 @@ function createStatefulRehearsalManager({
       writeOperation(operation);
 
       await dockerRequest('POST', '/containers/' + created.Id + '/start');
-      const candidateDetails = await waitForHealth(created.Id, plan.health, plan.privatePort);
+      const candidateDetails = await waitForHealth(
+        created.Id,
+        plan.health,
+        plan.privatePort,
+        operation.temporary.networkName
+      );
       const candidateNetworks = Object.keys(candidateDetails.NetworkSettings && candidateDetails.NetworkSettings.Networks || {});
       const bindings = candidateDetails.NetworkSettings && candidateDetails.NetworkSettings.Ports &&
         candidateDetails.NetworkSettings.Ports[portKey] || [];
+      const candidateEndpoint = candidateDetails.NetworkSettings && candidateDetails.NetworkSettings.Networks &&
+        candidateDetails.NetworkSettings.Networks[operation.temporary.networkName];
       if (
         candidateNetworks.length !== 1 || candidateNetworks[0] !== operation.temporary.networkName ||
-        bindings.length !== 1 || bindings[0].HostIp !== '127.0.0.1' || !bindings[0].HostPort
+        bindings.length !== 0 || !candidateEndpoint || !isPrivateDockerIPv4(candidateEndpoint.IPAddress)
       ) {
         throw new StatefulRehearsalError('Candidate isolation proof failed', 500, 'candidate-isolation-failed');
       }
       operation.candidate.health = 'healthy';
       operation.candidate.healthVerifiedAt = now();
       operation.candidate.externalNetwork = false;
+      operation.candidate.hostPortPublished = false;
       operation.candidate.routeCreated = false;
       operation.source.healthAfterProof = await sourceHealthProof(
         plan.sourceContainerId,
@@ -1048,6 +1101,9 @@ function createStatefulRehearsalManager({
             ? primaryError.message
             : 'Stateful rehearsal operation failed'
         };
+        if (primaryError && primaryError.diagnostics) {
+          operation.failure.diagnostics = primaryError.diagnostics;
+        }
       } else if (!operation.cleanup.completed) {
         operation.status = 'verified-cleanup-required';
       } else {
@@ -1089,7 +1145,8 @@ function createStatefulRehearsalManager({
         sourceStopIncluded: false,
         sourceRecreationIncluded: false,
         candidateInternalNetworkOnly: true,
-        candidateLoopbackOnly: true,
+        candidateHostPortPublished: false,
+        candidateInternalHttpProbe: true,
         routeMutationIncluded: false,
         trafficCutoverIncluded: false,
         providerMutationIncluded: false,

@@ -84,12 +84,14 @@
   and run confirmations, pre-pause drift checks, persisted pause intent,
   immediate unpause, authenticated local encryption, exact-image temporary
   restore, existing healthy Docker health or an explicit bounded candidate-only
-  loopback HTTP path, source liveness/health re-proof and exact cleanup. It must
-  not accept arbitrary health hosts or operator commands, databases, bind mounts,
-  unsafe runtime overrides or protected resources; stop/recreate the source;
-  change routes/traffic/provider state; detach authority; claim off-host
-  recovery; or replay an interrupted operation. Do not widen this contract
-  without Burak's explicit approval and the remaining persistence gates.
+  internal HTTP path probed through the host namespace at Docker's observed
+  private address, no published candidate host port, source liveness/health
+  re-proof and exact cleanup. It must not accept arbitrary health hosts or
+  operator commands, databases, bind mounts, unsafe runtime overrides or
+  protected resources; stop/recreate the source; change routes/traffic/provider
+  state; detach authority; claim off-host recovery; or replay an interrupted
+  operation. Do not widen this contract without Burak's explicit approval and
+  the remaining persistence gates.
 - The approved Compose extension is a second fixed disposable pilot. Preserve
   the `foxos-compose-lab` identity, public-Git manifest/commit/context pinning,
   two-or-three-service connected DAG, source-build-only services, no
