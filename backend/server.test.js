@@ -406,6 +406,14 @@ test('health is public while management APIs require a session', async () => {
   assert.equal(statefulShadowsResponse.status, 401);
   const independenceAuditsResponse = await fetch(baseUrl() + '/api/independence-audits');
   assert.equal(independenceAuditsResponse.status, 401);
+  const migrationOrchestratorResponse = await fetch(baseUrl() + '/api/migration-orchestrator');
+  assert.equal(migrationOrchestratorResponse.status, 401);
+  const migrationPlanResponse = await fetch(baseUrl() + '/api/migration-orchestrator/plans', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}'
+  });
+  assert.equal(migrationPlanResponse.status, 401);
 });
 
 test('setup creates an authenticated session and unlocks the workspace', async () => {
@@ -674,6 +682,40 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   const exportedPlan = await exportResponse.text();
   assert.equal(exportedPlan.includes(registrySecret), false);
   assert.equal(JSON.parse(exportedPlan).exportType, 'foxos-resource-migration-plan');
+
+  dockerRequestLog.length = 0;
+  const serverMigrationPlanResponse = await fetch(baseUrl() + '/api/migration-orchestrator/plans', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ confirmation: 'PLAN SERVER MIGRATION' })
+  });
+  assert.equal(serverMigrationPlanResponse.status, 201);
+  const serverMigrationPlan = (await serverMigrationPlanResponse.json()).plan;
+  assert.equal(serverMigrationPlan.mode, 'read-only-server-migration-plan');
+  assert.equal(serverMigrationPlan.summary.resources, 1);
+  assert.equal(serverMigrationPlan.summary.migrationRequired, 1);
+  assert.equal(serverMigrationPlan.resources[0].strategy, 'shadow-refresh-bounded-quiesce');
+  assert.equal(serverMigrationPlan.resources[0].availability.sourcePauseBudgetMs, null);
+  assert.equal(serverMigrationPlan.guarantees.dockerRequestsMade, 0);
+  assert.equal(serverMigrationPlan.guarantees.runtimeMutated, false);
+  assert.equal(serverMigrationPlan.guarantees.applyImplemented, false);
+  assert.equal(serverMigrationPlan.guarantees.zeroDowntimeStatefulPostRoadmap, true);
+  assert.equal(dockerRequestLog.length, 0);
+  assert.equal(JSON.stringify(serverMigrationPlan).includes(registrySecret), false);
+
+  const persistedMigrationPlanResponse = await fetch(
+    baseUrl() + '/api/migration-orchestrator/plans/' + serverMigrationPlan.planId,
+    { headers: { Cookie: cookie } }
+  );
+  assert.equal(persistedMigrationPlanResponse.status, 200);
+  assert.equal((await persistedMigrationPlanResponse.json()).plan.planId, serverMigrationPlan.planId);
+  const migrationPlanFile = path.join(
+    process.env.DATA_ROOT,
+    'migration-orchestrator',
+    'plans',
+    serverMigrationPlan.planId + '.json'
+  );
+  assert.equal(fs.statSync(migrationPlanFile).mode & 0o777, 0o600);
 
   dockerRequestLog.length = 0;
   const blockedAdoptionResponse = await fetch(

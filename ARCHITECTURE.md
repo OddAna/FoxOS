@@ -358,6 +358,38 @@ route mutation, provider call, apply approval or detach approval. This creates
 a reviewable first-real-workload planning surface without widening the fixed
 disposable adoption or deployment pilots.
 
+### Implemented boundary: Resource Migration Orchestrator v1 planning
+
+The first orchestrator slice compiles the latest Resource Registry snapshot and
+every provider-neutral Application Manifest into one deterministic whole-server
+migration plan. It does not invent a second source of resource truth. Each
+resource entry carries its stable FoxOS ID, classification, observed authority,
+target lifecycle, migration strategy, availability contract, redacted manifest
+evidence, observed relationships/conflicts and separate authority, evidence and
+implementation blockers.
+
+Strategies are selected by resource class rather than product name. Stateless
+applications and internal services require a zero-pause blue/green plus atomic
+route transaction. Stateful applications currently require a separately
+approved bounded-quiesce budget and preserve zero-downtime continuous sync or
+application-aware replication as post-roadmap work. Databases require a
+database-specific consistent backup/replication and primary-handoff policy.
+Workers and agents require drain semantics; provider proxies retire last;
+protected, unknown and unsupported resources fail closed.
+
+The planner treats shared networks, volumes and provider projects only as
+coordination hints. They do not create dependency direction or execution order.
+Only explicit manifest dependencies may become ordering authority. The
+displayed planning order is deterministic but is never represented as an apply
+order.
+
+Planning requires an exact confirmation, persists one owner-only plan under
+`.foxos-data/migration-orchestrator/`, and returns the same plan ID for the same
+compiled snapshot. It performs no Docker request itself, changes no runtime,
+route or provider state, contains no ordinary environment or secret values and
+has no apply endpoint. A resource whose evidence is complete is reported as
+`evidence-complete-apply-unavailable`, never as migrated or approved.
+
 ### Implemented boundary: server-owned workload source and environment evidence
 
 The workload-evidence source path is restricted to the same running, fully

@@ -453,3 +453,32 @@ jobs:
               if(audit.evidence.secretValuesIncluded) process.exit(1);
             });
           '
+
+          migration_status=$(docker compose exec -T foxos node /app/migrationOrchestratorCli.js status)
+          printf '%s' "$migration_status" | node -e '
+            let s="";
+            process.stdin.on("data",c=>s+=c);
+            process.stdin.on("end",()=>{
+              const status=JSON.parse(s);
+              if(status.summary.plans!==0 || status.latest!==null) process.exit(1);
+              const guarantees=status.guarantees || {};
+              if(guarantees.runtimeMutated || guarantees.routesMutated || guarantees.providerStateMutated) process.exit(1);
+              if(guarantees.providerDetached || guarantees.applyImplemented || guarantees.applyApproved) process.exit(1);
+              if(guarantees.secretValuesIncluded || !guarantees.zeroDowntimeStatefulPostRoadmap) process.exit(1);
+            });
+          '
+          migration_plan=$(docker compose exec -T foxos node /app/migrationOrchestratorCli.js plan \
+            --confirm "PLAN SERVER MIGRATION")
+          printf '%s' "$migration_plan" | node -e '
+            let s="";
+            process.stdin.on("data",c=>s+=c);
+            process.stdin.on("end",()=>{
+              const plan=JSON.parse(s);
+              if(!/^mplan_[a-f0-9]{32}$/.test(plan.planId)) process.exit(1);
+              if(plan.mode!=="read-only-server-migration-plan" || plan.summary.resources<1) process.exit(1);
+              if(plan.guarantees.dockerRequestsMade!==0 || plan.guarantees.runtimeMutated) process.exit(1);
+              if(plan.guarantees.routesMutated || plan.guarantees.providerStateMutated || plan.guarantees.providerDetached) process.exit(1);
+              if(plan.guarantees.applyImplemented || plan.guarantees.applyApproved || plan.guarantees.secretValuesIncluded) process.exit(1);
+              if(!plan.guarantees.zeroDowntimeStatefulPostRoadmap) process.exit(1);
+            });
+          '

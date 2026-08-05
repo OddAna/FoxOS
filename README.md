@@ -552,6 +552,45 @@ with `POST /api/independence-audits`, and read one through
 `.foxos-data/independence-audits/`. A planning-ready audit is still not a
 migration, cutover or provider-removal approval.
 
+## Automatic whole-server migration planning
+
+Resource Migration Orchestrator v1 turns the latest registry and Application
+Manifest evidence into one deterministic plan for the whole server. Beszel is
+only the first real stateful reference; the planner does not contain a
+Beszel-specific migration path. `Resource-by-resource` means the common engine
+will process resources sequentially for isolation and rollback, not that every
+application needs a separate implementation.
+
+Each resource receives a class-based strategy, availability policy, authority
+transition, evidence blockers, implementation gaps, observed relationships and
+conflicts. Shared Docker networks and provider projects remain coordination
+hints and never become invented dependency direction. Current availability
+contracts are explicit:
+
+- stateless application: zero-downtime blue/green plus atomic route switch;
+- stateful application: an explicit bounded-quiesce budget until post-roadmap
+  continuous sync or application-aware replication exists;
+- database: blocked until engine-consistent replication/backup and primary
+  handoff exist;
+- unknown/custom: blocked for review rather than guessed.
+
+Create or inspect a server-local plan with:
+
+```bash
+docker compose exec -T foxos node /app/migrationOrchestratorCli.js plan \
+  --confirm "PLAN SERVER MIGRATION"
+
+docker compose exec -T foxos node /app/migrationOrchestratorCli.js status
+docker compose exec -T foxos node /app/migrationOrchestratorCli.js get PLAN_ID
+```
+
+Authenticated clients can use `GET /api/migration-orchestrator`, create a plan
+with `POST /api/migration-orchestrator/plans`, and read one through
+`GET /api/migration-orchestrator/plans/:planId`. Plans are owner-only under
+`.foxos-data/migration-orchestrator/`. This version has deliberately no apply,
+cutover or provider-detach endpoint; planning makes zero Docker requests and
+changes no runtime, route or provider state.
+
 ## Server-owned workload source and environment evidence
 
 A running, fully inspected, provider-owned stateless application can capture

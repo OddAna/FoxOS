@@ -42,8 +42,9 @@ target blocks only adoption/migration operations that require restore proof.
 5. **Source build and deployments** — Git/image inputs become replaceable
    adapters feeding FoxOS-owned revisions, build logs, health gates and rollback.
 6. **Resource-by-resource Coolify migration** — import and adopt production
-   resources one at a time; retire Coolify only after the final independence
-   audit passes and destructive cleanup is separately approved.
+   resources through the common automatic engine, one at a time for isolation;
+   retire Coolify only after the final independence audit passes and destructive
+   cleanup is separately approved.
 
 ### Milestone 1 progress: Resource Registry v1
 
@@ -180,6 +181,12 @@ target blocks only adoption/migration operations that require restore proof.
   identified, persistent FoxOS-owned shadow with its own volumes, internal-only
   network, resilient restart policy, explicit limits and current health proof,
   without source mutation, route, traffic cutover or provider detachment.
+- [x] Add Resource Migration Orchestrator v1 planning: compile the whole latest
+  registry through the existing Application Manifest gates; select class-based
+  strategies and availability policies; keep observed relationships as
+  non-ordering coordination hints; separate authority, evidence and
+  implementation blockers; persist deterministic owner-only redacted plans;
+  and expose authenticated API/CLI with no apply or runtime mutation path.
 - [ ] Expand the implemented disposable dry-run, conflict detection, verified
   cutover and reversible rollback to real application classes one safety gate at
   a time.
@@ -292,3 +299,19 @@ restore, health check, restart behavior, domain/TLS route and deployment/
 rollback path. `/data/coolify`, Coolify volumes, networks and proxy must remain
 untouched until the final migration audit passes and Burak separately approves
 the destructive cleanup.
+
+## Post-roadmap: zero-downtime stateful and database migration
+
+After the six milestones and Coolify retirement capability are complete, add
+true zero-downtime migration for stateful applications and databases. This work
+must not be forgotten, but it does not block the first safe automatic migration
+engine.
+
+- Replace full-pause stateful snapshot/cutover with continuous pre-sync plus a
+  verified final delta, or an application-aware replication adapter.
+- Add database-engine-specific replication/transaction-log capture,
+  consistency proof, controlled primary handoff and rollback.
+- Measure and expose availability throughout the operation; never hide a pause.
+- Keep zero-downtime as the target. Until these capabilities exist, any
+  stateful migration may use only an explicit, operator-approved maximum pause
+  budget and must roll back before cutover if the budget is exceeded.
