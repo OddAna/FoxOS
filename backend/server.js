@@ -17,6 +17,10 @@ const {
   MigrationOrchestratorError,
   createMigrationOrchestrator
 } = require('./migrationOrchestrator');
+const {
+  StatelessMigrationError,
+  createStatelessMigrationManager
+} = require('./statelessMigrationManager');
 const { createBackupManager } = require('./backupManager');
 const { createDockerClient } = require('./dockerClient');
 const { createEncryptionStore } = require('./encryptionStore');
@@ -494,6 +498,10 @@ const migrationOrchestrator = createMigrationOrchestrator({
   resourceRegistry,
   compileApplicationManifest: (resourceId) => applicationManifestManager.compile(resourceId)
 });
+const statelessMigrationManager = createStatelessMigrationManager({
+  dataRoot: DATA_ROOT,
+  getServerMigrationPlan: (planId) => migrationOrchestrator.getPlan(planId)
+});
 
 function sendAdoptionError(res, error, action) {
   const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
@@ -596,6 +604,17 @@ function sendMigrationOrchestratorError(res, error, action) {
       ? 'Server migration planning failed'
       : error.message,
     code: error.code || 'migration-orchestrator-error'
+  });
+}
+
+function sendStatelessMigrationError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof StatelessMigrationError)
+      ? 'Stateless migration planning failed'
+      : error.message,
+    code: error.code || 'stateless-migration-error'
   });
 }
 
@@ -1524,6 +1543,31 @@ app.get('/api/migration-orchestrator/plans/:planId', (req, res) => {
     res.json({ plan: migrationOrchestrator.getPlan(req.params.planId) });
   } catch (error) {
     sendMigrationOrchestratorError(res, error, 'Could not read server migration plan');
+  }
+});
+
+app.get('/api/stateless-migrations', (req, res) => {
+  try {
+    res.json(statelessMigrationManager.status());
+  } catch (error) {
+    sendStatelessMigrationError(res, error, 'Could not read stateless migration reviews');
+  }
+});
+
+app.post('/api/stateless-migrations/plans', (req, res) => {
+  try {
+    const plan = statelessMigrationManager.createPlan(req.body || {});
+    res.status(201).json({ plan });
+  } catch (error) {
+    sendStatelessMigrationError(res, error, 'Could not create stateless migration review');
+  }
+});
+
+app.get('/api/stateless-migrations/plans/:planId', (req, res) => {
+  try {
+    res.json({ plan: statelessMigrationManager.getPlan(req.params.planId) });
+  } catch (error) {
+    sendStatelessMigrationError(res, error, 'Could not read stateless migration review');
   }
 });
 

@@ -591,6 +591,40 @@ with `POST /api/migration-orchestrator/plans`, and read one through
 cutover or provider-detach endpoint; planning makes zero Docker requests and
 changes no runtime, route or provider state.
 
+## Sealed stateless transaction core
+
+The next migration slice implements the provider-neutral state machine for one
+stateless blue/green resource without making it executable on a production
+installation yet. It revalidates immutable evidence and source health, creates
+a separate FoxOS-owned candidate through an injected runtime adapter,
+health-gates it, stages a conflict-checked TLS route, switches traffic
+atomically, requires zero unavailable probe samples, preserves the source and
+automatically rolls traffic back if any post-switch proof fails.
+
+Production construction is deliberately sealed: it has no runtime adapter, no
+FoxOS UI approval provider, no run endpoint and no approve endpoint. Only
+owner-authenticated review planning is exposed. The transaction implementation
+cannot stop or recreate the source, detach the provider or perform destructive
+source cleanup. Approval values and adapter-returned sensitive fields are never
+persisted.
+
+```bash
+docker compose exec -T foxos node /app/statelessMigrationCli.js status
+
+docker compose exec -T foxos node /app/statelessMigrationCli.js plan \
+  --server-plan SERVER_PLAN_ID --resource RESOURCE_ID \
+  --confirm "PREPARE STATELESS MIGRATION"
+
+docker compose exec -T foxos node /app/statelessMigrationCli.js get STATELESS_PLAN_ID
+```
+
+Authenticated clients can use `GET /api/stateless-migrations`, create a
+review-only plan with `POST /api/stateless-migrations/plans`, and read one with
+`GET /api/stateless-migrations/plans/:planId`. There is intentionally no API or
+CLI operation that starts a migration. The later FoxOS interface must supply a
+short-lived, one-time, plan/resource/evidence-bound approval and the reviewed
+runtime/route adapters before execution can be enabled.
+
 ## Server-owned workload source and environment evidence
 
 A running, fully inspected, provider-owned stateless application can capture
