@@ -47,7 +47,8 @@ test('production adapter exposes every safe transaction capability and no destru
     certificateImporter: { importDomain: async () => ({}) },
     ingressAuthority: {
       inspectOwnedInfrastructure: async () => ({}),
-      stageRoutes: async () => []
+      stageRoutes: async () => [],
+      verifyLegacyDomain: async () => ({ legacyReady: true })
     }
   });
   const status = adapterStatus(adapter, async () => ({ approved: true }));

@@ -72,7 +72,8 @@ function createIngressAuthorityManager({
   ingressHttpsPort = 9443,
   clock = () => new Date(),
   httpsRequest = https.request,
-  connectAdmin = (options) => net.connect(options)
+  connectAdmin = (options) => net.connect(options),
+  delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))
 }) {
   if (
     !dataRoot || typeof dockerRequest !== 'function' || typeof dockerExec !== 'function' ||
@@ -472,6 +473,40 @@ function createIngressAuthorityManager({
     });
   }
 
+  async function verifyLegacyDomain({ hostname: rawHostname, requestPath = '/', attempts = 20 }) {
+    const hostname = String(rawHostname || '').toLowerCase();
+    if (
+      !DOMAIN_PATTERN.test(hostname) || !ROUTE_PATH_PATTERN.test(String(requestPath || '')) ||
+      !Number.isInteger(attempts) || attempts < 1 || attempts > 40
+    ) {
+      throw new IngressAuthorityError('Legacy ingress proof input is invalid', 400, 'invalid-legacy-ingress-proof');
+    }
+    let lastError = null;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      try {
+        const proof = await httpsProbe({
+          hostname,
+          connectHost: ingressContainer,
+          port: 443,
+          requestPath
+        });
+        if (
+          proof.tlsValid === true && proof.statusCode >= 200 && proof.statusCode < 400 &&
+          !proof.candidateIdentity
+        ) return { ...proof, legacyReady: true, attempts: attempt + 1 };
+        lastError = new Error('Legacy ingress returned an invalid response');
+      } catch (error) {
+        lastError = error;
+      }
+      if (attempt + 1 < attempts) await delay(250);
+    }
+    throw new IngressAuthorityError(
+      'Legacy ingress did not become ready before FoxOS traffic authority',
+      503,
+      lastError && lastError.code || 'legacy-ingress-not-ready'
+    );
+  }
+
   ensureDirectory(root);
   ensureDirectory(caddyRuntimeRoot);
   if (!fs.existsSync(routeMapFile)) atomicWrite(routeMapFile, '');
@@ -488,7 +523,8 @@ function createIngressAuthorityManager({
     removeRoutes,
     stageRoutes,
     state,
-    switchDomain
+    switchDomain,
+    verifyLegacyDomain
   };
 }
 
