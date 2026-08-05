@@ -149,10 +149,13 @@ route, calls a provider API, detaches authority or approves migration.
 Stateful rehearsal records and encrypted archives are owner-only state under
 `.foxos-data/stateful-rehearsals/`. The implemented contract accepts only
 running, fully inspected, provider-owned stateful applications with one to four
-explicitly classified writable named volumes and an existing Docker health
-check. It rejects databases, bind mounts, read-only/unknown mounts, protected
-resources, custom runtime overrides, host namespaces, privilege, devices and
-added capabilities.
+explicitly classified writable named volumes. An existing Docker healthcheck
+must be healthy; otherwise the plan requires a bounded absolute HTTP path that
+is probed only on the candidate's dynamic `127.0.0.1` binding. FoxOS never
+executes an operator-provided health command or requests an arbitrary host. It
+rejects databases, bind mounts, read-only/unknown mounts, protected resources,
+custom runtime overrides, host namespaces, privilege, devices and added
+capabilities.
 
 Planning performs Docker reads only. Running requires the operation-specific
 exact confirmation and revalidates container, image, mounts, environment,

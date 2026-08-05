@@ -110,7 +110,12 @@ function resource(overrides = {}) {
   return { ...merged, classification: overrides.classification || classifyResource(merged) };
 }
 
-function sourceDetails({ paused = false, environment = null, healthStatus = 'healthy' } = {}) {
+function sourceDetails({
+  paused = false,
+  environment = null,
+  healthStatus = 'healthy',
+  dockerHealth = true
+} = {}) {
   return {
     Id: SOURCE_ID,
     Image: IMAGE_ID,
@@ -125,12 +130,12 @@ function sourceDetails({ paused = false, environment = null, healthStatus = 'hea
       Entrypoint: ['/beszel'],
       User: '',
       WorkingDir: '/',
-      Healthcheck: {
+      ...(dockerHealth ? { Healthcheck: {
         Test: ['CMD', '/beszel', 'health', '--url', 'http://localhost:8090'],
         Interval: 5000000000,
         Timeout: 2000000000,
         Retries: 3
-      }
+      } } : {})
     },
     HostConfig: {
       Privileged: false,
@@ -149,7 +154,11 @@ function sourceDetails({ paused = false, environment = null, healthStatus = 'hea
       { Type: 'volume', Name: DATA_VOLUME, Destination: '/beszel_data', RW: true },
       { Type: 'volume', Name: SOCKET_VOLUME, Destination: '/beszel_socket', RW: true }
     ],
-    State: { Status: 'running', Paused: paused, Health: { Status: healthStatus } }
+    State: {
+      Status: 'running',
+      Paused: paused,
+      ...(dockerHealth ? { Health: { Status: healthStatus } } : {})
+    }
   };
 }
 
@@ -166,7 +175,12 @@ function imageDetails() {
   };
 }
 
-function createHarness({ failCandidateHealth = false, emptyArchive = null, sourceHealth = 'healthy' } = {}) {
+function createHarness({
+  failCandidateHealth = false,
+  emptyArchive = null,
+  sourceHealth = 'healthy',
+  sourceDockerHealth = true
+} = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-stateful-rehearsal-'));
   const calls = [];
   const persistentArchive = tarArchive('data/state.db', 'beszel stateful data\n');
@@ -181,6 +195,7 @@ function createHarness({ failCandidateHealth = false, emptyArchive = null, sourc
   const temporaryVolumes = new Set();
   const restoredByDestination = new Map();
   const currentResource = resource();
+  if (!sourceDockerHealth) currentResource.runtime.health = { configured: false, status: null };
   const snapshot = {
     schemaVersion: 1,
     snapshotId: 'snap_' + '2'.repeat(24),
@@ -200,7 +215,12 @@ function createHarness({ failCandidateHealth = false, emptyArchive = null, sourc
   async function dockerRequest(method, requestPath, payload = null) {
     calls.push({ method, requestPath, payload });
     if (method === 'GET' && requestPath === '/containers/' + SOURCE_ID + '/json') {
-      return sourceDetails({ paused: sourcePaused, environment: currentEnvironment, healthStatus: sourceHealth });
+      return sourceDetails({
+        paused: sourcePaused,
+        environment: currentEnvironment,
+        healthStatus: sourceHealth,
+        dockerHealth: sourceDockerHealth
+      });
     }
     if (method === 'GET' && requestPath === '/images/' + encodeURIComponent(IMAGE_ID) + '/json') {
       return imageDetails();
@@ -236,7 +256,9 @@ function createHarness({ failCandidateHealth = false, emptyArchive = null, sourc
         Id: CANDIDATE_ID,
         State: {
           Status: candidateRunning ? 'running' : 'created',
-          Health: { Status: failCandidateHealth ? 'unhealthy' : candidateRunning ? 'healthy' : 'starting' }
+          ...(sourceDockerHealth ? {
+            Health: { Status: failCandidateHealth ? 'unhealthy' : candidateRunning ? 'healthy' : 'starting' }
+          } : {})
         },
         NetworkSettings: {
           Networks: networkName ? { [networkName]: {} } : {},
@@ -290,6 +312,10 @@ function createHarness({ failCandidateHealth = false, emptyArchive = null, sourc
     resourceRegistry: { getLatest: () => snapshot },
     encryptionStore,
     secretManager,
+    httpProbe: async ({ port, healthPath }) => {
+      calls.push({ method: 'HTTP_GET', requestPath: `http://127.0.0.1:${port}${healthPath}` });
+      return { statusCode: failCandidateHealth ? 503 : 200 };
+    },
     clock: () => new Date('2026-08-05T02:00:00.000Z'),
     randomUUID: (() => {
       let counter = 1;
@@ -315,13 +341,14 @@ function createHarness({ failCandidateHealth = false, emptyArchive = null, sourc
   };
 }
 
-function plan(manager) {
+function plan(manager, overrides = {}) {
   return manager.createPlan({
     resourceId: RESOURCE_ID,
     persistentVolumes: [DATA_VOLUME],
     emptyVolumes: [SOCKET_VOLUME],
     privatePort: 8090,
-    confirmation: PLAN_STATEFUL_REHEARSAL_CONFIRMATION
+    confirmation: PLAN_STATEFUL_REHEARSAL_CONFIRMATION,
+    ...overrides
   });
 }
 
@@ -365,6 +392,38 @@ test('planning fails closed when the source health check is not currently health
     );
     assert.deepEqual(new Set(harness.calls.map((call) => call.method)), new Set(['GET']));
     assert.equal(harness.manager.status().summary.plans, 0);
+  } finally {
+    fs.rmSync(harness.root, { recursive: true, force: true });
+  }
+});
+
+test('a source without Docker health requires an explicit bounded loopback HTTP proof', async () => {
+  const harness = createHarness({ sourceDockerHealth: false });
+  try {
+    await assert.rejects(
+      () => plan(harness.manager),
+      (error) => error.code === 'invalid-http-health-path'
+    );
+    await assert.rejects(
+      () => plan(harness.manager, { httpHealthPath: '/health?token=unsafe' }),
+      (error) => error.code === 'invalid-http-health-path'
+    );
+    const created = await plan(harness.manager, { httpHealthPath: '/' });
+    assert.equal(created.health.mode, 'loopback-http');
+    assert.equal(created.health.healthPath, '/');
+    assert.equal(created.health.expectedStatus, 200);
+    const operation = await harness.manager.runPlan(created.planId, created.confirmation);
+    const state = harness.state();
+    assert.equal(operation.status, 'verified-and-cleaned');
+    assert.equal(operation.candidate.healthMode, 'loopback-http');
+    assert.equal(operation.source.healthAfterProof.status, 'running');
+    assert.equal(operation.source.healthAfterProof.paused, false);
+    assert.equal(operation.source.healthAfterProof.health, null);
+    assert.equal(Object.hasOwn(state.candidatePayload, 'Healthcheck'), false);
+    assert.equal(
+      harness.calls.some((call) => call.method === 'HTTP_GET' && call.requestPath === 'http://127.0.0.1:49152/'),
+      true
+    );
   } finally {
     fs.rmSync(harness.root, { recursive: true, force: true });
   }

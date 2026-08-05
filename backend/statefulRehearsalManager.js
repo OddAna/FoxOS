@@ -1,5 +1,6 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const http = require('node:http');
 const path = require('node:path');
 const { tarContentDigest } = require('./adoptionManager');
 const {
@@ -82,6 +83,40 @@ function pruneJson(directory, maximum = MAX_RECORDS) {
 
 function runConfirmation(planId) {
   return 'RUN STATEFUL REHEARSAL ' + planId;
+}
+
+function validateHttpHealthPath(value) {
+  const healthPath = String(value || '');
+  if (
+    healthPath.length < 1 || healthPath.length > 256 ||
+    !/^\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$/.test(healthPath) ||
+    healthPath.split('/').includes('..')
+  ) {
+    throw new StatefulRehearsalError(
+      'HTTP health path must be a bounded absolute path without query, fragment or traversal',
+      400,
+      'invalid-http-health-path'
+    );
+  }
+  return healthPath;
+}
+
+function probeLoopbackHttp({ port, healthPath, timeoutMs = 3000 }) {
+  return new Promise((resolve, reject) => {
+    const request = http.get({
+      hostname: '127.0.0.1',
+      port,
+      path: healthPath,
+      method: 'GET',
+      headers: { Host: 'localhost', Connection: 'close' },
+      timeout: timeoutMs
+    }, (response) => {
+      response.resume();
+      resolve({ statusCode: response.statusCode || 0 });
+    });
+    request.on('timeout', () => request.destroy(new Error('Loopback HTTP health probe timed out')));
+    request.on('error', reject);
+  });
 }
 
 function processStartToken(pid) {
@@ -195,6 +230,7 @@ function createStatefulRehearsalManager({
   resourceRegistry,
   encryptionStore,
   secretManager,
+  httpProbe = probeLoopbackHttp,
   clock = () => new Date(),
   randomUUID = () => crypto.randomUUID(),
   wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))
@@ -202,7 +238,7 @@ function createStatefulRehearsalManager({
   if (
     !dataRoot || typeof dockerRequest !== 'function' || typeof dockerArchiveRequest !== 'function' ||
     !resourceRegistry || typeof resourceRegistry.getLatest !== 'function' ||
-    !encryptionStore || !secretManager
+    !encryptionStore || !secretManager || typeof httpProbe !== 'function'
   ) {
     throw new Error('Stateful rehearsal manager requires registry, Docker, encryption and secret adapters');
   }
@@ -411,6 +447,39 @@ function createStatefulRehearsalManager({
     };
   }
 
+  function healthPlan(source, input = {}) {
+    const healthcheck = source.details.Config && source.details.Config.Healthcheck;
+    const dockerHealth = safeHealthSummary(healthcheck, source.healthFingerprint);
+    if (dockerHealth.configured) {
+      const fingerprint = encryptionStore.fingerprint(Buffer.from(canonicalJson({
+        mode: 'docker-healthcheck',
+        sourceFingerprint: source.healthFingerprint
+      }), 'utf8'));
+      return {
+        ...dockerHealth,
+        mode: 'docker-healthcheck',
+        sourceFingerprint: source.healthFingerprint,
+        fingerprint
+      };
+    }
+    const healthPath = validateHttpHealthPath(input.httpHealthPath);
+    const fingerprint = encryptionStore.fingerprint(Buffer.from(canonicalJson({
+      mode: 'loopback-http',
+      healthPath,
+      expectedStatus: 200,
+      sourceFingerprint: source.healthFingerprint
+    }), 'utf8'));
+    return {
+      configured: false,
+      mode: 'loopback-http',
+      healthPath,
+      expectedStatus: 200,
+      sourceFingerprint: source.healthFingerprint,
+      fingerprint,
+      commandIncluded: false
+    };
+  }
+
   function sourceRuntimeFingerprint(details, imageDetails, environmentFingerprint, healthFingerprint) {
     return encryptionStore.fingerprint(Buffer.from(canonicalJson({
       containerId: details.Id,
@@ -435,24 +504,25 @@ function createStatefulRehearsalManager({
     if (!details.State || details.State.Status !== 'running' || details.State.Paused) {
       throw new StatefulRehearsalError('Stateful source must be running and unpaused', 409, 'source-not-running');
     }
-    if (!details.State.Health || details.State.Health.Status !== 'healthy') {
-      throw new StatefulRehearsalError('Stateful source must be healthy before rehearsal', 409, 'source-not-healthy');
-    }
     const imageDetails = await dockerRequest('GET', '/images/' + encodeURIComponent(details.Image) + '/json');
     if (!imageDetails || imageDetails.Id !== details.Image || !SHA256_PATTERN.test(String(details.Image))) {
       throw new StatefulRehearsalError('Immutable source image inspection failed', 409, 'source-image-unavailable');
     }
     validateRuntimeSafety(details, imageDetails);
     const healthcheck = details.Config && details.Config.Healthcheck;
-    if (!healthcheck || !Array.isArray(healthcheck.Test) || healthcheck.Test.length < 2 || healthcheck.Test[0] === 'NONE') {
-      throw new StatefulRehearsalError('A Docker health check is required for the candidate', 409, 'healthcheck-missing');
+    const dockerHealthConfigured = Boolean(
+      healthcheck && Array.isArray(healthcheck.Test) &&
+      healthcheck.Test.length > 1 && healthcheck.Test[0] !== 'NONE'
+    );
+    if (dockerHealthConfigured && (!details.State.Health || details.State.Health.Status !== 'healthy')) {
+      throw new StatefulRehearsalError('Stateful source must be healthy before rehearsal', 409, 'source-not-healthy');
     }
     const environment = details.Config && details.Config.Env;
     if (!Array.isArray(environment)) {
       throw new StatefulRehearsalError('Docker environment inspection is incomplete', 409, 'environment-inspection-incomplete');
     }
     const environmentFingerprint = secretManager.fingerprintEnvironment(environment);
-    const healthFingerprint = encryptionStore.fingerprint(Buffer.from(canonicalJson(healthcheck), 'utf8'));
+    const healthFingerprint = encryptionStore.fingerprint(Buffer.from(canonicalJson(healthcheck || null), 'utf8'));
     return {
       details,
       imageDetails,
@@ -472,6 +542,7 @@ function createStatefulRehearsalManager({
     const volumes = validateAndClassifyMounts(source.details, input);
     const privatePort = validatePrivatePort(resource, input.privatePort);
     const environment = environmentSummary(resource);
+    const health = healthPlan(source, input);
     const planId = 'srp_' + randomUUID().replace(/-/g, '');
     const plan = {
       schemaVersion: STATEFUL_REHEARSAL_SCHEMA_VERSION,
@@ -489,7 +560,7 @@ function createStatefulRehearsalManager({
       environment,
       volumes,
       privatePort,
-      health: safeHealthSummary(source.details.Config.Healthcheck, source.healthFingerprint),
+      health,
       candidateResources: {
         memoryBytes: DEFAULT_MEMORY_BYTES,
         nanoCpus: DEFAULT_NANO_CPUS,
@@ -517,14 +588,35 @@ function createStatefulRehearsalManager({
     return plan;
   }
 
-  async function waitForHealth(containerId, timeoutSeconds = DEFAULT_HEALTH_TIMEOUT_SECONDS) {
-    const deadline = Date.now() + timeoutSeconds * 1000;
+  async function waitForHealth(containerId, plannedHealth, privatePort) {
+    const deadline = Date.now() + DEFAULT_HEALTH_TIMEOUT_SECONDS * 1000;
     let last = null;
     while (Date.now() < deadline) {
       last = await dockerRequest('GET', '/containers/' + containerId + '/json');
       const status = last.State && last.State.Status;
       const health = last.State && last.State.Health && last.State.Health.Status;
-      if (status === 'running' && health === 'healthy') return last;
+      if (plannedHealth.mode === 'docker-healthcheck' && status === 'running' && health === 'healthy') {
+        return last;
+      }
+      if (plannedHealth.mode === 'loopback-http' && status === 'running') {
+        const bindings = last.NetworkSettings && last.NetworkSettings.Ports &&
+          last.NetworkSettings.Ports[privatePort + '/tcp'] || [];
+        const loopback = bindings.length === 1 && bindings[0].HostIp === '127.0.0.1'
+          ? Number(bindings[0].HostPort)
+          : 0;
+        if (Number.isSafeInteger(loopback) && loopback > 0 && loopback <= 65535) {
+          try {
+            const result = await httpProbe({
+              port: loopback,
+              healthPath: plannedHealth.healthPath,
+              timeoutMs: 3000
+            });
+            if (result && result.statusCode === plannedHealth.expectedStatus) return last;
+          } catch {
+            // The bounded loopback endpoint may still be starting.
+          }
+        }
+      }
       if (status === 'exited' || status === 'dead' || health === 'unhealthy') break;
       await wait(500);
     }
@@ -646,10 +738,12 @@ function createStatefulRehearsalManager({
       throw new StatefulRehearsalError('Workload changed after rehearsal planning', 409, 'rehearsal-plan-stale');
     }
     const source = await inspectSource(resource);
+    const currentHealthPlan = healthPlan(source, { httpHealthPath: plan.health.healthPath });
     if (
       source.runtimeFingerprint !== plan.sourceRuntimeFingerprint ||
       source.environmentFingerprint !== plan.environmentFingerprint ||
-      source.healthFingerprint !== plan.health.fingerprint
+      source.healthFingerprint !== plan.health.sourceFingerprint ||
+      currentHealthPlan.fingerprint !== plan.health.fingerprint
     ) {
       throw new StatefulRehearsalError('Workload runtime changed after rehearsal planning', 409, 'rehearsal-plan-stale');
     }
@@ -725,6 +819,7 @@ function createStatefulRehearsalManager({
         internalNetwork: true,
         hostBinding: '127.0.0.1:dynamic',
         privatePort: plan.privatePort,
+        healthMode: plan.health.mode,
         health: null,
         removedAfterProof: false
       },
@@ -856,8 +951,8 @@ function createStatefulRehearsalManager({
 
       const sourceDetails = await dockerRequest('GET', '/containers/' + plan.sourceContainerId + '/json');
       const healthcheck = sourceDetails.Config && sourceDetails.Config.Healthcheck;
-      const currentHealthFingerprint = encryptionStore.fingerprint(Buffer.from(canonicalJson(healthcheck), 'utf8'));
-      if (currentHealthFingerprint !== plan.health.fingerprint) {
+      const currentHealthFingerprint = encryptionStore.fingerprint(Buffer.from(canonicalJson(healthcheck || null), 'utf8'));
+      if (currentHealthFingerprint !== plan.health.sourceFingerprint) {
         throw new StatefulRehearsalError('Health check changed after source unpause', 409, 'rehearsal-plan-stale');
       }
       const portKey = `${plan.privatePort}/tcp`;
@@ -869,7 +964,7 @@ function createStatefulRehearsalManager({
           Env: resolvedEnvironment,
           Labels: labels,
           ExposedPorts: { [portKey]: {} },
-          Healthcheck: healthcheck,
+          ...(plan.health.mode === 'docker-healthcheck' ? { Healthcheck: healthcheck } : {}),
           HostConfig: {
             Mounts: operation.temporary.volumes.map((volume) => ({
               Type: 'volume',
@@ -927,7 +1022,7 @@ function createStatefulRehearsalManager({
       writeOperation(operation);
 
       await dockerRequest('POST', '/containers/' + created.Id + '/start');
-      const candidateDetails = await waitForHealth(created.Id);
+      const candidateDetails = await waitForHealth(created.Id, plan.health, plan.privatePort);
       const candidateNetworks = Object.keys(candidateDetails.NetworkSettings && candidateDetails.NetworkSettings.Networks || {});
       const bindings = candidateDetails.NetworkSettings && candidateDetails.NetworkSettings.Ports &&
         candidateDetails.NetworkSettings.Ports[portKey] || [];
@@ -941,7 +1036,10 @@ function createStatefulRehearsalManager({
       operation.candidate.healthVerifiedAt = now();
       operation.candidate.externalNetwork = false;
       operation.candidate.routeCreated = false;
-      operation.source.healthAfterProof = await sourceHealthProof(plan.sourceContainerId, sourceWasHealthy);
+      operation.source.healthAfterProof = await sourceHealthProof(
+        plan.sourceContainerId,
+        plan.health.mode === 'docker-healthcheck' && sourceWasHealthy
+      );
       writeOperation(operation);
     } catch (error) {
       primaryError = error;
