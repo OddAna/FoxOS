@@ -19,6 +19,10 @@ const { createEncryptionStore } = require('./encryptionStore');
 const { createRouteManager } = require('./routeManager');
 const { createSecretManager } = require('./secretManager');
 const {
+  WorkloadEvidenceError,
+  createWorkloadEvidenceManager
+} = require('./workloadEvidenceManager');
+const {
   SourceDeploymentError,
   createSourceDeploymentManager
 } = require('./sourceDeploymentManager');
@@ -421,6 +425,13 @@ const sourceDeploymentManager = createSourceDeploymentManager({
   dockerRequest,
   dockerBuildRequest: dockerClient.requestBuild
 });
+const workloadEvidenceManager = createWorkloadEvidenceManager({
+  dataRoot: DATA_ROOT,
+  dockerRequest,
+  resourceRegistry,
+  encryptionStore,
+  secretManager
+});
 const composeDeploymentManager = createComposeDeploymentManager({
   dataRoot: DATA_ROOT,
   dockerRequest,
@@ -438,7 +449,8 @@ const applicationManifestManager = createApplicationManifestManager({
   backupStatus: () => backupManager.status(),
   sourceDeploymentStatus: () => sourceDeploymentManager.status(),
   composeDeploymentStatus: () => composeDeploymentManager.status(),
-  imageUpdateStatus: () => imageUpdateManager.status()
+  imageUpdateStatus: () => imageUpdateManager.status(),
+  workloadEvidenceStatus: () => workloadEvidenceManager.status()
 });
 const independenceAuditManager = createIndependenceAuditManager({
   dataRoot: DATA_ROOT,
@@ -463,6 +475,17 @@ function sendSourceDeploymentError(res, error, action) {
       ? 'Source deployment operation failed'
       : error.message,
     code: error.code || 'source-deployment-error'
+  });
+}
+
+function sendWorkloadEvidenceError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof WorkloadEvidenceError)
+      ? 'Workload evidence operation failed'
+      : error.message,
+    code: error.code || 'workload-evidence-error'
   });
 }
 
@@ -967,6 +990,72 @@ app.post('/api/resources/:resourceId/environment-revisions', (req, res) => {
     res.status(201).json({ environment });
   } catch (error) {
     sendAdoptionError(res, error, 'Could not store environment revision');
+  }
+});
+
+app.get('/api/workload-evidence', (req, res) => {
+  try {
+    res.json(workloadEvidenceManager.status());
+  } catch (error) {
+    sendWorkloadEvidenceError(res, error, 'Could not read workload evidence');
+  }
+});
+
+app.post('/api/workload-evidence/source-plans', async (req, res) => {
+  try {
+    const plan = await workloadEvidenceManager.planSource(req.body || {});
+    res.status(201).json({ plan });
+  } catch (error) {
+    sendWorkloadEvidenceError(res, error, 'Could not plan workload source evidence');
+  }
+});
+
+app.get('/api/workload-evidence/source-plans/:planId', (req, res) => {
+  try {
+    res.json({ plan: workloadEvidenceManager.getSourcePlan(req.params.planId) });
+  } catch (error) {
+    sendWorkloadEvidenceError(res, error, 'Could not read workload source plan');
+  }
+});
+
+app.post('/api/workload-evidence/source-plans/:planId/capture', async (req, res) => {
+  try {
+    const revision = await workloadEvidenceManager.captureSource(
+      req.params.planId,
+      req.body && req.body.confirmation
+    );
+    res.status(201).json({ revision });
+  } catch (error) {
+    sendWorkloadEvidenceError(res, error, 'Could not capture workload source evidence');
+  }
+});
+
+app.post('/api/workload-evidence/environment-plans', async (req, res) => {
+  try {
+    const plan = await workloadEvidenceManager.planEnvironment(req.body || {});
+    res.status(201).json({ plan });
+  } catch (error) {
+    sendWorkloadEvidenceError(res, error, 'Could not plan workload environment evidence');
+  }
+});
+
+app.get('/api/workload-evidence/environment-plans/:planId', (req, res) => {
+  try {
+    res.json({ plan: workloadEvidenceManager.getEnvironmentPlan(req.params.planId) });
+  } catch (error) {
+    sendWorkloadEvidenceError(res, error, 'Could not read workload environment plan');
+  }
+});
+
+app.post('/api/workload-evidence/environment-plans/:planId/capture', async (req, res) => {
+  try {
+    const capture = await workloadEvidenceManager.captureEnvironment(
+      req.params.planId,
+      req.body && req.body.confirmation
+    );
+    res.status(201).json({ capture });
+  } catch (error) {
+    sendWorkloadEvidenceError(res, error, 'Could not capture workload environment evidence');
   }
 });
 

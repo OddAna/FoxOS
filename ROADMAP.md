@@ -137,7 +137,10 @@ target blocks only adoption/migration operations that require restore proof.
 - [x] Resolve the first reviewed image tags to registry digests, revalidate at
   apply, pull by immutable reference, health-gate a constrained candidate and
   restore the preserved previous image through exact rollback.
-- [ ] Add private Git through encrypted scoped deploy credentials.
+- [x] Add read-only private Git evidence capture through encrypted scoped
+  credentials and an authenticated server-local source archive.
+- [ ] Use private Git credentials in the health-gated deployment transaction;
+  read-only source capture is not deployment approval.
 - [ ] Add webhook triggers and reviewed build-pack workflows; general Compose,
   persistence and production workloads remain separate gates.
 
@@ -167,6 +170,9 @@ target blocks only adoption/migration operations that require restore proof.
 - [x] Produce owner-only read-only independence audits for real provider-owned
   stateless application candidates. Audits reuse manifest gates and explicitly
   approve neither runtime apply nor provider detachment.
+- [x] Capture a real stateless workload's private/public Git revision as an
+  authenticated encrypted local archive and its observed environment as a
+  drift-checked local revision without runtime, route or provider mutation.
 - [ ] Expand the implemented disposable dry-run, conflict detection, verified
   cutover and reversible rollback to real application classes one safety gate at
   a time.
@@ -174,7 +180,9 @@ target blocks only adoption/migration operations that require restore proof.
 ## Git source, build and deployment
 
 - [x] Connect credential-free public Git repositories through the generic HTTPS
-  adapter; private Git with scoped encrypted credentials remains open.
+  deployment adapter and support scoped encrypted private credentials in the
+  separate read-only workload-evidence adapter.
+- [ ] Extend the health-gated deployment transaction itself to private Git.
 - [x] Support exactly confirmed manual branch/tag deployments for the disposable
   canary; webhook-driven deployment remains open.
 - [x] Support the first restricted Dockerfile workflow and a separate strict
@@ -196,6 +204,9 @@ target blocks only adoption/migration operations that require restore proof.
   diagnostics used by the disposable pilot.
 - [x] Separate ordinary environment variables from secrets and pin immutable
   secret/environment revisions.
+- [x] Capture a candidate workload's Docker environment through a value-free,
+  keyed plan; recheck drift and persist sensitive names only as encrypted secret
+  references without changing the source container.
 - [ ] Add reviewed import/rotation controls to the existing FoxOS interface.
 - [x] Prevent secret leakage through container discovery or repository manifests.
 

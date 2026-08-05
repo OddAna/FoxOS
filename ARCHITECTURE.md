@@ -292,9 +292,9 @@ FoxOS state is the update and rollback authority. This fixed lab is not approval
 for arbitrary image repositories, credentials, persistent applications, routes,
 production workloads or Store update controls.
 
-### Implemented boundary: Application Manifest v1
+### Implemented boundary: Application Manifest
 
-Application Manifest v1 joins the previously separate resource, environment,
+Application Manifest joins the previously separate resource, environment,
 secret-reference, route, recovery, image-operation, source-deployment and
 Compose-deployment records into one local desired-state document per stable
 resource ID. Docker, Compose and Coolify data remain observed inputs and
@@ -345,8 +345,9 @@ nor treats shared networks/projects as directed dependencies.
 Application Manifest schema 2 embeds the classification revision. Only
 classified `application` and `internal-service` roles can finalize through the
 current lifecycle. Database and other unsupported roles fail closed even when
-their other evidence looks complete. Existing OCI, public-Git and strict
-Compose source unions remain unchanged.
+their other evidence looks complete. The source union accepts OCI, FoxOS-owned
+public-Git/strict-Compose deployment revisions and the authenticated encrypted
+workload-source archive described below.
 
 The independence-audit manager considers only running, fully inspected,
 provider-owned stateless applications as read-only candidates. It compiles the
@@ -356,3 +357,35 @@ backup/restore. Report creation writes metadata but performs no Docker request,
 route mutation, provider call, apply approval or detach approval. This creates
 a reviewable first-real-workload planning surface without widening the fixed
 disposable adoption or deployment pilots.
+
+### Implemented boundary: server-owned workload source and environment evidence
+
+The workload-evidence manager is restricted to the same running, fully
+inspected, provider-owned stateless application candidates used by read-only
+independence audits. It creates local migration evidence; it never adopts the
+resource or changes runtime, route, provider or detach state.
+
+A source plan resolves a credential-free or encrypted-credential HTTPS Git ref
+to an immutable commit and hashes a bounded, symlink-free context and
+Dockerfile. Private credentials are revision-pinned encrypted secret references.
+Git receives the decrypted value only through a temporary `askpass` environment,
+never through a URL or process argument. Exact-confirmation capture reclones and
+rejects drift, creates the bounded context archive, encrypts it with the local
+FoxOS key, writes owner-only ciphertext and immediately decrypts/authenticates
+the stored result. The current revision is therefore reconstructable from local
+FoxOS state even when the Git adapter is unavailable.
+
+An environment plan reads the exact observed container once through Docker
+`GET`. It stores names, classification and a server-keyed fingerprint, not
+values. Exact-confirmation capture repeats the read, rejects container or
+environment drift, writes ordinary configuration to a local environment
+revision and converts every sensitive or explicitly classified name into an
+encrypted secret revision. Returned plans, captures, manifests and audits expose
+names/references only.
+
+The source archive is immutable source evidence, not proof that the provider's
+current image came from that source. Application Manifest records
+`source-runtime-binding-missing` until a later FoxOS build produces an immutable
+image, verifies health and proves update/rollback. External provider authority
+also remains blocking. This boundary therefore improves independence evidence
+without widening production deployment or cutover authority.

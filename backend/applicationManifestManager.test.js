@@ -7,7 +7,8 @@ const { classifyResource } = require('./resourceClassification');
 const {
   PLAN_APPLICATION_MANIFEST_CONFIRMATION,
   applicationManifestConfirmation,
-  createApplicationManifestManager
+  createApplicationManifestManager,
+  resourceFingerprint
 } = require('./applicationManifestManager');
 
 const RESOURCE_ID = 'res_' + '1'.repeat(32);
@@ -226,6 +227,7 @@ function harness(options = {}) {
     sourceDeploymentStatus: options.sourceDeploymentStatus || (() => ({ current: null, plans: [], operations: [] })),
     composeDeploymentStatus: options.composeDeploymentStatus || (() => ({ current: null, plans: [], operations: [] })),
     imageUpdateStatus: options.imageUpdateStatus || (() => imageProof(currentResources[0])),
+    workloadEvidenceStatus: options.workloadEvidenceStatus || (() => ({ sourceCurrent: [], guarantees: {} })),
     clock: () => new Date('2026-08-04T20:30:00.000Z'),
     randomUUID: () => '00000000-0000-4000-8000-000000000007'
   });
@@ -270,6 +272,116 @@ test('a fully evidenced FoxOS resource finalizes into an owner-only server manif
   assert.equal(fs.statSync(path.join(manager.paths.currentRoot, RESOURCE_ID + '.json')).mode & 0o777, 0o600);
 
   fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('an external stateless workload uses its authenticated local source archive and environment revision but remains blocked', () => {
+  const external = resource({
+    name: 'provider-site',
+    ownership: 'observed',
+    provider: 'coolify',
+    provenance: { imported: false, safeLabels: {}, project: 'site', service: 'web' },
+    runtime: {
+      ...resource().runtime,
+      image: 'provider-site:latest',
+      environmentVariableCount: 2,
+      constraints: {
+        ...resource().runtime.constraints,
+        memoryBytes: null,
+        nanoCpus: null,
+        pidsLimit: null
+      }
+    },
+    routes: [{ domain: 'site.example.test', path: '/', tls: true }]
+  });
+  external.classification = classifyResource(external);
+  const environment = {
+    schemaVersion: 1,
+    resourceId: external.id,
+    revision: 'env_rev_' + '1'.repeat(32),
+    ordinary: [{ name: 'NODE_ENV', value: 'production' }],
+    secretRefs: [{
+      name: 'API_TOKEN',
+      secretId: 'secret_' + '2'.repeat(32),
+      revision: 'secret_rev_' + '3'.repeat(32),
+      keyId: 'key_' + '4'.repeat(24)
+    }],
+    secretValuesIncluded: false
+  };
+  const sourceRevision = {
+    schemaVersion: 1,
+    type: 'foxos-encrypted-source-archive-revision',
+    revisionId: 'wsr_' + '5'.repeat(32),
+    resourceId: external.id,
+    resourceFingerprint: resourceFingerprint(external, []),
+    observedContainerId: external.runtime.containerId,
+    observedImageId: external.runtime.imageId,
+    source: {
+      adapter: 'git-https-private',
+      repository: 'https://github.com/example/private-site.git',
+      ref: 'main',
+      commit: '6'.repeat(40),
+      contextPath: '.',
+      dockerfile: 'Dockerfile',
+      contextDigest: 'sha256:' + '7'.repeat(64),
+      dockerfileDigest: 'sha256:' + '8'.repeat(64),
+      fileCount: 8,
+      totalBytes: 4096,
+      credential: {
+        username: 'x-access-token',
+        secretId: 'secret_' + '9'.repeat(32),
+        revision: 'secret_rev_' + 'a'.repeat(32),
+        keyId: 'key_' + 'b'.repeat(24),
+        valueIncluded: false
+      }
+    },
+    archive: {
+      file: 'workload-evidence/source-archives/revision.enc',
+      digest: 'sha256:' + 'c'.repeat(64),
+      bytes: 8192,
+      encryptedDigest: 'sha256:' + 'd'.repeat(64),
+      encryptedBytes: 8300,
+      algorithm: 'aes-256-gcm',
+      keyId: 'key_' + 'e'.repeat(24),
+      authenticated: true,
+      plaintextIncluded: false,
+      verification: { verified: true, code: 'source-archive-authenticated' }
+    },
+    runtimeBinding: {
+      verified: false,
+      observedImageId: external.runtime.imageId,
+      reason: 'captured-source-has-not-yet-been-built-and-compared-by-foxos'
+    },
+    externalGitRequiredToReconstructRevision: false,
+    credentialValueIncluded: false
+  };
+  const { manager, root } = harness({
+    currentResource: external,
+    getEnvironmentRevision: () => environment,
+    imageUpdateStatus: () => ({ current: null, operations: [] }),
+    workloadEvidenceStatus: () => ({
+      sourceCurrent: [sourceRevision],
+      guarantees: { environmentSupported: true, externalGitRequiredToReconstructCapturedRevision: false }
+    })
+  });
+  try {
+    const draft = manager.createDraft({
+      resourceId: external.id,
+      confirmation: PLAN_APPLICATION_MANIFEST_CONFIRMATION
+    });
+    const blockerCodes = draft.gates.blockers.map((blocker) => blocker.code);
+    assert.equal(draft.desired.source.type, 'foxos-encrypted-source-archive-revision');
+    assert.equal(draft.desired.source.archive.externalGitRequiredToReconstructRevision, false);
+    assert.equal(draft.desired.source.credential.valueIncluded, false);
+    assert.equal(draft.desired.environment.revision, environment.revision);
+    assert.equal(blockerCodes.includes('immutable-image-missing'), false);
+    assert.equal(blockerCodes.includes('environment-revision-missing'), false);
+    assert.equal(blockerCodes.includes('source-runtime-binding-missing'), true);
+    assert.equal(blockerCodes.includes('external-provider-authority'), true);
+    assert.equal(draft.gates.status, 'blocked');
+    assert.equal(draft.gates.runtimeMutationIncluded, false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('external applications become redacted blocked import drafts and cannot be finalized', () => {
@@ -492,7 +604,8 @@ test('Compose service manifests share one immutable graph and enforce directed d
   assert.deepEqual(manager.status().guarantees.sourceTypes, [
     'oci-image',
     'foxos-source-build-revision',
-    'foxos-compose-deployment-revision'
+    'foxos-compose-deployment-revision',
+    'foxos-encrypted-source-archive-revision'
   ]);
   assert.equal(manager.status().guarantees.sharedNetworkImpliesDependency, false);
 

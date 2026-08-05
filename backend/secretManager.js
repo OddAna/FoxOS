@@ -57,6 +57,10 @@ function validateEnvironmentName(name) {
   return String(name);
 }
 
+function isSensitiveEnvironmentName(name) {
+  return SENSITIVE_ENV_NAME.test(validateEnvironmentName(name));
+}
+
 function createSecretManager({
   dataRoot,
   encryptionStore,
@@ -295,5 +299,7 @@ function createSecretManager({
 
 module.exports = {
   SecretError,
-  createSecretManager
+  createSecretManager,
+  isSensitiveEnvironmentName,
+  validateEnvironmentName
 };

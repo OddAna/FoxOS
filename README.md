@@ -48,6 +48,10 @@ not use the host package manager for its own runtime.
 - **Digest-pinned image updates** — the fixed disposable image canary resolves
   reviewed registry tags to immutable digests, health-gates a constrained
   candidate, preserves the prior revision, and proves exact rollback
+- **Server-owned workload evidence** — a stateless provider workload can pin a
+  private or public Git commit into an authenticated encrypted local source
+  archive and capture its live environment into ordinary names plus encrypted
+  secret revisions without changing that workload
 
 FoxOS is currently an **alpha**. See [Current limitations](#current-limitations)
 before exposing it to other users.
@@ -243,6 +247,11 @@ The authenticated API exposes:
 | `POST /api/secrets` | Create a new encrypted secret revision |
 | `GET /api/resources/:resourceId/environment-revision` | Read the classified environment revision for one resource |
 | `POST /api/resources/:resourceId/environment-revisions` | Pin ordinary values and encrypted secret references to one resource |
+| `GET /api/workload-evidence` | Read redacted Git-archive and environment-capture evidence |
+| `POST /api/workload-evidence/source-plans` | Resolve and inspect a credential-free or encrypted-credential HTTPS Git source without Docker mutation |
+| `POST /api/workload-evidence/source-plans/:planId/capture` | Reverify, encrypt, authenticate and store the bounded source archive locally |
+| `POST /api/workload-evidence/environment-plans` | Read one candidate container environment through Docker `GET` and plan value-free classification |
+| `POST /api/workload-evidence/environment-plans/:planId/capture` | Recheck drift and store an immutable local environment/secret revision |
 | `GET /api/recovery/status` | Read local encryption and off-host backup readiness without credentials |
 | `GET /api/deployments` | Read FoxOS-owned disposable source revisions, plans, operations and current state |
 | `POST /api/deployments/plans` | Resolve a public HTTPS Git branch/tag to an immutable commit and create a reviewed Dockerfile plan |
@@ -423,7 +432,7 @@ show the active or retained lab containers. General image-based application
 updates remain blocked until per-application manifests, persistence, secrets,
 routes and recovery policy can participate in the same transaction.
 
-## Application Manifest v1
+## Application Manifest
 
 Every manageable instance can now receive a server-owned, provider-neutral
 application manifest. FoxOS compiles it from the latest read-only resource
@@ -517,6 +526,60 @@ with `POST /api/independence-audits`, and read one through
 `GET /api/independence-audits/:auditId`. Reports are owner-only under
 `.foxos-data/independence-audits/`. A planning-ready audit is still not a
 migration, cutover or provider-removal approval.
+
+## Server-owned workload source and environment evidence
+
+A running, fully inspected, provider-owned stateless application can capture
+the first two pieces of migration evidence without moving traffic or taking
+runtime authority.
+
+For source evidence, FoxOS accepts a credential-free HTTPS Git URL or an
+encrypted secret reference for a scoped read-only private Git credential. The
+credential value is supplied to Git only through an ephemeral `askpass`
+environment; it is never placed in the repository URL, Git arguments, plans,
+archives, manifests, logs or API responses. Planning pins the branch or tag to
+an immutable commit plus deterministic context and Dockerfile digests. Capture
+reclones and rechecks those values, creates a bounded context archive, encrypts
+it with the server-local AES-256-GCM key, writes it with owner-only permissions,
+decrypts it again and authenticates the digest. The captured revision can be
+reconstructed from FoxOS local state without contacting the Git host.
+
+For environment evidence, planning performs one Docker `GET` inspection and
+stores only variable names, their ordinary/secret classification and a keyed
+fingerprint. Sensitive-looking names are always encrypted; `--secret-name`
+classifies additional application-specific names as secrets. Capture repeats
+the inspection, rejects any value/name/container drift, encrypts secret values
+into revision-pinned references and stores the complete local environment
+revision. CLI/API output includes neither secret nor ordinary values.
+
+```bash
+# Use a repository-scoped read-only credential. Its value comes from stdin.
+docker compose exec -T foxos node /app/secretCli.js put git-workload-read \
+  --value-stdin < /secure/path/read-token
+
+docker compose exec -T foxos node /app/workloadEvidenceCli.js plan-source RESOURCE_ID \
+  --repository https://github.com/owner/private-repository.git \
+  --ref main --context . --dockerfile Dockerfile \
+  --username x-access-token --credential-secret git-workload-read \
+  --confirm "PLAN WORKLOAD SOURCE EVIDENCE"
+
+docker compose exec -T foxos node /app/workloadEvidenceCli.js capture-source SOURCE_PLAN_ID \
+  --confirm "CAPTURE WORKLOAD SOURCE SOURCE_PLAN_ID"
+
+docker compose exec -T foxos node /app/workloadEvidenceCli.js plan-environment RESOURCE_ID \
+  --secret-name APPLICATION_SPECIFIC_SECRET \
+  --confirm "PLAN WORKLOAD ENVIRONMENT EVIDENCE"
+
+docker compose exec -T foxos node /app/workloadEvidenceCli.js capture-environment ENVIRONMENT_PLAN_ID \
+  --confirm "CAPTURE WORKLOAD ENVIRONMENT ENVIRONMENT_PLAN_ID"
+```
+
+These operations write only FoxOS evidence and make no Docker lifecycle,
+route, provider or detach request. A captured source archive deliberately does
+not claim that the provider's current image was built from that archive. Until
+FoxOS builds the revision, health-gates it and proves update/rollback, the
+manifest remains blocked by `source-runtime-binding-missing` and external
+provider authority.
 
 ## Disposable adoption pilot
 
@@ -690,10 +753,11 @@ Do not copy its contents into Git or logs.
 - Image update/rollback is currently limited to the two reviewed tags of the
   fixed disposable canary; normal Store and imported applications are not
   eligible yet
-- Application Manifest v1 can describe and audit imported application state,
+- Application Manifest schema 2 can describe and audit imported application state,
   and can bind the fixed FoxOS OCI/source-build/Compose canaries to immutable
-  local revisions, but it does not yet adopt, reconcile or detach normal
-  production resources
+  local revisions. It can also reference an authenticated encrypted workload
+  source archive and environment revision, but that evidence does not yet build,
+  adopt, reconcile or detach normal production resources
 - App Store images are maintained by their respective third-party projects, not
   by FoxOS
 - The included FoxOS-owned HTTPS gateway currently ships one DNS-01 adapter for
@@ -744,6 +808,7 @@ FoxOS/
 │   ├── sourceDeploymentManager.js # Public Git commit, Docker build, health gate and rollback pilot
 │   ├── composeDeploymentManager.js # Strict service graph, serial queue, group cutover and rollback
 │   ├── imageUpdateManager.js # Reviewed registry digest, candidate health and exact rollback
+│   ├── workloadEvidenceManager.js # Encrypted source archive and environment evidence capture
 │   ├── applicationManifestManager.js # Provider-neutral import drafts and desired revisions
 │   ├── adoptionManager.js     # Disposable plan/apply/rollback transaction
 │   └── package.json
