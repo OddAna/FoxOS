@@ -13,6 +13,10 @@ const {
   IndependenceAuditError,
   createIndependenceAuditManager
 } = require('./independenceAuditManager');
+const {
+  MigrationOrchestratorError,
+  createMigrationOrchestrator
+} = require('./migrationOrchestrator');
 const { createBackupManager } = require('./backupManager');
 const { createDockerClient } = require('./dockerClient');
 const { createEncryptionStore } = require('./encryptionStore');
@@ -485,6 +489,11 @@ const independenceAuditManager = createIndependenceAuditManager({
   resourceRegistry,
   compileApplicationManifest: (resourceId) => applicationManifestManager.compile(resourceId)
 });
+const migrationOrchestrator = createMigrationOrchestrator({
+  dataRoot: DATA_ROOT,
+  resourceRegistry,
+  compileApplicationManifest: (resourceId) => applicationManifestManager.compile(resourceId)
+});
 
 function sendAdoptionError(res, error, action) {
   const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
@@ -576,6 +585,17 @@ function sendIndependenceAuditError(res, error, action) {
       ? 'Independence audit operation failed'
       : error.message,
     code: error.code || 'independence-audit-error'
+  });
+}
+
+function sendMigrationOrchestratorError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof MigrationOrchestratorError)
+      ? 'Server migration planning failed'
+      : error.message,
+    code: error.code || 'migration-orchestrator-error'
   });
 }
 
@@ -1479,6 +1499,31 @@ app.get('/api/independence-audits/:auditId', (req, res) => {
     res.json({ audit: independenceAuditManager.getAudit(req.params.auditId) });
   } catch (error) {
     sendIndependenceAuditError(res, error, 'Could not read independence audit');
+  }
+});
+
+app.get('/api/migration-orchestrator', (req, res) => {
+  try {
+    res.json(migrationOrchestrator.status());
+  } catch (error) {
+    sendMigrationOrchestratorError(res, error, 'Could not read server migration plans');
+  }
+});
+
+app.post('/api/migration-orchestrator/plans', (req, res) => {
+  try {
+    const plan = migrationOrchestrator.createPlan(req.body || {});
+    res.status(201).json({ plan });
+  } catch (error) {
+    sendMigrationOrchestratorError(res, error, 'Could not create server migration plan');
+  }
+});
+
+app.get('/api/migration-orchestrator/plans/:planId', (req, res) => {
+  try {
+    res.json({ plan: migrationOrchestrator.getPlan(req.params.planId) });
+  } catch (error) {
+    sendMigrationOrchestratorError(res, error, 'Could not read server migration plan');
   }
 });
 
