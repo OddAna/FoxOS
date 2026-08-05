@@ -21,6 +21,9 @@ const {
   StatelessMigrationError,
   createStatelessMigrationManager
 } = require('./statelessMigrationManager');
+const {
+  createStatelessMigrationManifestCompiler
+} = require('./statelessMigrationManifestCompiler');
 const { createBackupManager } = require('./backupManager');
 const { createDockerClient } = require('./dockerClient');
 const { createEncryptionStore } = require('./encryptionStore');
@@ -498,9 +501,14 @@ const migrationOrchestrator = createMigrationOrchestrator({
   resourceRegistry,
   compileApplicationManifest: (resourceId) => applicationManifestManager.compile(resourceId)
 });
+const statelessMigrationManifestCompiler = createStatelessMigrationManifestCompiler({
+  resourceRegistry,
+  compileApplicationManifest: (resourceId) => applicationManifestManager.compile(resourceId)
+});
 const statelessMigrationManager = createStatelessMigrationManager({
   dataRoot: DATA_ROOT,
-  getServerMigrationPlan: (planId) => migrationOrchestrator.getPlan(planId)
+  getServerMigrationPlan: (planId) => migrationOrchestrator.getPlan(planId),
+  compileExecutionContract: (input) => statelessMigrationManifestCompiler.compile(input)
 });
 
 function sendAdoptionError(res, error, action) {

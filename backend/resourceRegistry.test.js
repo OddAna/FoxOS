@@ -236,14 +236,16 @@ test('route and label normalization keeps only migration-safe fields', () => {
     'coolify.managed': 'true',
     'coolify.projectName': 'example-project',
     'traefik.http.routers.app.rule': 'Host(`one.example.test`, `two.example.test`) && PathPrefix(`/api`)',
+    'traefik.http.routers.app.service': 'app-service@docker',
     'traefik.http.routers.app.tls': 'true',
+    'traefik.http.services.app-service.loadbalancer.server.port': '8080',
     'traefik.http.middlewares.app.basicauth.users': 'user:password-hash',
     'private.token': 'do-not-copy'
   };
 
   assert.deepEqual(parseTraefikRoutes(labels), [
-    { domain: 'one.example.test', scheme: 'https', path: '/api', tls: true },
-    { domain: 'two.example.test', scheme: 'https', path: '/api', tls: true }
+    { domain: 'one.example.test', scheme: 'https', path: '/api', tls: true, privatePort: 8080 },
+    { domain: 'two.example.test', scheme: 'https', path: '/api', tls: true, privatePort: 8080 }
   ]);
   assert.deepEqual(safeLabels(labels), {
     'coolify.managed': 'true',

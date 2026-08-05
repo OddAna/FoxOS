@@ -114,6 +114,20 @@ function harness() {
       severity: 'blocking',
       message: 'Database lifecycle is missing.'
     });
+    if (current.id === stateless.id) blockers.push(
+      {
+        code: 'foxos-route-missing',
+        section: 'routes',
+        severity: 'blocking',
+        message: 'The stateless transaction will acquire this route.'
+      },
+      {
+        code: 'runtime-resource-limits-missing',
+        section: 'runtime',
+        severity: 'blocking',
+        message: 'The reviewed candidate contract will set limits.'
+      }
+    );
     return {
       revisionId: 'apprev_' + resourceId.slice(-24),
       desired: {
@@ -158,6 +172,12 @@ test('whole-server planning is deterministic, class-aware, redacted and plan-onl
     assert.equal(statelessPlan.strategy, 'blue-green-atomic-route');
     assert.equal(statelessPlan.availability.currentMode, 'zero-downtime-required');
     assert.equal(statelessPlan.availability.sourcePauseBudgetMs, 0);
+    assert.equal(statelessPlan.readiness.evidenceComplete, true);
+    assert.equal(statelessPlan.blockers.evidence.length, 0);
+    assert.equal(
+      statelessPlan.blockers.transaction.some((entry) => entry.code === 'foxos-route-missing'),
+      true
+    );
 
     const statefulPlan = first.resources.find((entry) => entry.resourceId === stateful.id);
     assert.equal(statefulPlan.strategy, 'shadow-refresh-bounded-quiesce');

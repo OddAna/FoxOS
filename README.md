@@ -643,6 +643,22 @@ browser-trusted production certificate issuance or arbitrary-domain routing.
 The command does not configure the sealed production manager or create an
 execution endpoint.
 
+Normal evidence-ready stateless OCI workloads now also receive a deterministic
+execution contract inside their review plan. The compiler rechecks the exact
+registry snapshot and Application Manifest revision, binds the immutable image
+ID, retains every observed domain/path plus its Traefik service private port,
+and describes a separate constrained candidate with no host port or writable
+mount. Environment output contains names and encrypted references only.
+
+Each route declares FoxOS as desired authority and requires browser-trusted TLS,
+but deliberately leaves the certificate adapter unselected. DNS and certificate
+implementations remain replaceable; FoxOS does not infer Cloudflare or any other
+provider and the clean base installation still needs no domain, token, external
+account or paid service. Health target, runtime defaults, routes and certificate
+adapter must be reviewed in the later FoxOS interface. Production still has no
+runtime adapter, approval verifier, run endpoint or approve endpoint, so
+creating this contract cannot start a migration or change traffic.
+
 ## Server-owned workload source and environment evidence
 
 A running, fully inspected, provider-owned stateless application can capture

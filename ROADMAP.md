@@ -199,11 +199,17 @@ target blocks only adoption/migration operations that require restore proof.
   exact source runtime continuity, roll back explicitly, inject one unavailable
   sample, roll back automatically and remove every operation-owned object.
   Production construction remains sealed and no existing workload is migrated.
-- [ ] Compile a normal evidence-complete stateless Application Manifest into a
-  production-capable candidate and arbitrary FoxOS-owned domain/route/TLS
-  transaction. Keep certificate/DNS implementations replaceable and keep the
-  production gate sealed until the reviewed interface supplies explicit
-  approval.
+- [x] Compile a normal evidence-ready stateless OCI Application Manifest into a
+  deterministic production candidate specification and arbitrary FoxOS-owned
+  domain/path/TLS authority review contract. Bind every observed route to its
+  exact private port, keep environment values out of the plan, require an
+  explicit browser-trusted certificate adapter selection, and keep certificate
+  and DNS implementations replaceable.
+- [ ] Add the reviewed FoxOS interface for health target, runtime defaults,
+  every route and certificate adapter selection. Only after that interface
+  supplies a short-lived one-time approval may a production Docker/route
+  adapter be injected and a run action be exposed; until then the production
+  execution gate remains sealed.
 - [ ] Expand the implemented disposable dry-run, conflict detection, verified
   cutover and reversible rollback to real application classes one safety gate at
   a time.

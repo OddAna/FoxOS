@@ -614,3 +614,47 @@ route or external-authority blockers. If route removal cannot be proved, source
 availability is restored but candidate cleanup is deferred; new rehearsals are
 blocked until startup recovery retries route removal and exact cleanup. An
 interrupted transaction is never replayed.
+
+### Implemented boundary: generic stateless manifest execution contract
+
+The normal stateless planning path now recompiles the latest Application
+Manifest immediately before it creates a review plan. The registry snapshot,
+whole-server plan evidence and manifest revision must match exactly; drift or a
+corrupt identity fails before any contract is written. The first generic source
+boundary accepts only an immutable OCI repository digest bound to the observed
+running image ID. Writable mounts, required dependency transactions,
+privileged runtimes, incomplete inspection, invalid or redacted routes and
+ambiguous upstream ports remain blocking.
+
+Resource Registry retains the private service port published by Traefik's
+provider-neutral router-to-service labels. The compiler can therefore preserve
+multiple domain/path routes and bind each route to its exact container port
+without copying provider credentials or making the provider an authority. Every
+compiled route requires HTTP-to-HTTPS redirect, FoxOS-owned desired authority,
+browser-trusted TLS and an explicit replaceable certificate adapter selection.
+No Cloudflare, DNS vendor, certificate authority or paid service is selected by
+the contract.
+
+The candidate specification contains the immutable image ID, no host ports, no
+writable mounts, explicit or conservative reviewable CPU/memory/PID limits,
+resilient restart policy, non-privileged execution, no-new-privileges and
+dropped capabilities. Environment state contains only ordinary names,
+revision-pinned encrypted secret references and allowlisted provider-metadata
+exclusions. Values are resolved only during a later candidate-creation
+transaction and never enter the plan, API or fingerprint.
+
+Application Manifest blockers that the blue/green transaction itself must prove
+are separated from true preconditions. Route ownership, candidate health,
+restart policy, candidate limits, exact rollback and the external-authority
+transition no longer create a planning catch-22; immutable source,
+environment, persistence, dependency and classification failures still block.
+The contract is fingerprinted into the stateless review plan and cannot be
+changed after UI approval without invalidating that approval.
+
+This boundary is plan-only. Production construction receives the compiler but
+still receives no execution adapter or approval verifier, exposes no run or
+approve endpoint and cannot mutate Docker, routes, DNS, TLS or provider state.
+The next interface must explicitly review the health target, applied runtime
+defaults, every route and the replaceable certificate adapter. Burak's later
+authorization is still required before any existing workload, traffic, domain
+or provider authority is changed.
