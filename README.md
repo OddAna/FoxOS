@@ -60,6 +60,9 @@ not use the host package manager for its own runtime.
   separately identified FoxOS-owned runtime with its own persistent volumes,
   internal-only network, resilient restart policy and explicit limits while the
   original application keeps all production traffic
+- **Controlled shadow refresh** — a newer verified rehearsal can build a
+  separate shadow generation; the previous healthy generation remains current
+  until the replacement passes restore, isolation, health and registry proof
 
 FoxOS is currently an **alpha**. See [Current limitations](#current-limitations)
 before exposing it to other users.
@@ -269,6 +272,8 @@ The authenticated API exposes:
 | `POST /api/stateful-shadows/plans` | Plan a no-traffic shadow from the current authenticated rehearsal snapshot |
 | `GET /api/stateful-shadows/plans/:planId` | Read one immutable shadow plan and its operation-specific run confirmation |
 | `POST /api/stateful-shadows/plans/:planId/run` | Restore separate FoxOS volumes, start the constrained internal runtime and verify its FoxOS identity |
+| `POST /api/stateful-shadows/refresh-plans` | Bind a newer verified rehearsal to the current healthy shadow without mutating either generation |
+| `POST /api/stateful-shadows/refresh-plans/:planId/run` | Build and verify a separate generation, atomically promote it, then clean the prior generation by exact ownership |
 | `GET /api/stateful-shadows/operations/:operationId` | Read one redacted persistent shadow result and failure cleanup state |
 | `GET /api/recovery/status` | Read local encryption and off-host backup readiness without credentials |
 | `GET /api/deployments` | Read FoxOS-owned disposable source revisions, plans, operations and current state |
@@ -706,6 +711,40 @@ supplies tested health and runtime-limit evidence to the Application Manifest.
 It does **not** make the shadow production-authoritative, synchronize later
 source writes, publish a route, prove update/rollback, prove off-host recovery
 or detach the existing provider. Those remain separate gates before cutover.
+
+### Controlled shadow refresh
+
+Refresh never overwrites the current shadow volumes in place. First create and
+run a new stateful rehearsal for the same source and volume classification. The
+refresh planner accepts it only when its verified snapshot is newer than the
+snapshot used by the current healthy shadow and the source image, environment,
+health contract and volume policy have not drifted.
+
+```bash
+# After a newer stateful rehearsal has completed successfully:
+docker compose exec -T foxos node /app/statefulShadowCli.js refresh-plan RESOURCE_ID \
+  --confirm "PLAN STATEFUL SHADOW REFRESH"
+
+# Use the returned refresh plan ID and its exact confirmation.
+docker compose exec -T foxos node /app/statefulShadowCli.js refresh-run REFRESH_PLAN_ID \
+  --confirm "REFRESH STATEFUL SHADOW REFRESH_PLAN_ID"
+```
+
+Apply restores the newer encrypted archive into new operation-owned volumes and
+starts a separately named candidate on a new internal-only network. The existing
+healthy shadow remains running while the candidate passes content digest,
+runtime constraints, internal health and a fresh Resource Registry proof. FoxOS
+then atomically replaces the current pointer and removes only the prior
+generation's exact operation-labeled container, volumes and network. A failure
+before promotion cleans only the candidate and leaves the prior current pointer
+and runtime untouched. Startup recovery distinguishes those two phases: it
+removes an unpromoted candidate, but keeps and reconciles a promoted generation.
+
+This is a controlled **point-in-time refresh**, not live replication or final
+cutover synchronization. Source writes may continue after the rehearsal pause,
+so `finalSynchronizationProven` remains false. Route publication, traffic,
+provider authority, off-host recovery and application update/rollback remain
+separate blocking gates.
 
 ## Disposable adoption pilot
 

@@ -180,6 +180,7 @@ jobs:
               const status = JSON.parse(input);
               const guarantees = status.guarantees || {};
               if (status.summary.plans || status.summary.operations || status.summary.active || status.summary.stale || status.summary.running) process.exit(1);
+              if (status.summary.refreshPlans || status.summary.refreshOperations) process.exit(1);
               if (guarantees.sourceMutationIncluded || guarantees.sourcePauseIncluded) process.exit(1);
               if (guarantees.sourceStopIncluded || guarantees.sourceRecreationIncluded) process.exit(1);
               if (guarantees.sourceIdentityClaimed || !guarantees.separateFoxOSIdentity) process.exit(1);
@@ -187,6 +188,8 @@ jobs:
               if (guarantees.routeCreated || guarantees.trafficCutover) process.exit(1);
               if (guarantees.providerMutationIncluded || guarantees.providerDetachIncluded) process.exit(1);
               if (guarantees.offHostRecoveryProven || guarantees.environmentValuesIncluded || guarantees.secretValuesIncluded) process.exit(1);
+              if (!guarantees.controlledRefreshSupported || guarantees.inPlaceVolumeMutation) process.exit(1);
+              if (guarantees.finalSynchronizationProven || !guarantees.sourceWritesMayContinueAfterSnapshot) process.exit(1);
             });
           '
 

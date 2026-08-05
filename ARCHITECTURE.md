@@ -474,3 +474,35 @@ live replication nor cutover: later source writes are not synchronized and the
 provider remains authoritative. Failure and startup recovery remove only exact
 resources recorded as created by the interrupted shadow operation and never
 replay it.
+
+### Implemented boundary: controlled stateful shadow refresh
+
+The refresh path consumes a newer authenticated stateful-rehearsal proof for the
+same source identity, image, environment revision, health contract and volume
+classification. It never mutates the active shadow volumes in place. A refresh
+plan binds the current shadow operation/fingerprint and the newer rehearsal,
+then allocates separately named candidate volumes, network and container while
+preserving the same stable FoxOS shadow resource ID.
+
+The previous healthy shadow remains running and current while the new generation
+is restored, digest-checked, started on its own internal-only bridge and verified
+for exact labels, mounts, restart policy, security and CPU/memory/PID limits. A
+fresh Resource Registry scan must identify the candidate container under the
+stable shadow resource ID before the current pointer can change. Both generations
+may therefore be observed briefly during proof, but the pointer still names the
+old container until candidate verification succeeds.
+
+Promotion atomically writes the new current record before deleting anything from
+the previous generation. Cleanup checks the exact previous operation label on
+every container, volume and network; foreign or raced objects are preserved and
+reported as cleanup-required. Before promotion, any failure removes only the
+candidate. Startup recovery reads the current pointer: an unpromoted interrupted
+candidate is removed, while an already promoted generation is kept and only the
+previous exact-owned objects are reconciled.
+
+Refresh is explicitly a newer point-in-time snapshot, not live replication.
+`finalSynchronizationProven` remains false and source writes may continue after
+the separate rehearsal pause. The path creates no route, changes no traffic,
+calls no provider control plane and authorizes no provider detach. Final source
+quiesce/synchronization must be coupled to a later reversible FoxOS-owned route
+cutover transaction rather than inferred from this refresh proof.
