@@ -506,3 +506,31 @@ the separate rehearsal pause. The path creates no route, changes no traffic,
 calls no provider control plane and authorizes no provider detach. Final source
 quiesce/synchronization must be coupled to a later reversible FoxOS-owned route
 cutover transaction rather than inferred from this refresh proof.
+
+### Implemented boundary: reversible stateful cutover rehearsal
+
+The first stateful cutover transaction extends the reusable restore rehearsal
+without claiming production authority. Planning is Docker-GET-only, requires a
+separate exact confirmation and binds the same resource/container/image,
+environment, health, private-port and volume-policy evidence. The initial
+reviewed canary is deliberately restricted to private port `8090` and the fixed
+FoxOS gateway path `/_foxos/migrations/stateful-cutover/_/`; general domains and
+arbitrary upstream ports remain outside this boundary.
+
+At apply, the source stays paused from archive capture through authenticated
+restore, candidate health, temporary connection of that exact operation-labeled
+candidate to the internal FoxOS routing network, authorized HTTPS proof and
+verified route removal. Only after the public canary path is unavailable again
+does FoxOS unpause and re-prove the original source. No host port is published,
+the real application domain and DNS are unchanged, no provider API or metadata
+is mutated, and the temporary candidate, volumes and network are removed after
+proof.
+
+The operation records `coupledCutoverRehearsalProven=true` only when both route
+activation and rollback succeed while the source remains paused. It always
+records `productionTrafficCutover=false` and
+`finalSynchronizationProven=false` after rollback, so it cannot close the real
+route or external-authority blockers. If route removal cannot be proved, source
+availability is restored but candidate cleanup is deferred; new rehearsals are
+blocked until startup recovery retries route removal and exact cleanup. An
+interrupted transaction is never replayed.

@@ -7,8 +7,10 @@ const { createEncryptionStore } = require('./encryptionStore');
 const { classifyResource } = require('./resourceClassification');
 const { createSecretManager } = require('./secretManager');
 const {
+  PLAN_STATEFUL_CUTOVER_REHEARSAL_CONFIRMATION,
   PLAN_STATEFUL_REHEARSAL_CONFIRMATION,
   createStatefulRehearsalManager,
+  cutoverRunConfirmation,
   runConfirmation,
   tarHasMaterialEntries
 } = require('./statefulRehearsalManager');
@@ -177,6 +179,8 @@ function imageDetails() {
 
 function createHarness({
   failCandidateHealth = false,
+  failRouteActivation = false,
+  failRouteRollback = false,
   emptyArchive = null,
   sourceHealth = 'healthy',
   sourceDockerHealth = true,
@@ -195,6 +199,8 @@ function createHarness({
   let networkName = null;
   const temporaryVolumes = new Set();
   const restoredByDestination = new Map();
+  const routeCalls = [];
+  let routeRollbackFails = failRouteRollback;
   const currentResource = resource();
   if (!sourceDockerHealth) currentResource.runtime.health = { configured: false, status: null };
   const snapshot = {
@@ -313,6 +319,57 @@ function createHarness({
     throw new Error('Unexpected Docker archive request: ' + method + ' ' + requestPath);
   }
 
+  const routeManager = {
+    planStatefulCutoverRoute: (resourceId, operationId, privatePort) => ({
+      schemaVersion: 1,
+      routeId: 'route_' + '9'.repeat(24),
+      routeKind: 'stateful-cutover-rehearsal',
+      routeName: 'foxos-stateful-cutover',
+      resourceId,
+      operationId,
+      owner: 'foxos',
+      gateway: 'foxos-caddy',
+      publicBaseUrl: 'https://foxos.example.test:8443',
+      publicPath: '/_foxos/migrations/stateful-cutover/_/',
+      publicUrl: 'https://foxos.example.test:8443/_foxos/migrations/stateful-cutover/_/',
+      tls: { mode: 'foxos-gateway', verificationRequired: true },
+      upstream: {
+        protocol: 'http', network: 'foxos-routing',
+        alias: 'foxos-route-stateful-cutover', privatePort
+      },
+      targetPolicy: { type: 'stateful-rehearsal-candidate', operationId }
+    }),
+    activate: async (route, targetId) => {
+      routeCalls.push({ action: 'activate', route, targetId, sourcePaused });
+      if (failRouteActivation) {
+        const error = new Error('route activation failed');
+        error.code = 'route-health-verification-failed';
+        throw error;
+      }
+      return {
+        ...route,
+        status: 'active',
+        proof: {
+          verified: true, expectedAvailable: true, statusCode: 200,
+          routeHeader: 'foxos-stateful-cutover', authorizedTls: true
+        }
+      };
+    },
+    deactivate: async (route, targetId) => {
+      routeCalls.push({ action: 'deactivate', route, targetId, sourcePaused });
+      if (routeRollbackFails) {
+        const error = new Error('route rollback failed');
+        error.code = 'route-removal-verification-failed';
+        throw error;
+      }
+      return {
+        ...route,
+        status: 'inactive',
+        proof: { verified: true, expectedAvailable: false, statusCode: 502, routeHeader: null }
+      };
+    }
+  };
+
   const manager = createStatefulRehearsalManager({
     dataRoot: root,
     dockerRequest,
@@ -320,6 +377,7 @@ function createHarness({
     resourceRegistry: { getLatest: () => snapshot },
     encryptionStore,
     secretManager,
+    routeManager,
     httpProbe: async ({ host, port, healthPath }) => {
       calls.push({ method: 'HTTP_GET', requestPath: `http://${host}:${port}${healthPath}` });
       return { statusCode: failCandidateHealth ? 503 : 200 };
@@ -337,6 +395,7 @@ function createHarness({
     environment,
     manager,
     persistentArchive,
+    routeCalls,
     root,
     state: () => ({
       candidateExists,
@@ -345,8 +404,20 @@ function createHarness({
       sourcePaused,
       temporaryVolumes: [...temporaryVolumes]
     }),
-    setEnvironment: (entries) => { currentEnvironment = entries; }
+    setEnvironment: (entries) => { currentEnvironment = entries; },
+    setRouteRollbackFailure: (value) => { routeRollbackFails = value; }
   };
+}
+
+function cutoverPlan(manager, overrides = {}) {
+  return manager.createCutoverPlan({
+    resourceId: RESOURCE_ID,
+    persistentVolumes: [DATA_VOLUME],
+    emptyVolumes: [SOCKET_VOLUME],
+    privatePort: 8090,
+    confirmation: PLAN_STATEFUL_CUTOVER_REHEARSAL_CONFIRMATION,
+    ...overrides
+  });
 }
 
 function plan(manager, overrides = {}) {
@@ -503,6 +574,87 @@ test('a successful rehearsal encrypts, restores, health-gates and completely cle
     assert.equal(harness.manager.status().guarantees.interruptedOperationsReplayed, false);
     assert.equal(harness.calls.some((call) => call.requestPath.includes('/stop')), false);
     assert.equal(harness.calls.some((call) => call.requestPath.includes('/rename')), false);
+  } finally {
+    fs.rmSync(harness.root, { recursive: true, force: true });
+  }
+});
+
+test('cutover rehearsal keeps the source paused through FoxOS HTTPS activation and rollback', async () => {
+  const harness = createHarness();
+  try {
+    const created = await cutoverPlan(harness.manager);
+    assert.equal(created.mode, 'reversible-route-cutover');
+    assert.equal(created.guarantees.routeMutationIncluded, true);
+    assert.equal(created.guarantees.productionTrafficCutoverIncluded, false);
+    assert.equal(created.confirmation, cutoverRunConfirmation(created.planId));
+
+    const operation = await harness.manager.runPlan(created.planId, created.confirmation);
+    assert.equal(operation.status, 'verified-and-cleaned');
+    assert.equal(operation.source.pauseState, 'unpaused');
+    assert.deepEqual(harness.routeCalls.map((call) => call.action), ['activate', 'deactivate']);
+    assert.equal(harness.routeCalls.every((call) => call.sourcePaused), true);
+    assert.equal(operation.routeRehearsal.status, 'inactive');
+    assert.equal(operation.routeRehearsal.activationProof.authorizedTls, true);
+    assert.equal(operation.routeRehearsal.rollbackVerified, true);
+    assert.equal(operation.routeRehearsal.sourceRemainedPausedThroughRollback, true);
+    assert.equal(operation.routeRehearsal.coupledCutoverRehearsalProven, true);
+    assert.equal(operation.routeRehearsal.productionTrafficCutover, false);
+    assert.equal(operation.routeRehearsal.finalSynchronizationProven, false);
+    assert.equal(operation.guarantees.routeMutated, true);
+    assert.equal(operation.guarantees.foxosCanaryTrafficCutover, true);
+    assert.equal(operation.guarantees.trafficCutover, false);
+    assert.equal(operation.guarantees.productionTrafficCutover, false);
+    assert.equal(operation.guarantees.finalSynchronizationProven, false);
+    assert.equal(operation.guarantees.coupledCutoverRehearsalProven, true);
+    assert.equal(harness.state().sourcePaused, false);
+    assert.equal(harness.state().candidateExists, false);
+  } finally {
+    fs.rmSync(harness.root, { recursive: true, force: true });
+  }
+});
+
+test('cutover route failure rolls back, unpauses source and removes the candidate', async () => {
+  const harness = createHarness({ failRouteActivation: true });
+  try {
+    const created = await cutoverPlan(harness.manager);
+    await assert.rejects(
+      () => harness.manager.runPlan(created.planId, created.confirmation),
+      (error) => error.code === 'route-health-verification-failed'
+    );
+    const operation = harness.manager.status().operations[0];
+    assert.equal(operation.status, 'failed-and-cleaned');
+    assert.deepEqual(harness.routeCalls.map((call) => call.action), ['activate', 'deactivate']);
+    assert.equal(harness.routeCalls.every((call) => call.sourcePaused), true);
+    assert.equal(operation.routeRehearsal.rollbackVerified, true);
+    assert.equal(harness.state().sourcePaused, false);
+    assert.equal(harness.state().candidateExists, false);
+  } finally {
+    fs.rmSync(harness.root, { recursive: true, force: true });
+  }
+});
+
+test('failed route removal defers candidate cleanup until startup recovery can prove rollback', async () => {
+  const harness = createHarness({ failRouteRollback: true });
+  try {
+    const created = await cutoverPlan(harness.manager);
+    await assert.rejects(
+      () => harness.manager.runPlan(created.planId, created.confirmation),
+      (error) => error.code === 'cutover-route-rollback-failed'
+    );
+    let operation = harness.manager.status().operations[0];
+    assert.equal(operation.status, 'failed-cleanup-required');
+    assert.equal(operation.cleanup.completed, false);
+    assert.equal(harness.state().sourcePaused, false);
+    assert.equal(harness.state().candidateExists, true);
+
+    harness.setRouteRollbackFailure(false);
+    const recovery = await harness.manager.recoverInterruptedOperations();
+    assert.equal(recovery.replayed, false);
+    assert.equal(recovery.recovered[0].status, 'interrupted-cleaned');
+    operation = harness.manager.getOperation(operation.operationId);
+    assert.equal(operation.cleanup.completed, true);
+    assert.equal(harness.state().candidateExists, false);
+    assert.equal(harness.state().networkName, null);
   } finally {
     fs.rmSync(harness.root, { recursive: true, force: true });
   }

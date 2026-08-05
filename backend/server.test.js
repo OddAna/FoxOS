@@ -391,6 +391,17 @@ test('health is public while management APIs require a session', async () => {
   assert.equal(workloadEvidenceResponse.status, 401);
   const statefulRehearsalsResponse = await fetch(baseUrl() + '/api/stateful-rehearsals');
   assert.equal(statefulRehearsalsResponse.status, 401);
+  const statefulCutoverPlanResponse = await fetch(baseUrl() + '/api/stateful-rehearsals/cutover-plans', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}'
+  });
+  assert.equal(statefulCutoverPlanResponse.status, 401);
+  const statefulCutoverRunResponse = await fetch(
+    baseUrl() + '/api/stateful-rehearsals/cutover-plans/srp_' + '1'.repeat(24) + '/run',
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }
+  );
+  assert.equal(statefulCutoverRunResponse.status, 401);
   const statefulShadowsResponse = await fetch(baseUrl() + '/api/stateful-shadows');
   assert.equal(statefulShadowsResponse.status, 401);
   const independenceAuditsResponse = await fetch(baseUrl() + '/api/independence-audits');

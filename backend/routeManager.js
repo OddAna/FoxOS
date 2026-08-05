@@ -8,8 +8,14 @@ const ROUTE_SCHEMA_VERSION = 1;
 const ROUTE_NAME = 'foxos-adoption-lab';
 const ROUTE_PATH = '/_foxos/apps/foxos-adoption-lab/';
 const ROUTE_ALIAS = 'foxos-route-adoption-lab';
+const STATEFUL_CUTOVER_ROUTE_KIND = 'stateful-cutover-rehearsal';
+const STATEFUL_CUTOVER_ROUTE_NAME = 'foxos-stateful-cutover';
+const STATEFUL_CUTOVER_ROUTE_PATH = '/_foxos/migrations/stateful-cutover/_/';
+const STATEFUL_CUTOVER_ROUTE_ALIAS = 'foxos-route-stateful-cutover';
+const STATEFUL_CUTOVER_PRIVATE_PORT = 8090;
 const ROUTE_HEADER = 'x-foxos-route';
 const RESOURCE_ID_PATTERN = /^res_[a-f0-9]{32}$/;
+const REHEARSAL_OPERATION_ID_PATTERN = /^sro_[a-f0-9]{24,64}$/;
 
 class RouteError extends Error {
   constructor(message, statusCode = 400, code = 'route-error') {
@@ -91,7 +97,8 @@ function defaultHttpsProbe({
             const statusCode = response.statusCode || 0;
             const routeHeader = String(response.headers[ROUTE_HEADER] || '');
             const available = authorizedTls &&
-              statusCode >= 200 && statusCode < 300 && routeHeader === ROUTE_NAME;
+              statusCode >= 200 && statusCode < 300 &&
+              routeHeader === (route.routeName || ROUTE_NAME);
             lastResult = { statusCode, routeHeader: routeHeader || null };
             if (available === expectedAvailable) {
               return resolve({
@@ -173,6 +180,8 @@ function createRouteManager({
     return {
       schemaVersion: ROUTE_SCHEMA_VERSION,
       routeId: routeId(resourceId),
+      routeKind: 'disposable-adoption-lab',
+      routeName: ROUTE_NAME,
       resourceId,
       owner: 'foxos',
       gateway: 'foxos-caddy',
@@ -185,16 +194,86 @@ function createRouteManager({
         network: networkName,
         alias: ROUTE_ALIAS,
         privatePort
+      },
+      targetPolicy: { type: 'foxos-managed-resource' }
+    };
+  }
+
+  function planStatefulCutoverRoute(resourceId, operationId, privatePort) {
+    if (!RESOURCE_ID_PATTERN.test(String(resourceId)) || !REHEARSAL_OPERATION_ID_PATTERN.test(String(operationId))) {
+      throw new RouteError('Stateful cutover route identity is invalid', 400, 'invalid-stateful-cutover-route');
+    }
+    if (privatePort !== STATEFUL_CUTOVER_PRIVATE_PORT) {
+      throw new RouteError(
+        'The first stateful cutover rehearsal accepts only the reviewed port 8090 workload',
+        403,
+        'stateful-cutover-pilot-port-only'
+      );
+    }
+    const baseUrl = safeBaseUrl(publicBaseUrl);
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/.test(networkName) || !gatewayHost) {
+      throw new RouteError('FoxOS route network is not configured safely', 503, 'route-gateway-invalid');
+    }
+    return {
+      schemaVersion: ROUTE_SCHEMA_VERSION,
+      routeId: 'route_' + hash(`stateful-cutover:${resourceId}:${operationId}`),
+      routeKind: STATEFUL_CUTOVER_ROUTE_KIND,
+      routeName: STATEFUL_CUTOVER_ROUTE_NAME,
+      resourceId,
+      operationId,
+      owner: 'foxos',
+      gateway: 'foxos-caddy',
+      publicBaseUrl: baseUrl,
+      publicPath: STATEFUL_CUTOVER_ROUTE_PATH,
+      publicUrl: baseUrl + STATEFUL_CUTOVER_ROUTE_PATH,
+      tls: { mode: 'foxos-gateway', verificationRequired: true },
+      upstream: {
+        protocol: 'http',
+        network: networkName,
+        alias: STATEFUL_CUTOVER_ROUTE_ALIAS,
+        privatePort
+      },
+      targetPolicy: {
+        type: 'stateful-rehearsal-candidate',
+        operationId
       }
     };
   }
 
   function validateRoute(route) {
-    const expected = planRoute(route && route.resourceId, ROUTE_NAME, route && route.upstream && route.upstream.privatePort);
-    for (const key of ['routeId', 'resourceId', 'owner', 'gateway', 'publicBaseUrl', 'publicPath', 'publicUrl']) {
-      if (route[key] !== expected[key]) throw new RouteError('Route record does not match FoxOS policy', 409, 'route-policy-mismatch');
+    const routeKind = route && route.routeKind || 'disposable-adoption-lab';
+    const normalizedRoute = routeKind === 'disposable-adoption-lab' ? {
+      ...route,
+      routeKind,
+      routeName: route && route.routeName || ROUTE_NAME,
+      targetPolicy: route && route.targetPolicy || { type: 'foxos-managed-resource' }
+    } : route;
+    const expected = routeKind === STATEFUL_CUTOVER_ROUTE_KIND
+      ? planStatefulCutoverRoute(
+        normalizedRoute && normalizedRoute.resourceId,
+        normalizedRoute && normalizedRoute.operationId,
+        normalizedRoute && normalizedRoute.upstream && normalizedRoute.upstream.privatePort
+      )
+      : planRoute(
+        normalizedRoute && normalizedRoute.resourceId,
+        ROUTE_NAME,
+        normalizedRoute && normalizedRoute.upstream && normalizedRoute.upstream.privatePort
+      );
+    for (const key of [
+      'routeId', 'routeKind', 'routeName', 'resourceId', 'owner', 'gateway',
+      'publicBaseUrl', 'publicPath', 'publicUrl'
+    ]) {
+      if (normalizedRoute[key] !== expected[key]) {
+        throw new RouteError('Route record does not match FoxOS policy', 409, 'route-policy-mismatch');
+      }
     }
-    if (JSON.stringify(route.upstream) !== JSON.stringify(expected.upstream)) {
+    if (
+      normalizedRoute.operationId !== expected.operationId ||
+      JSON.stringify(normalizedRoute.targetPolicy) !== JSON.stringify(expected.targetPolicy)
+    ) {
+      throw new RouteError('Route target policy does not match FoxOS policy', 409, 'route-policy-mismatch');
+    }
+    if (JSON.stringify(normalizedRoute.upstream) !== JSON.stringify(expected.upstream)) {
       throw new RouteError('Route upstream does not match FoxOS policy', 409, 'route-policy-mismatch');
     }
     return expected;
@@ -233,7 +312,12 @@ function createRouteManager({
   async function inspectTarget(route, targetId) {
     const target = await dockerRequest('GET', '/containers/' + targetId + '/json');
     const labels = target.Config && target.Config.Labels || {};
-    if (labels['com.foxos.managed'] !== 'true' || labels['com.foxos.resource.id'] !== route.resourceId) {
+    const expected = route.targetPolicy && route.targetPolicy.type === 'stateful-rehearsal-candidate'
+      ? labels['com.foxos.temporary'] === 'stateful-rehearsal' &&
+        labels['com.foxos.stateful-rehearsal.id'] === route.operationId &&
+        labels['com.foxos.resource.id'] === route.resourceId
+      : labels['com.foxos.managed'] === 'true' && labels['com.foxos.resource.id'] === route.resourceId;
+    if (!expected) {
       throw new RouteError('Route target is not the expected FoxOS-managed resource', 409, 'route-target-mismatch');
     }
     return target;
@@ -323,7 +407,14 @@ function createRouteManager({
     };
   }
 
-  return { activate, deactivate, paths: { routesRoot, revisionsRoot }, planRoute, status };
+  return {
+    activate,
+    deactivate,
+    paths: { routesRoot, revisionsRoot },
+    planRoute,
+    planStatefulCutoverRoute,
+    status
+  };
 }
 
 module.exports = {
@@ -332,6 +423,11 @@ module.exports = {
   ROUTE_NAME,
   ROUTE_PATH,
   ROUTE_SCHEMA_VERSION,
+  STATEFUL_CUTOVER_ROUTE_ALIAS,
+  STATEFUL_CUTOVER_ROUTE_KIND,
+  STATEFUL_CUTOVER_ROUTE_NAME,
+  STATEFUL_CUTOVER_ROUTE_PATH,
+  STATEFUL_CUTOVER_PRIVATE_PORT,
   RouteError,
   createRouteManager,
   defaultHttpsProbe

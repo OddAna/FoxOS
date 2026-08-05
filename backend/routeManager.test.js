@@ -4,12 +4,19 @@ const os = require('node:os');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const test = require('node:test');
-const { createRouteManager, defaultHttpsProbe } = require('./routeManager');
+const {
+  STATEFUL_CUTOVER_ROUTE_ALIAS,
+  STATEFUL_CUTOVER_ROUTE_NAME,
+  STATEFUL_CUTOVER_ROUTE_PATH,
+  createRouteManager,
+  defaultHttpsProbe
+} = require('./routeManager');
 
 const RESOURCE_ID = 'res_' + '1'.repeat(32);
 const TARGET_ID = 'b'.repeat(64);
 
 function createHarness(overrides = {}) {
+  const { stateful = false, ...managerOverrides } = overrides;
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-route-test-'));
   const calls = [];
   const probes = [];
@@ -22,10 +29,14 @@ function createHarness(overrides = {}) {
     }
     if (method === 'GET' && requestPath === '/containers/' + TARGET_ID + '/json') {
       return {
-        Config: { Labels: { 'com.foxos.managed': 'true', 'com.foxos.resource.id': RESOURCE_ID } },
+        Config: { Labels: stateful ? {
+          'com.foxos.temporary': 'stateful-rehearsal',
+          'com.foxos.stateful-rehearsal.id': 'sro_' + '2'.repeat(32),
+          'com.foxos.resource.id': RESOURCE_ID
+        } : { 'com.foxos.managed': 'true', 'com.foxos.resource.id': RESOURCE_ID } },
         NetworkSettings: {
           Networks: attached
-            ? { 'foxos-routing': { Aliases: ['foxos-route-adoption-lab'] } }
+            ? { 'foxos-routing': { Aliases: [stateful ? STATEFUL_CUTOVER_ROUTE_ALIAS : 'foxos-route-adoption-lab'] } }
             : { bridge: { Aliases: null } }
         }
       };
@@ -33,7 +44,7 @@ function createHarness(overrides = {}) {
     if (method === 'POST' && requestPath === '/networks/foxos-routing/connect') {
       assert.deepEqual(payload, {
         Container: TARGET_ID,
-        EndpointConfig: { Aliases: ['foxos-route-adoption-lab'] }
+        EndpointConfig: { Aliases: [stateful ? STATEFUL_CUTOVER_ROUTE_ALIAS : 'foxos-route-adoption-lab'] }
       });
       attached = true;
       return null;
@@ -59,11 +70,13 @@ function createHarness(overrides = {}) {
         verified: true,
         expectedAvailable: input.expectedAvailable,
         statusCode: input.expectedAvailable ? 200 : 502,
-        routeHeader: input.expectedAvailable ? 'foxos-adoption-lab' : null,
+        routeHeader: input.expectedAvailable
+          ? stateful ? STATEFUL_CUTOVER_ROUTE_NAME : 'foxos-adoption-lab'
+          : null,
         authorizedTls: true
       };
     },
-    ...overrides
+    ...managerOverrides
   });
 
   return { calls, manager, probes, root, runtime: () => ({ attached }) };
@@ -130,6 +143,50 @@ test('route activation rejects networks that are not FoxOS-owned', async () => {
       harness.manager.activate(route, TARGET_ID),
       (error) => error.code === 'route-network-not-owned'
     );
+  } finally {
+    fs.rmSync(harness.root, { recursive: true, force: true });
+  }
+});
+
+test('legacy disposable route records remain valid for rollback compatibility', async () => {
+  const harness = createHarness();
+  try {
+    const current = harness.manager.planRoute(RESOURCE_ID, 'foxos-adoption-lab', 80);
+    const legacy = { ...current };
+    delete legacy.routeKind;
+    delete legacy.routeName;
+    delete legacy.targetPolicy;
+    const active = await harness.manager.activate(legacy, TARGET_ID);
+    assert.equal(active.status, 'active');
+    const inactive = await harness.manager.deactivate(legacy, TARGET_ID);
+    assert.equal(inactive.status, 'inactive');
+  } finally {
+    fs.rmSync(harness.root, { recursive: true, force: true });
+  }
+});
+
+test('stateful cutover route accepts only the exact temporary rehearsal candidate and rolls back', async () => {
+  const harness = createHarness({ stateful: true });
+  try {
+    const operationId = 'sro_' + '2'.repeat(32);
+    assert.throws(
+      () => harness.manager.planStatefulCutoverRoute(RESOURCE_ID, operationId, 8080),
+      (error) => error.code === 'stateful-cutover-pilot-port-only'
+    );
+    const route = harness.manager.planStatefulCutoverRoute(RESOURCE_ID, operationId, 8090);
+    assert.equal(route.routeName, STATEFUL_CUTOVER_ROUTE_NAME);
+    assert.equal(route.publicPath, STATEFUL_CUTOVER_ROUTE_PATH);
+    assert.equal(route.upstream.alias, STATEFUL_CUTOVER_ROUTE_ALIAS);
+    assert.equal(route.targetPolicy.operationId, operationId);
+
+    const active = await harness.manager.activate(route, TARGET_ID);
+    assert.equal(active.status, 'active');
+    assert.equal(harness.runtime().attached, true);
+
+    const inactive = await harness.manager.deactivate(route, TARGET_ID);
+    assert.equal(inactive.status, 'inactive');
+    assert.equal(inactive.proof.expectedAvailable, false);
+    assert.equal(harness.runtime().attached, false);
   } finally {
     fs.rmSync(harness.root, { recursive: true, force: true });
   }

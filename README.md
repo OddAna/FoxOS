@@ -265,8 +265,10 @@ The authenticated API exposes:
 | `POST /api/workload-evidence/environment-plans/:planId/capture` | Recheck drift and store an immutable local environment/secret revision |
 | `GET /api/stateful-rehearsals` | Read redacted stateful rehearsal plans, operations, current proofs and guarantees |
 | `POST /api/stateful-rehearsals/plans` | Create a GET-only, exact-confirmation plan with explicit persistent/empty volume classification |
+| `POST /api/stateful-rehearsals/cutover-plans` | Create a GET-only final-quiesce plus reversible FoxOS HTTPS canary-route plan |
 | `GET /api/stateful-rehearsals/plans/:planId` | Read one immutable rehearsal plan and its operation-specific run confirmation |
 | `POST /api/stateful-rehearsals/plans/:planId/run` | Revalidate drift, pause briefly, encrypt/restore, health-gate and clean the isolated candidate |
+| `POST /api/stateful-rehearsals/cutover-plans/:planId/run` | Keep the source paused through candidate restore, HTTPS canary activation and verified route rollback, then restore source health |
 | `GET /api/stateful-rehearsals/operations/:operationId` | Read one redacted rehearsal result and cleanup state |
 | `GET /api/stateful-shadows` | Read persistent FoxOS-owned shadow plans, operations, current registry proofs and guarantees |
 | `POST /api/stateful-shadows/plans` | Plan a no-traffic shadow from the current authenticated rehearsal snapshot |
@@ -745,6 +747,42 @@ cutover synchronization. Source writes may continue after the rehearsal pause,
 so `finalSynchronizationProven` remains false. Route publication, traffic,
 provider authority, off-host recovery and application update/rollback remain
 separate blocking gates.
+
+### Reversible stateful cutover rehearsal
+
+The next safety gate couples a fresh, quiesced source snapshot to a real route
+transaction without moving production traffic. Planning is GET-only and uses
+the same explicit persistent/empty volume classification as the restore
+rehearsal, but requires a stronger confirmation:
+
+```bash
+docker compose exec -T foxos node /app/statefulRehearsalCli.js cutover-plan RESOURCE_ID \
+  --persistent-volume DATA_VOLUME \
+  --empty-volume EMPTY_VOLUME \
+  --private-port 8090 \
+  --confirm "PLAN STATEFUL CUTOVER REHEARSAL"
+
+# Use the returned plan ID and its exact confirmation.
+docker compose exec -T foxos node /app/statefulRehearsalCli.js cutover-run PLAN_ID \
+  --confirm "CUTOVER STATEFUL REHEARSAL PLAN_ID"
+```
+
+At run time FoxOS revalidates source identity, image, environment, health and
+volume policy before pausing the source. While it remains paused, FoxOS captures
+and authenticates the encrypted archive, restores it into an operation-owned
+candidate with no host port, proves candidate health, attaches only that exact
+candidate to the FoxOS-owned internal routing network, and verifies it over the
+gateway's authorized HTTPS canary path. FoxOS then disconnects the canary,
+proves the public path is unavailable, unpauses the source, proves its original
+health and deletes only the recorded temporary container, volumes and network.
+Startup recovery performs the same bounded route rollback, source unpause and
+cleanup and never replays an interrupted transaction.
+
+This proves `coupledCutoverRehearsalProven=true`, but deliberately records
+`productionTrafficCutover=false` and `finalSynchronizationProven=false` after
+rollback. It does not change the application's real domain, DNS, provider
+metadata or Coolify resource. General domain ownership and the actual
+production-authority cutover remain separate approvals.
 
 ## Disposable adoption pilot
 

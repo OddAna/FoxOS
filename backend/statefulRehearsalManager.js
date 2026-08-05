@@ -13,6 +13,7 @@ const { defaultHostProbe, validateHealthPath } = require('./sourceDeploymentMana
 
 const STATEFUL_REHEARSAL_SCHEMA_VERSION = 2;
 const PLAN_STATEFUL_REHEARSAL_CONFIRMATION = 'PLAN STATEFUL REHEARSAL';
+const PLAN_STATEFUL_CUTOVER_REHEARSAL_CONFIRMATION = 'PLAN STATEFUL CUTOVER REHEARSAL';
 const RESOURCE_ID_PATTERN = /^res_[a-f0-9]{32}$/;
 const RECORD_ID_PATTERN = /^(srp|sro)_[a-f0-9]{24,64}$/;
 const SHA256_PATTERN = /^sha256:[a-f0-9]{64}$/;
@@ -84,6 +85,10 @@ function pruneJson(directory, maximum = MAX_RECORDS) {
 
 function runConfirmation(planId) {
   return 'RUN STATEFUL REHEARSAL ' + planId;
+}
+
+function cutoverRunConfirmation(planId) {
+  return 'CUTOVER STATEFUL REHEARSAL ' + planId;
 }
 
 function validateHttpHealthPath(value) {
@@ -229,6 +234,7 @@ function createStatefulRehearsalManager({
   resourceRegistry,
   encryptionStore,
   secretManager,
+  routeManager = null,
   httpProbe = defaultHostProbe,
   clock = () => new Date(),
   randomUUID = () => crypto.randomUUID(),
@@ -531,9 +537,18 @@ function createStatefulRehearsalManager({
     };
   }
 
-  async function createPlan(input = {}) {
-    if (input.confirmation !== PLAN_STATEFUL_REHEARSAL_CONFIRMATION) {
+  async function createPlanRecord(input = {}, coupleRouteCutover = false) {
+    const planningConfirmation = coupleRouteCutover
+      ? PLAN_STATEFUL_CUTOVER_REHEARSAL_CONFIRMATION
+      : PLAN_STATEFUL_REHEARSAL_CONFIRMATION;
+    if (input.confirmation !== planningConfirmation) {
       throw new StatefulRehearsalError('Exact stateful rehearsal planning confirmation is required', 400, 'confirmation-required');
+    }
+    if (coupleRouteCutover && (
+      !routeManager || typeof routeManager.planStatefulCutoverRoute !== 'function' ||
+      typeof routeManager.activate !== 'function' || typeof routeManager.deactivate !== 'function'
+    )) {
+      throw new StatefulRehearsalError('FoxOS route manager is required for cutover rehearsal', 503, 'cutover-route-unavailable');
     }
     const { snapshot, resource } = latestResource(input.resourceId);
     validateResourceCandidate(resource);
@@ -560,20 +575,23 @@ function createStatefulRehearsalManager({
       volumes,
       privatePort,
       health,
+      mode: coupleRouteCutover ? 'reversible-route-cutover' : 'restore-only',
       candidateResources: {
         memoryBytes: DEFAULT_MEMORY_BYTES,
         nanoCpus: DEFAULT_NANO_CPUS,
         pidsLimit: DEFAULT_PIDS_LIMIT
       },
-      confirmation: runConfirmation(planId),
+      confirmation: coupleRouteCutover ? cutoverRunConfirmation(planId) : runConfirmation(planId),
       createdAt: now(),
       guarantees: {
         dockerRequestMethods: ['GET'],
         sourcePauseRequiredAtRun: true,
         sourceStopIncluded: false,
         sourceRecreationIncluded: false,
-        routeMutationIncluded: false,
+        routeMutationIncluded: coupleRouteCutover,
         trafficCutoverIncluded: false,
+        foxosCanaryTrafficIncluded: coupleRouteCutover,
+        productionTrafficCutoverIncluded: false,
         providerMutationIncluded: false,
         providerDetachIncluded: false,
         candidateExternalNetworkIncluded: false,
@@ -586,6 +604,14 @@ function createStatefulRehearsalManager({
     atomicWriteJson(recordPath(plansRoot, planId), plan);
     pruneJson(plansRoot);
     return plan;
+  }
+
+  async function createPlan(input = {}) {
+    return createPlanRecord(input, false);
+  }
+
+  async function createCutoverPlan(input = {}) {
+    return createPlanRecord(input, true);
   }
 
   async function waitForHealth(containerId, plannedHealth, privatePort, networkName) {
@@ -718,14 +744,45 @@ function createStatefulRehearsalManager({
     return errors;
   }
 
+  async function deactivateCutoverRouteIfRequired(operation) {
+    const route = operation.routeRehearsal;
+    if (!route || !route.activationRequested || route.status === 'inactive' || !route.plan || !operation.candidate.containerId) {
+      return [];
+    }
+    if (!routeManager || typeof routeManager.deactivate !== 'function') {
+      return ['route-deactivate:route-manager-unavailable'];
+    }
+    try {
+      const inactive = await routeManager.deactivate(route.plan, operation.candidate.containerId);
+      route.status = 'inactive';
+      route.deactivatedAt = now();
+      route.removalProof = inactive.proof || null;
+      route.rollbackVerified = Boolean(inactive.proof && inactive.proof.verified === true);
+      operation.candidate.routeCreated = false;
+      return [];
+    } catch (error) {
+      return ['route-deactivate:' + error.message];
+    }
+  }
+
   async function recoverInterruptedOperations({ clearStaleLock = false } = {}) {
     const lockOwner = acquireOperationLock('startup-recovery', clearStaleLock);
     try {
       const recovered = [];
-      for (let operation of listJson(operationsRoot).filter((entry) => entry.status === 'running')) {
+      for (let operation of listJson(operationsRoot).filter((entry) => (
+        entry.status === 'running' || String(entry.status || '').endsWith('cleanup-required')
+      ))) {
         const errors = [];
+        errors.push(...await deactivateCutoverRouteIfRequired(operation));
         errors.push(...await unpauseIfRequired(operation));
-        errors.push(...await removeExactTemporaryResources(operation));
+        if (!errors.some((entry) => entry.startsWith('route-deactivate:'))) {
+          errors.push(...await removeExactTemporaryResources(operation));
+        } else {
+          errors.push('temporary-cleanup-deferred-until-route-rollback');
+        }
+        if (operation.candidate) {
+          operation.candidate.removedAfterProof = errors.length === 0;
+        }
         operation = {
           ...operation,
           status: errors.length ? 'interrupted-cleanup-required' : 'interrupted-cleaned',
@@ -798,7 +855,9 @@ function createStatefulRehearsalManager({
     if (activeOperationId) {
       throw new StatefulRehearsalError('Another stateful rehearsal is already running', 409, 'rehearsal-busy');
     }
-    if (listJson(operationsRoot).some((operation) => operation.status === 'running')) {
+    if (listJson(operationsRoot).some((operation) => (
+      operation.status === 'running' || String(operation.status || '').endsWith('cleanup-required')
+    ))) {
       throw new StatefulRehearsalError(
         'Interrupted stateful rehearsal recovery must complete before a new run',
         409,
@@ -813,6 +872,7 @@ function createStatefulRehearsalManager({
       operationId,
       planId: plan.planId,
       resourceId: plan.resourceId,
+      mode: plan.mode || 'restore-only',
       resourceFingerprint: plan.resourceFingerprint,
       rehearsalResourceFingerprint: plan.rehearsalResourceFingerprint,
       status: 'running',
@@ -845,6 +905,18 @@ function createStatefulRehearsalManager({
         health: null,
         removedAfterProof: false
       },
+      routeRehearsal: plan.mode === 'reversible-route-cutover' ? {
+        activationRequested: false,
+        status: 'not-requested',
+        plan: null,
+        activationProof: null,
+        removalProof: null,
+        rollbackVerified: false,
+        sourceRemainedPausedThroughRollback: false,
+        productionTrafficCutover: false,
+        finalSynchronizationProven: false,
+        coupledCutoverRehearsalProven: false
+      } : null,
       cleanup: { completed: false, errors: [], replayed: false },
       guarantees: {
         sourceContainerStopped: false,
@@ -852,6 +924,10 @@ function createStatefulRehearsalManager({
         sourcePauseWasTemporary: false,
         routeMutated: false,
         trafficCutover: false,
+        foxosCanaryTrafficCutover: false,
+        productionTrafficCutover: false,
+        finalSynchronizationProven: false,
+        coupledCutoverRehearsalProven: false,
         providerMetadataMutated: false,
         providerDetached: false,
         candidateHadExternalNetwork: false,
@@ -915,12 +991,14 @@ function createStatefulRehearsalManager({
           }
         }
       } finally {
-        await dockerRequest('POST', '/containers/' + resource.runtime.containerId + '/unpause');
-        operation.source.pauseState = 'unpaused';
-        operation.source.unpausedAt = now();
-        operation.source.pauseDurationMs = Math.max(0, Date.now() - pauseStartedAt);
-        operation.guarantees.sourcePauseWasTemporary = true;
-        writeOperation(operation);
+        if (plan.mode !== 'reversible-route-cutover') {
+          await dockerRequest('POST', '/containers/' + resource.runtime.containerId + '/unpause');
+          operation.source.pauseState = 'unpaused';
+          operation.source.unpausedAt = now();
+          operation.source.pauseDurationMs = Math.max(0, Date.now() - pauseStartedAt);
+          operation.guarantees.sourcePauseWasTemporary = true;
+          writeOperation(operation);
+        }
       }
 
       for (const volume of plan.volumes.filter((entry) => entry.policy === 'persistent')) {
@@ -1074,6 +1152,58 @@ function createStatefulRehearsalManager({
       operation.candidate.externalNetwork = false;
       operation.candidate.hostPortPublished = false;
       operation.candidate.routeCreated = false;
+
+      if (plan.mode === 'reversible-route-cutover') {
+        const route = routeManager.planStatefulCutoverRoute(
+          plan.resourceId,
+          operation.operationId,
+          plan.privatePort
+        );
+        operation.routeRehearsal.plan = route;
+        operation.routeRehearsal.activationRequested = true;
+        operation.routeRehearsal.status = 'activation-requested';
+        writeOperation(operation);
+
+        const activeRoute = await routeManager.activate(route, created.Id);
+        operation.routeRehearsal.status = 'active';
+        operation.routeRehearsal.activatedAt = now();
+        operation.routeRehearsal.activationProof = activeRoute.proof || null;
+        operation.candidate.routeCreated = true;
+        operation.guarantees.routeMutated = true;
+        operation.guarantees.foxosCanaryTrafficCutover = true;
+        writeOperation(operation);
+
+        const routeErrors = await deactivateCutoverRouteIfRequired(operation);
+        if (routeErrors.length) {
+          throw new StatefulRehearsalError(
+            'FoxOS cutover rehearsal route rollback failed',
+            503,
+            'cutover-route-rollback-failed'
+          );
+        }
+        operation.routeRehearsal.sourceRemainedPausedThroughRollback = operation.source.pauseState === 'paused';
+        operation.routeRehearsal.coupledCutoverRehearsalProven = Boolean(
+          operation.routeRehearsal.activationProof && operation.routeRehearsal.activationProof.verified === true &&
+          operation.routeRehearsal.rollbackVerified === true &&
+          operation.routeRehearsal.sourceRemainedPausedThroughRollback
+        );
+        operation.guarantees.coupledCutoverRehearsalProven =
+          operation.routeRehearsal.coupledCutoverRehearsalProven;
+        if (!operation.routeRehearsal.coupledCutoverRehearsalProven) {
+          throw new StatefulRehearsalError(
+            'FoxOS cutover rehearsal did not produce complete activation and rollback proof',
+            503,
+            'cutover-route-proof-incomplete'
+          );
+        }
+
+        const unpauseErrors = await unpauseIfRequired(operation);
+        if (unpauseErrors.length) {
+          throw new StatefulRehearsalError('Stateful source could not be unpaused', 503, 'source-recovery-failed');
+        }
+        operation.source.pauseDurationMs = Math.max(0, Date.now() - pauseStartedAt);
+        operation.guarantees.sourcePauseWasTemporary = true;
+      }
       operation.source.healthAfterProof = await sourceHealthProof(
         plan.sourceContainerId,
         plan.health.mode === 'docker-healthcheck' && sourceWasHealthy
@@ -1082,16 +1212,20 @@ function createStatefulRehearsalManager({
     } catch (error) {
       primaryError = error;
     } finally {
+      const routeErrors = await deactivateCutoverRouteIfRequired(operation);
       const unpauseErrors = await unpauseIfRequired(operation);
-      const cleanupErrors = await removeExactTemporaryResources(operation);
+      const cleanupErrors = routeErrors.length
+        ? ['temporary-cleanup-deferred-until-route-rollback']
+        : await removeExactTemporaryResources(operation);
       const lockError = releaseOperationLock(lockOwner);
       if (lockError) cleanupErrors.push(lockError);
       operation.cleanup = {
-        completed: unpauseErrors.length === 0 && cleanupErrors.length === 0,
-        errors: [...unpauseErrors, ...cleanupErrors],
+        completed: routeErrors.length === 0 && unpauseErrors.length === 0 && cleanupErrors.length === 0,
+        errors: [...routeErrors, ...unpauseErrors, ...cleanupErrors],
         replayed: false
       };
-      operation.candidate.removedAfterProof = cleanupErrors.every((entry) => !entry.startsWith('candidate:'));
+      operation.candidate.removedAfterProof = routeErrors.length === 0 &&
+        cleanupErrors.every((entry) => !entry.startsWith('candidate:'));
       operation.completedAt = now();
       if (primaryError) {
         operation.status = operation.cleanup.completed ? 'failed-and-cleaned' : 'failed-cleanup-required';
@@ -1138,7 +1272,8 @@ function createStatefulRehearsalManager({
         plans: plans.length,
         operations: operations.length,
         verified: current.length,
-        running: operations.filter((operation) => operation.status === 'running').length
+        running: operations.filter((operation) => operation.status === 'running').length,
+        cleanupRequired: operations.filter((operation) => String(operation.status || '').endsWith('cleanup-required')).length
       },
       guarantees: {
         sourcePauseIsTemporary: true,
@@ -1148,6 +1283,9 @@ function createStatefulRehearsalManager({
         candidateHostPortPublished: false,
         candidateInternalHttpProbe: true,
         routeMutationIncluded: false,
+        reversibleFoxosRouteRehearsalAvailable: Boolean(routeManager),
+        productionTrafficCutoverIncluded: false,
+        finalSynchronizationProven: false,
         trafficCutoverIncluded: false,
         providerMutationIncluded: false,
         providerDetachIncluded: false,
@@ -1163,6 +1301,7 @@ function createStatefulRehearsalManager({
 
   ensureDirectory(root);
   return {
+    createCutoverPlan,
     createPlan,
     getOperation: (operationId) => getRecord(operationsRoot, operationId, 'Stateful rehearsal operation'),
     getPlan: (planId) => getRecord(plansRoot, planId, 'Stateful rehearsal plan'),
@@ -1175,9 +1314,11 @@ function createStatefulRehearsalManager({
 
 module.exports = {
   MAX_REHEARSAL_ARCHIVE_BYTES,
+  PLAN_STATEFUL_CUTOVER_REHEARSAL_CONFIRMATION,
   PLAN_STATEFUL_REHEARSAL_CONFIRMATION,
   STATEFUL_REHEARSAL_SCHEMA_VERSION,
   StatefulRehearsalError,
+  cutoverRunConfirmation,
   createStatefulRehearsalManager,
   runConfirmation,
   tarHasMaterialEntries
