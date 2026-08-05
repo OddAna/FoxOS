@@ -130,13 +130,16 @@ to reconstruct it and remains a separate recovery responsibility.
 
 Environment planning reads only the exact candidate container with Docker
 `GET`, stores a keyed fingerprint plus names/classification, and returns no
-values. Capture repeats the inspection and fails on drift. Sensitive and
+values. This evidence-only operation accepts fully inspected provider-owned
+stateless and stateful applications, without granting persistence or deployment
+authority. Capture repeats the inspection and fails on drift. Sensitive and
 operator-designated names become encrypted secret revisions; returned evidence
 contains references only. Ordinary environment values remain private local
 environment-revision data and are not copied into workload-evidence records,
 Application Manifests, independence reports or API/CLI capture output.
-Provider-injected `COOLIFY_*` metadata is stored only as excluded names and is
-never promoted into the managed application environment.
+Provider-injected `COOLIFY_*`, `SERVICE_FQDN_*`, `SERVICE_URL_*` and
+`SERVICE_NAME_*` metadata is stored only as excluded names and is never promoted
+into the managed application environment.
 
 Neither evidence operation builds an image, starts/stops a container, changes a
 route, calls a provider API, detaches authority or approves migration.

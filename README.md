@@ -530,8 +530,10 @@ migration, cutover or provider-removal approval.
 ## Server-owned workload source and environment evidence
 
 A running, fully inspected, provider-owned stateless application can capture
-the first two pieces of migration evidence without moving traffic or taking
-runtime authority.
+source and environment evidence without moving traffic or taking runtime
+authority. A stateful application may capture environment evidence only; source
+deployment, persistence/restore and cutover stay blocked behind their separate
+gates.
 
 For source evidence, FoxOS accepts a credential-free HTTPS Git URL or an
 encrypted secret reference for a scoped read-only private Git credential. The
@@ -550,9 +552,10 @@ fingerprint. Sensitive-looking names are always encrypted; `--secret-name`
 classifies additional application-specific names as secrets. Capture repeats
 the inspection, rejects any value/name/container drift, encrypts secret values
 into revision-pinned references and stores the complete local environment
-revision. Provider-injected `COOLIFY_*` runtime metadata is recorded by name as
-excluded and is not copied into FoxOS desired environment state. Evidence
-plan/capture output includes neither secret nor ordinary values.
+revision. Provider-injected `COOLIFY_*`, `SERVICE_FQDN_*`, `SERVICE_URL_*` and
+`SERVICE_NAME_*` runtime metadata is recorded by name as excluded and is not
+copied into FoxOS desired environment state. Evidence plan/capture output
+includes neither secret nor ordinary values.
 
 ```bash
 # Use a repository-scoped read-only credential. Its value comes from stdin.

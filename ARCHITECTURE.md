@@ -360,10 +360,13 @@ disposable adoption or deployment pilots.
 
 ### Implemented boundary: server-owned workload source and environment evidence
 
-The workload-evidence manager is restricted to the same running, fully
+The workload-evidence source path is restricted to the same running, fully
 inspected, provider-owned stateless application candidates used by read-only
-independence audits. It creates local migration evidence; it never adopts the
-resource or changes runtime, route, provider or detach state.
+independence audits. Environment-only evidence also accepts fully inspected,
+running, provider-owned stateful applications. This does not expand source,
+persistence, deployment or cutover authority: it creates local migration
+evidence and never adopts the resource or changes runtime, route, provider or
+detach state.
 
 A source plan resolves a credential-free or encrypted-credential HTTPS Git ref
 to an immutable commit and hashes a bounded, symlink-free context and
@@ -381,8 +384,9 @@ values. Exact-confirmation capture repeats the read, rejects container or
 environment drift, writes ordinary configuration to a local environment
 revision and converts every sensitive or explicitly classified name into an
 encrypted secret revision. Returned plans, captures, manifests and audits expose
-names/references only. Provider-injected `COOLIFY_*` variables are retained only
-as excluded-name evidence with `provider-runtime-metadata` reason codes; their
+names/references only. Provider-injected `COOLIFY_*`, `SERVICE_FQDN_*`,
+`SERVICE_URL_*` and `SERVICE_NAME_*` variables are retained only as
+excluded-name evidence with `provider-runtime-metadata` reason codes; their
 values and provider-specific desired configuration are not carried forward.
 
 The source archive is immutable source evidence, not proof that the provider's
