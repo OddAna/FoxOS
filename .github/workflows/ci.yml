@@ -123,6 +123,12 @@ jobs:
             docker network ls -q --filter label=com.foxos.stateful-shadow=true | while IFS= read -r shadow_network_id; do
               if [ -n "$shadow_network_id" ]; then docker network rm "$shadow_network_id" || true; fi
             done
+            docker ps -aq --filter label=com.foxos.stateless-migration.disposable=true | while IFS= read -r stateless_lab_container_id; do
+              if [ -n "$stateless_lab_container_id" ]; then docker rm -f "$stateless_lab_container_id" || true; fi
+            done
+            docker network ls -q --filter label=com.foxos.stateless-migration.disposable=true | while IFS= read -r stateless_lab_network_id; do
+              if [ -n "$stateless_lab_network_id" ]; then docker network rm "$stateless_lab_network_id" || true; fi
+            done
             docker compose down || true
           }
           trap cleanup EXIT
@@ -508,3 +514,31 @@ jobs:
             echo 'Sealed stateless migration CLI unexpectedly exposed a run command.' >&2
             exit 1
           fi
+          stateless_lab_proof=$(docker compose exec -T foxos node /app/statelessMigrationLabCli.js proof \
+            --confirm "RUN DISPOSABLE STATELESS LAB")
+          printf '%s' "$stateless_lab_proof" | node -e '
+            let s="";
+            process.stdin.on("data",c=>s+=c);
+            process.stdin.on("end",()=>{
+              const proof=JSON.parse(s);
+              if(proof.mode!=="real-docker-stateless-migration-disposable-proof") process.exit(1);
+              if(proof.sourceStopped || proof.providerDetached || proof.productionGateChanged) process.exit(1);
+              if(!proof.success.zeroDowntimeProven || proof.success.unavailableSamples!==0) process.exit(1);
+              if(proof.success.status!=="rolled-back" || !proof.success.sourcePreserved) process.exit(1);
+              if(proof.fault.detectedFailure!=="downtime-observed" || proof.fault.unavailableSamples!==1) process.exit(1);
+              if(!proof.fault.automaticRollback || proof.fault.status!=="rolled-back-after-failure") process.exit(1);
+              if(proof.cleanup.containers || proof.cleanup.networks || proof.cleanup.volumes) process.exit(1);
+            });
+          '
+          test "$(docker ps -aq --filter label=com.foxos.stateless-migration.disposable=true | wc -l)" -eq 0
+          test "$(docker network ls -q --filter label=com.foxos.stateless-migration.disposable=true | wc -l)" -eq 0
+          docker compose exec -T foxos node /app/statelessMigrationCli.js status | node -e '
+            let s="";
+            process.stdin.on("data",c=>s+=c);
+            process.stdin.on("end",()=>{
+              const status=JSON.parse(s);
+              if(status.executionGate.status!=="sealed") process.exit(1);
+              if(status.summary.plans || status.summary.operations) process.exit(1);
+              if(status.executionGate.uiApprovalConfigured || status.executionGate.runtimeAdapterConfigured) process.exit(1);
+            });
+          '

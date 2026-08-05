@@ -277,6 +277,7 @@ function isDiscoverableApplication(container) {
   if (
     labels['com.foxos.core'] === 'true' ||
     labels['com.foxos.stateful-shadow'] === 'true' ||
+    labels['com.foxos.stateless-migration.disposable'] === 'true' ||
     DISCOVERY_EXCLUDED_NAMES.has(name) ||
     /^foxos-(?:deployment|compose|image-update)-lab(?:-|$)/.test(runtimeName) ||
     /-foxos-rollback-[a-f0-9]{8,32}$/.test(runtimeName)

@@ -193,10 +193,17 @@ target blocks only adoption/migration operations that require restore proof.
   zero unavailable samples, exact rollback and operation-owned cleanup; persist
   allowlisted redacted proofs; and expose no run/approve endpoint while live
   adapters are absent.
-- [ ] Implement and disposable-lab-prove the real provider-neutral Docker
-  candidate, arbitrary FoxOS route/TLS, continuous availability probe and
-  rollback adapters. Keep the production gate sealed and migrate no existing
-  workload until Burak explicitly approves the later UI flow.
+- [x] Prove the transaction against real Docker in an explicitly disposable
+  lab: create a constrained candidate, stage an operation-scoped TLS route,
+  switch atomically under a continuous availability/identity probe, preserve
+  exact source runtime continuity, roll back explicitly, inject one unavailable
+  sample, roll back automatically and remove every operation-owned object.
+  Production construction remains sealed and no existing workload is migrated.
+- [ ] Compile a normal evidence-complete stateless Application Manifest into a
+  production-capable candidate and arbitrary FoxOS-owned domain/route/TLS
+  transaction. Keep certificate/DNS implementations replaceable and keep the
+  production gate sealed until the reviewed interface supplies explicit
+  approval.
 - [ ] Expand the implemented disposable dry-run, conflict detection, verified
   cutover and reversible rollback to real application classes one safety gate at
   a time.
