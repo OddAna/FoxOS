@@ -127,6 +127,19 @@ jobs:
               if (status.backup.configured || status.backup.ready || status.backup.adapter) process.exit(1);
             });
           '
+          docker compose exec -T foxos node /app/workloadEvidenceCli.js status | node -e '
+            let input = "";
+            process.stdin.on("data", chunk => input += chunk);
+            process.stdin.on("end", () => {
+              const status = JSON.parse(input);
+              const guarantees = status.guarantees || {};
+              if (status.summary.sourceRevisions !== 0 || status.summary.environmentRevisions !== 0) process.exit(1);
+              if (guarantees.cleanInstallRequiresGitCredential) process.exit(1);
+              if (guarantees.runtimeMutated || guarantees.providerMutated || guarantees.providerDetached) process.exit(1);
+              if (guarantees.secretValuesIncluded || guarantees.ordinaryValuesIncluded) process.exit(1);
+              if (guarantees.externalGitRequiredToReconstructCapturedRevision) process.exit(1);
+            });
+          '
 
           plan_v1=$(docker compose exec -T foxos node /app/deploymentCli.js plan \
             --repository https://github.com/OddAna/FoxOS.git \

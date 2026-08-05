@@ -387,6 +387,10 @@ test('health is public while management APIs require a session', async () => {
   assert.equal(imageUpdatesResponse.status, 401);
   const applicationManifestsResponse = await fetch(baseUrl() + '/api/application-manifests');
   assert.equal(applicationManifestsResponse.status, 401);
+  const workloadEvidenceResponse = await fetch(baseUrl() + '/api/workload-evidence');
+  assert.equal(workloadEvidenceResponse.status, 401);
+  const independenceAuditsResponse = await fetch(baseUrl() + '/api/independence-audits');
+  assert.equal(independenceAuditsResponse.status, 401);
 });
 
 test('setup creates an authenticated session and unlocks the workspace', async () => {

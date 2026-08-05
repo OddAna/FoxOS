@@ -252,6 +252,70 @@ function composeBuildDescriptor(current, plan, currentService, observedImageId) 
   };
 }
 
+function workloadSourceArchiveDescriptor(revision, resourceFingerprintValue, resource) {
+  if (
+    !revision || revision.type !== 'foxos-encrypted-source-archive-revision' ||
+    !/^wsr_[a-f0-9]{24,64}$/.test(String(revision.revisionId || '')) ||
+    revision.resourceId !== resource.id || revision.resourceFingerprint !== resourceFingerprintValue ||
+    revision.observedContainerId !== resource.runtime.containerId ||
+    revision.observedImageId !== resource.runtime.imageId ||
+    !revision.source || !['git-https-private', 'git-https-public'].includes(revision.source.adapter) ||
+    !GIT_COMMIT_PATTERN.test(String(revision.source.commit || '')) ||
+    !SHA256_PATTERN.test(String(revision.source.contextDigest || '')) ||
+    !SHA256_PATTERN.test(String(revision.source.dockerfileDigest || '')) ||
+    !revision.archive || !SHA256_PATTERN.test(String(revision.archive.digest || '')) ||
+    !SHA256_PATTERN.test(String(revision.archive.encryptedDigest || '')) ||
+    revision.archive.authenticated !== true || revision.archive.plaintextIncluded !== false ||
+    !revision.archive.verification || revision.archive.verification.verified !== true ||
+    revision.externalGitRequiredToReconstructRevision !== false
+  ) return null;
+  const credential = revision.source.credential ? {
+    username: revision.source.credential.username,
+    secretId: revision.source.credential.secretId,
+    revision: revision.source.credential.revision,
+    keyId: revision.source.credential.keyId,
+    valueIncluded: false
+  } : null;
+  return {
+    type: 'foxos-encrypted-source-archive-revision',
+    revisionId: revision.revisionId,
+    adapter: revision.source.adapter,
+    repository: revision.source.repository,
+    requestedRef: revision.source.ref,
+    commit: revision.source.commit,
+    context: {
+      path: revision.source.contextPath,
+      digest: revision.source.contextDigest,
+      fileCount: revision.source.fileCount,
+      totalBytes: revision.source.totalBytes
+    },
+    dockerfile: {
+      path: revision.source.dockerfile,
+      digest: revision.source.dockerfileDigest
+    },
+    credential,
+    archive: {
+      localReference: revision.archive.file,
+      digest: revision.archive.digest,
+      bytes: revision.archive.bytes,
+      encryptedDigest: revision.archive.encryptedDigest,
+      encryptedBytes: revision.archive.encryptedBytes,
+      algorithm: revision.archive.algorithm,
+      keyId: revision.archive.keyId,
+      authenticated: true,
+      plaintextIncluded: false,
+      externalGitRequiredToReconstructRevision: false
+    },
+    runtimeBinding: revision.runtimeBinding,
+    build: {
+      method: 'dockerfile',
+      observedImageId: resource.runtime.imageId,
+      imageBindingVerified: Boolean(revision.runtimeBinding && revision.runtimeBinding.verified),
+      secretValuesIncluded: false
+    }
+  };
+}
+
 function resourceFingerprint(resource, relationships) {
   return 'sha256:' + hash(canonicalJson({ resource, relationships }), 64);
 }
@@ -265,6 +329,7 @@ function createApplicationManifestManager({
   sourceDeploymentStatus = () => ({ current: null, plans: [], operations: [], guarantees: {} }),
   composeDeploymentStatus = () => ({ current: null, plans: [], operations: [], guarantees: {} }),
   imageUpdateStatus = () => ({ current: null, operations: [] }),
+  workloadEvidenceStatus = () => ({ sourceCurrent: [], guarantees: {} }),
   clock = () => new Date(),
   randomUUID = () => crypto.randomUUID()
 }) {
@@ -277,7 +342,8 @@ function createApplicationManifestManager({
     backupStatus,
     sourceDeploymentStatus,
     composeDeploymentStatus,
-    imageUpdateStatus
+    imageUpdateStatus,
+    workloadEvidenceStatus
   ]) {
     if (typeof dependency !== 'function') throw new Error('Application manifest state adapters must be functions');
   }
@@ -335,6 +401,7 @@ function createApplicationManifestManager({
     const sourceDeploymentState = sourceDeploymentStatus();
     const composeDeploymentState = composeDeploymentStatus();
     const updateState = imageUpdateStatus();
+    const workloadEvidenceState = workloadEvidenceStatus();
     const ownedRoutes = (routeState.routes || []).filter((route) => (
       route.resourceId === resourceId && route.owner === 'foxos' && route.status === 'active'
     ));
@@ -350,6 +417,9 @@ function createApplicationManifestManager({
     const currentComposeDeployment = currentComposeService ? composeDeploymentState.current : null;
     const currentUpdate = updateState.current && updateState.current.resourceId === resourceId &&
       updateState.current.containerId === resource.runtime.containerId ? updateState.current : null;
+    const workloadSourceRevision = (workloadEvidenceState.sourceCurrent || []).find((revision) => (
+      revision.resourceId === resourceId
+    )) || null;
     const sourcePlan = currentSourceDeployment
       ? revisionPlan(sourceDeploymentState, currentSourceDeployment.revisionId) : null;
     const composePlan = currentComposeDeployment
@@ -440,6 +510,27 @@ function createApplicationManifestManager({
           code: 'immutable-image-missing',
           section: 'source',
           message: 'No repository digest can reconstruct this image immutably.'
+        });
+      }
+    } else if (workloadSourceRevision) {
+      sourceAuthority = 'foxos-workload-source-archive';
+      source = workloadSourceArchiveDescriptor(
+        workloadSourceRevision,
+        resourceFingerprint(resource, relationships),
+        resource
+      );
+      sourceGuarantees = workloadEvidenceState.guarantees || {};
+      if (!source) {
+        sourceBlockers.push({
+          code: 'foxos-source-archive-invalid',
+          section: 'source',
+          message: 'The server-owned workload source archive is missing, stale or cannot be authenticated.'
+        });
+      } else if (!source.runtimeBinding || !source.runtimeBinding.verified) {
+        sourceBlockers.push({
+          code: 'source-runtime-binding-missing',
+          section: 'source',
+          message: 'The encrypted source revision has not yet been built and bound to the observed runtime image by FoxOS.'
         });
       }
     } else {
@@ -770,7 +861,8 @@ function createApplicationManifestManager({
         sourceTypes: [
           'oci-image',
           'foxos-source-build-revision',
-          'foxos-compose-deployment-revision'
+          'foxos-compose-deployment-revision',
+          'foxos-encrypted-source-archive-revision'
         ],
         composeDependencies: 'directed-depends-on-only',
         sharedNetworkImpliesDependency: false,
@@ -799,5 +891,6 @@ module.exports = {
   applicationManifestConfirmation,
   canonicalJson,
   createApplicationManifestManager,
+  relatedRelationships,
   resourceFingerprint
 };

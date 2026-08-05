@@ -6,6 +6,7 @@ const test = require('node:test');
 const {
   DEPLOYMENT_NAME,
   PLAN_CONFIRMATION,
+  createGitSourceAdapter,
   createSourceDeploymentManager,
   deploymentConfirmation,
   inspectContext,
@@ -175,6 +176,49 @@ test('build output is bounded, redacted and returns the immutable image ID', () 
   assert.doesNotMatch(parsed.log, /should-not-survive/);
   assert.match(parsed.log, /\[redacted\]/);
   assert.doesNotMatch(sanitizeBuildLog('https://user:pass@example.com/repo'), /user:pass/);
+});
+
+test('private Git credentials use an ephemeral askpass environment and never enter Git arguments', async () => {
+  const credentialValue = 'git-private-token-value';
+  const commit = '9'.repeat(40);
+  const askPassFiles = [];
+  const adapter = createGitSourceAdapter({
+    enforceBuildPolicy: false,
+    resolveHost: async () => [{ address: '192.0.2.10', family: 4 }],
+    resolveCredential: async (reference) => ({
+      username: reference.username,
+      password: credentialValue
+    }),
+    runCommand: async (file, args, options) => {
+      assert.equal(file, 'git');
+      assert.equal(JSON.stringify(args).includes(credentialValue), false);
+      assert.equal(options.env.FOXOS_GIT_PASSWORD, credentialValue);
+      assert.equal(fs.readFileSync(options.env.GIT_ASKPASS, 'utf8').includes(credentialValue), false);
+      askPassFiles.push(options.env.GIT_ASKPASS);
+      if (args.includes('ls-remote')) {
+        return { stdout: commit + '\trefs/heads/main\n', stderr: '' };
+      }
+      if (args.includes('clone')) {
+        const repositoryRoot = args.at(-1);
+        fs.mkdirSync(repositoryRoot, { recursive: true });
+        fs.writeFileSync(path.join(repositoryRoot, 'Dockerfile'), 'FROM node:22-alpine\n');
+        fs.writeFileSync(path.join(repositoryRoot, 'server.js'), 'console.log("ok")\n');
+        return { stdout: '', stderr: '' };
+      }
+      if (args.includes('rev-parse')) return { stdout: commit + '\n', stderr: '' };
+      throw new Error('Unexpected Git command');
+    }
+  });
+  const inspected = await adapter.inspect({
+    repository: 'https://example.com/private/site.git',
+    ref: 'main',
+    contextPath: '.',
+    dockerfile: 'Dockerfile',
+    credential: { username: 'x-access-token', secretId: 'secret-ref', revision: 'secret-revision' }
+  });
+  assert.equal(inspected.commit, commit);
+  assert.equal(askPassFiles.length, 3);
+  assert.equal(askPassFiles.every((file) => !fs.existsSync(file)), true);
 });
 
 test('source deployments health-gate candidates, preserve the previous revision and roll back exactly', async () => {

@@ -15,6 +15,7 @@ const { createResourceRegistry } = require('./resourceRegistry');
 const { createRouteManager } = require('./routeManager');
 const { createSecretManager } = require('./secretManager');
 const { createSourceDeploymentManager } = require('./sourceDeploymentManager');
+const { createWorkloadEvidenceManager } = require('./workloadEvidenceManager');
 
 function flagValue(args, name, fallback = null) {
   const index = args.indexOf(name);
@@ -54,6 +55,13 @@ function main() {
     recoverInterruptedJobs: false
   });
   const imageUpdateManager = createImageUpdateManager({ dataRoot, dockerRequest: docker.request });
+  const workloadEvidenceManager = createWorkloadEvidenceManager({
+    dataRoot,
+    dockerRequest: docker.request,
+    resourceRegistry,
+    encryptionStore,
+    secretManager
+  });
   const applicationManifestManager = createApplicationManifestManager({
     dataRoot,
     resourceRegistry,
@@ -62,7 +70,8 @@ function main() {
     backupStatus: () => backupManager.status(),
     sourceDeploymentStatus: () => sourceDeploymentManager.status(),
     composeDeploymentStatus: () => composeDeploymentManager.status(),
-    imageUpdateStatus: () => imageUpdateManager.status()
+    imageUpdateStatus: () => imageUpdateManager.status(),
+    workloadEvidenceStatus: () => workloadEvidenceManager.status()
   });
   const manager = createIndependenceAuditManager({
     dataRoot,

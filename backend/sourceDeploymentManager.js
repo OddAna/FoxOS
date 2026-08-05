@@ -61,14 +61,14 @@ function validateRepositoryUrl(value) {
   try {
     parsed = new URL(String(value || ''));
   } catch {
-    throw new SourceDeploymentError('Repository must be a valid public HTTPS Git URL', 400, 'invalid-repository-url');
+    throw new SourceDeploymentError('Repository must be a valid credential-free HTTPS Git URL', 400, 'invalid-repository-url');
   }
   if (
     parsed.protocol !== 'https:' || !parsed.hostname || parsed.port || parsed.username ||
     parsed.password || parsed.search || parsed.hash || parsed.href.length > 512
   ) {
     throw new SourceDeploymentError(
-      'The first source pilot accepts only credential-free public HTTPS Git URLs on port 443',
+      'Source URLs must use credential-free HTTPS on port 443; credentials are separate encrypted references',
       400,
       'invalid-repository-url'
     );
@@ -183,7 +183,7 @@ function validateDockerfile(content) {
   }
 }
 
-function inspectContext(contextRoot, dockerfileName = 'Dockerfile') {
+function inspectContext(contextRoot, dockerfileName = 'Dockerfile', { enforceBuildPolicy = true } = {}) {
   const root = path.resolve(contextRoot);
   const entries = [];
   let totalBytes = 0;
@@ -231,7 +231,7 @@ function inspectContext(contextRoot, dockerfileName = 'Dockerfile') {
     throw new SourceDeploymentError('Dockerfile was not found in the selected context', 404, 'dockerfile-not-found');
   }
   const dockerfile = fs.readFileSync(dockerfilePath);
-  validateDockerfile(dockerfile);
+  if (enforceBuildPolicy) validateDockerfile(dockerfile);
   return {
     contextDigest: 'sha256:' + hash(canonicalJson(entries)),
     dockerfileDigest: 'sha256:' + hash(dockerfile),
@@ -263,7 +263,6 @@ function runFile(file, args, options = {}) {
 function gitArgs(args) {
   return [
     '-c', 'credential.helper=',
-    '-c', 'core.askPass=',
     '-c', 'protocol.file.allow=never',
     '-c', 'protocol.ext.allow=never',
     '-c', 'protocol.ssh.allow=never',
@@ -272,15 +271,64 @@ function gitArgs(args) {
   ];
 }
 
-function createGitSourceAdapter({ runCommand = runFile, resolveHost } = {}) {
-  async function resolve(repository, ref) {
+function createGitSourceAdapter({
+  runCommand = runFile,
+  resolveHost,
+  resolveCredential = null,
+  enforceBuildPolicy = true
+} = {}) {
+  async function runGit(source, args, options = {}) {
+    const credentialRef = source && source.credential || null;
+    if (!credentialRef) {
+      return runCommand('git', gitArgs(args), {
+        ...options,
+        env: { ...process.env, ...(options.env || {}), GIT_TERMINAL_PROMPT: '0' }
+      });
+    }
+    if (typeof resolveCredential !== 'function') {
+      throw new SourceDeploymentError('Private Git credential resolver is unavailable', 409, 'git-credential-unavailable');
+    }
+    const credential = await resolveCredential(credentialRef);
+    const username = String(credential && credential.username || '');
+    const password = String(credential && credential.password || '');
+    if (
+      !username || username.length > 256 || /[\r\n\0]/.test(username) ||
+      !password || Buffer.byteLength(password) > 64 * 1024 || /[\r\n\0]/.test(password)
+    ) {
+      throw new SourceDeploymentError('Private Git credential is invalid', 409, 'invalid-git-credential');
+    }
+    const askPassRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-git-askpass-'));
+    const askPass = path.join(askPassRoot, 'askpass.sh');
+    fs.writeFileSync(
+      askPass,
+      '#!/bin/sh\ncase "$1" in\n  *sername*) printf "%s\\n" "$FOXOS_GIT_USERNAME" ;;\n  *) printf "%s\\n" "$FOXOS_GIT_PASSWORD" ;;\nesac\n',
+      { mode: 0o700 }
+    );
+    try {
+      return await runCommand('git', gitArgs(args), {
+        ...options,
+        env: {
+          ...process.env,
+          ...(options.env || {}),
+          GIT_TERMINAL_PROMPT: '0',
+          GIT_ASKPASS: askPass,
+          GIT_ASKPASS_REQUIRE: 'force',
+          FOXOS_GIT_USERNAME: username,
+          FOXOS_GIT_PASSWORD: password
+        }
+      });
+    } finally {
+      fs.rmSync(askPassRoot, { recursive: true, force: true });
+    }
+  }
+
+  async function resolve(repository, ref, credential = null) {
     await assertPublicRepositoryHost(repository, resolveHost);
     const branchRef = 'refs/heads/' + ref;
     const tagRef = 'refs/tags/' + ref;
-    const result = await runCommand('git', gitArgs([
+    const result = await runGit({ repository, credential }, [
       'ls-remote', '--exit-code', repository, branchRef, tagRef, tagRef + '^{}'
-    ]), {
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    ], {
       timeoutMs: 60000
     });
     const records = result.stdout.trim().split(/\r?\n/).filter(Boolean).map((line) => {
@@ -305,16 +353,14 @@ function createGitSourceAdapter({ runCommand = runFile, resolveHost } = {}) {
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-source-'));
     const repositoryRoot = path.join(workspace, 'repository');
     try {
-      await runCommand('git', gitArgs([
+      await runGit(source, [
         'clone', '--depth', '1', '--filter=blob:limit=8388608', '--single-branch', '--branch', source.ref,
         source.repository, repositoryRoot
-      ]), {
-        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      ], {
         timeoutMs: 120000,
         maxBuffer: 2 * 1024 * 1024
       });
-      const head = await runCommand('git', gitArgs(['-C', repositoryRoot, 'rev-parse', 'HEAD']), {
-        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      const head = await runGit(source, ['-C', repositoryRoot, 'rev-parse', 'HEAD'], {
         timeoutMs: 30000
       });
       const commit = head.stdout.trim().toLowerCase();
@@ -322,7 +368,7 @@ function createGitSourceAdapter({ runCommand = runFile, resolveHost } = {}) {
         throw new SourceDeploymentError('Git ref moved after planning; create a new plan', 409, 'source-plan-stale');
       }
       if (fs.existsSync(path.join(repositoryRoot, '.gitmodules'))) {
-        throw new SourceDeploymentError('Git submodules are outside the first public source pilot', 409, 'submodules-blocked');
+        throw new SourceDeploymentError('Git submodules are outside the bounded source workflow', 409, 'submodules-blocked');
       }
       const contextRoot = path.resolve(repositoryRoot, source.contextPath);
       if (contextRoot !== repositoryRoot && !contextRoot.startsWith(repositoryRoot + path.sep)) {
@@ -331,7 +377,7 @@ function createGitSourceAdapter({ runCommand = runFile, resolveHost } = {}) {
       if (!fs.existsSync(contextRoot) || !fs.statSync(contextRoot).isDirectory()) {
         throw new SourceDeploymentError('Build context was not found', 404, 'context-not-found');
       }
-      const inspection = inspectContext(contextRoot, source.dockerfile);
+      const inspection = inspectContext(contextRoot, source.dockerfile, { enforceBuildPolicy });
       return { workspace, repositoryRoot, contextRoot, commit, ...inspection };
     } catch (error) {
       fs.rmSync(workspace, { recursive: true, force: true });
@@ -340,7 +386,7 @@ function createGitSourceAdapter({ runCommand = runFile, resolveHost } = {}) {
   }
 
   async function inspect(source) {
-    const resolved = await resolve(source.repository, source.ref);
+    const resolved = await resolve(source.repository, source.ref, source.credential || null);
     const checkout = await cloneAndInspect({ ...source, ...resolved });
     try {
       return {
@@ -380,20 +426,18 @@ function createGitSourceAdapter({ runCommand = runFile, resolveHost } = {}) {
 
   async function read(source, maxBytes = 128 * 1024) {
     const filePath = validateRelativePath(source.filePath);
-    const resolved = await resolve(source.repository, source.ref);
+    const resolved = await resolve(source.repository, source.ref, source.credential || null);
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-source-file-'));
     const repositoryRoot = path.join(workspace, 'repository');
     try {
-      await runCommand('git', gitArgs([
+      await runGit(source, [
         'clone', '--depth', '1', '--filter=blob:limit=8388608', '--single-branch', '--branch', source.ref,
         source.repository, repositoryRoot
-      ]), {
-        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      ], {
         timeoutMs: 120000,
         maxBuffer: 2 * 1024 * 1024
       });
-      const head = await runCommand('git', gitArgs(['-C', repositoryRoot, 'rev-parse', 'HEAD']), {
-        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      const head = await runGit(source, ['-C', repositoryRoot, 'rev-parse', 'HEAD'], {
         timeoutMs: 30000
       });
       const commit = head.stdout.trim().toLowerCase();

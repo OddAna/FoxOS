@@ -112,6 +112,33 @@ owner-only. The audit compiler makes zero Docker requests and includes no secret
 values. Every report records `runtimeMutated=false`, `providerDetached=false`
 and `applyApproved=false`; no audit endpoint can perform cutover or cleanup.
 
+## Workload source and environment evidence data
+
+Workload evidence is owner-only state under `.foxos-data/workload-evidence/`.
+Source plans contain repository/ref/commit, context metadata and encrypted
+credential references, never credential values. Private Git credentials are
+decrypted only for a Git operation, passed through an ephemeral `askpass`
+environment and excluded from URLs, process arguments, persisted scripts,
+plans, logs, manifests and API/CLI output. Use a repository-scoped read-only
+credential; FoxOS does not widen its external permissions.
+
+Captured private source code is stored only as authenticated AES-256-GCM
+ciphertext with `0600` permissions. Status and manifest compilation recheck the
+ciphertext digest, encryption context, authentication tag and plaintext archive
+digest before accepting the source revision. The FoxOS master key is required
+to reconstruct it and remains a separate recovery responsibility.
+
+Environment planning reads only the exact candidate container with Docker
+`GET`, stores a keyed fingerprint plus names/classification, and returns no
+values. Capture repeats the inspection and fails on drift. Sensitive and
+operator-designated names become encrypted secret revisions; returned evidence
+contains references only. Ordinary environment values remain private local
+environment-revision data and are not copied into workload-evidence records,
+Application Manifests, independence reports or API/CLI capture output.
+
+Neither evidence operation builds an image, starts/stops a container, changes a
+route, calls a provider API, detaches authority or approves migration.
+
 ## Disposable source deployment pilot
 
 Treat every Git repository and Dockerfile as untrusted code. The implemented
@@ -169,8 +196,10 @@ Compose CLI.
 - `.foxos-data/compose-deployments/` is owner-only but contains repository,
   commit, graph, image, operation, job and bounded build-log metadata.
 
-Private Git, environment/secrets, persistence, build packs, webhooks, parallel
-workers, arbitrary routes and real workloads remain outside this boundary.
+Private Git deployment, environment/secret injection, persistence, build packs,
+webhooks, parallel workers, arbitrary routes and real workloads remain outside
+this disposable Compose boundary. Separate read-only workload evidence capture
+does not widen it.
 
 ## Disposable image update pilot
 

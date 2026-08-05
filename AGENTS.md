@@ -70,6 +70,13 @@
   rollback gates. Do not widen it to private Git, arbitrary containers, ports,
   build mounts, general Compose/build packs, persistence or real workloads without
   Burak's explicit approval and the remaining roadmap gates.
+- The workload-evidence path is separate from source deployment. It may capture
+  only a running, fully inspected provider-owned stateless application, use a
+  credential-free or encrypted-credential HTTPS Git adapter, store an
+  authenticated encrypted local source archive, and classify the observed
+  Docker environment through GET-only drift checks. This evidence never proves
+  source-to-runtime image binding, starts/builds/stops a workload, changes a
+  route, adopts/detaches a provider or authorizes cutover.
 - The approved Compose extension is a second fixed disposable pilot. Preserve
   the `foxos-compose-lab` identity, public-Git manifest/commit/context pinning,
   two-or-three-service connected DAG, source-build-only services, no
