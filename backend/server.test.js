@@ -389,6 +389,8 @@ test('health is public while management APIs require a session', async () => {
   assert.equal(applicationManifestsResponse.status, 401);
   const workloadEvidenceResponse = await fetch(baseUrl() + '/api/workload-evidence');
   assert.equal(workloadEvidenceResponse.status, 401);
+  const statefulRehearsalsResponse = await fetch(baseUrl() + '/api/stateful-rehearsals');
+  assert.equal(statefulRehearsalsResponse.status, 401);
   const independenceAuditsResponse = await fetch(baseUrl() + '/api/independence-audits');
   assert.equal(independenceAuditsResponse.status, 401);
 });

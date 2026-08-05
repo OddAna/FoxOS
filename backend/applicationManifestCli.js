@@ -14,6 +14,7 @@ const { createResourceRegistry } = require('./resourceRegistry');
 const { createRouteManager } = require('./routeManager');
 const { createSecretManager } = require('./secretManager');
 const { createSourceDeploymentManager } = require('./sourceDeploymentManager');
+const { createStatefulRehearsalManager } = require('./statefulRehearsalManager');
 const { createWorkloadEvidenceManager } = require('./workloadEvidenceManager');
 
 function flagValue(args, name, fallback = null) {
@@ -61,6 +62,14 @@ function main() {
     encryptionStore,
     secretManager
   });
+  const statefulRehearsalManager = createStatefulRehearsalManager({
+    dataRoot,
+    dockerRequest: docker.request,
+    dockerArchiveRequest: docker.requestBuffer,
+    resourceRegistry,
+    encryptionStore,
+    secretManager
+  });
   const manager = createApplicationManifestManager({
     dataRoot,
     resourceRegistry,
@@ -70,7 +79,8 @@ function main() {
     sourceDeploymentStatus: () => sourceDeploymentManager.status(),
     composeDeploymentStatus: () => composeDeploymentManager.status(),
     imageUpdateStatus: () => imageUpdateManager.status(),
-    workloadEvidenceStatus: () => workloadEvidenceManager.status()
+    workloadEvidenceStatus: () => workloadEvidenceManager.status(),
+    statefulRehearsalStatus: () => statefulRehearsalManager.status()
   });
 
   if (command === 'status') return output(manager.status());

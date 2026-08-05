@@ -23,6 +23,10 @@ const {
   createWorkloadEvidenceManager
 } = require('./workloadEvidenceManager');
 const {
+  StatefulRehearsalError,
+  createStatefulRehearsalManager
+} = require('./statefulRehearsalManager');
+const {
   SourceDeploymentError,
   createSourceDeploymentManager
 } = require('./sourceDeploymentManager');
@@ -432,6 +436,14 @@ const workloadEvidenceManager = createWorkloadEvidenceManager({
   encryptionStore,
   secretManager
 });
+const statefulRehearsalManager = createStatefulRehearsalManager({
+  dataRoot: DATA_ROOT,
+  dockerRequest,
+  dockerArchiveRequest: dockerClient.requestBuffer,
+  resourceRegistry,
+  encryptionStore,
+  secretManager
+});
 const composeDeploymentManager = createComposeDeploymentManager({
   dataRoot: DATA_ROOT,
   dockerRequest,
@@ -450,7 +462,8 @@ const applicationManifestManager = createApplicationManifestManager({
   sourceDeploymentStatus: () => sourceDeploymentManager.status(),
   composeDeploymentStatus: () => composeDeploymentManager.status(),
   imageUpdateStatus: () => imageUpdateManager.status(),
-  workloadEvidenceStatus: () => workloadEvidenceManager.status()
+  workloadEvidenceStatus: () => workloadEvidenceManager.status(),
+  statefulRehearsalStatus: () => statefulRehearsalManager.status()
 });
 const independenceAuditManager = createIndependenceAuditManager({
   dataRoot: DATA_ROOT,
@@ -486,6 +499,17 @@ function sendWorkloadEvidenceError(res, error, action) {
       ? 'Workload evidence operation failed'
       : error.message,
     code: error.code || 'workload-evidence-error'
+  });
+}
+
+function sendStatefulRehearsalError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof StatefulRehearsalError)
+      ? 'Stateful rehearsal operation failed'
+      : error.message,
+    code: error.code || 'stateful-rehearsal-error'
   });
 }
 
@@ -1059,6 +1083,51 @@ app.post('/api/workload-evidence/environment-plans/:planId/capture', async (req,
   }
 });
 
+app.get('/api/stateful-rehearsals', (req, res) => {
+  try {
+    res.json(statefulRehearsalManager.status());
+  } catch (error) {
+    sendStatefulRehearsalError(res, error, 'Could not read stateful rehearsals');
+  }
+});
+
+app.post('/api/stateful-rehearsals/plans', async (req, res) => {
+  try {
+    const plan = await statefulRehearsalManager.createPlan(req.body || {});
+    res.status(201).json({ plan });
+  } catch (error) {
+    sendStatefulRehearsalError(res, error, 'Could not plan stateful rehearsal');
+  }
+});
+
+app.get('/api/stateful-rehearsals/plans/:planId', (req, res) => {
+  try {
+    res.json({ plan: statefulRehearsalManager.getPlan(req.params.planId) });
+  } catch (error) {
+    sendStatefulRehearsalError(res, error, 'Could not read stateful rehearsal plan');
+  }
+});
+
+app.post('/api/stateful-rehearsals/plans/:planId/run', async (req, res) => {
+  try {
+    const operation = await statefulRehearsalManager.runPlan(
+      req.params.planId,
+      req.body && req.body.confirmation
+    );
+    res.status(201).json({ operation });
+  } catch (error) {
+    sendStatefulRehearsalError(res, error, 'Could not run stateful rehearsal');
+  }
+});
+
+app.get('/api/stateful-rehearsals/operations/:operationId', (req, res) => {
+  try {
+    res.json({ operation: statefulRehearsalManager.getOperation(req.params.operationId) });
+  } catch (error) {
+    sendStatefulRehearsalError(res, error, 'Could not read stateful rehearsal operation');
+  }
+});
+
 app.get('/api/recovery/status', (req, res) => {
   try {
     res.json({ encryption: encryptionStore.status(), backup: backupManager.status() });
@@ -1566,24 +1635,34 @@ app.use((error, req, res, next) => {
 });
 
 if (require.main === module) {
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log('FoxOS is listening on port ' + PORT);
-    console.log('Host execution mode: ' + HOST_EXECUTION);
-    console.log('Host filesystem mount: ' + HOST_ROOT);
+  statefulRehearsalManager.recoverInterruptedOperations({ clearStaleLock: true })
+    .then((recovery) => {
+      if (recovery.recovered.length) {
+        console.warn('Recovered interrupted stateful rehearsals:', recovery.recovered.length);
+      }
+    })
+    .catch((error) => {
+      console.error('Initial stateful rehearsal recovery failed:', error.message);
+    })
+    .finally(() => {
+      app.listen(PORT, '0.0.0.0', () => {
+        console.log('FoxOS is listening on port ' + PORT);
+        console.log('Host execution mode: ' + HOST_EXECUTION);
+        console.log('Host filesystem mount: ' + HOST_ROOT);
 
-    if (process.env.FOXOS_RESOURCE_SCAN_ON_STARTUP !== 'false') {
-      resourceRegistry.scan()
-        .then((snapshot) => {
-          console.log(
-            'Resource Registry snapshot ' + snapshot.snapshotId +
-            ' recorded ' + snapshot.summary.resources + ' resources using Docker GET requests only'
-          );
-        })
-        .catch((error) => {
-          console.error('Initial Resource Registry scan failed:', error.message);
-        });
-    }
-  });
+        if (process.env.FOXOS_RESOURCE_SCAN_ON_STARTUP === 'false') return;
+        resourceRegistry.scan()
+          .then((snapshot) => {
+            console.log(
+              'Resource Registry snapshot ' + snapshot.snapshotId +
+              ' recorded ' + snapshot.summary.resources + ' resources using Docker GET requests only'
+            );
+          })
+          .catch((error) => {
+            console.error('Initial Resource Registry scan failed:', error.message);
+          });
+      });
+    });
 }
 
 module.exports = app;

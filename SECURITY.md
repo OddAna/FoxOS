@@ -144,6 +144,41 @@ into the managed application environment.
 Neither evidence operation builds an image, starts/stops a container, changes a
 route, calls a provider API, detaches authority or approves migration.
 
+## Stateful restore rehearsal data
+
+Stateful rehearsal records and encrypted archives are owner-only state under
+`.foxos-data/stateful-rehearsals/`. The implemented contract accepts only
+running, fully inspected, provider-owned stateful applications with one to four
+explicitly classified writable named volumes and an existing Docker health
+check. It rejects databases, bind mounts, read-only/unknown mounts, protected
+resources, custom runtime overrides, host namespaces, privilege, devices and
+added capabilities.
+
+Planning performs Docker reads only. Running requires the operation-specific
+exact confirmation and revalidates container, image, mounts, environment,
+health and runtime fingerprints before the source is touched. FoxOS persists
+the pause request before asking Docker to pause, reads bounded archives, and
+unpauses in an immediate cleanup block. It never stops, recreates, renames or
+detaches the source. Startup recovery may unpause the exact recorded source and
+remove exact FoxOS-labeled temporary objects; interrupted operations are never
+replayed automatically.
+
+Persistent volume archives are AES-256-GCM encrypted with contextual
+authentication, written with `0600` permissions and decrypted again to verify
+their content digest. Plaintext archives, environment values and secret values
+are not persisted or returned. Temporary candidates use the same observed
+immutable image ID, temporary named volumes, an internal Docker bridge, a
+dynamic loopback binding, `no-new-privileges` and fixed CPU/memory/PID limits.
+They never receive an external route or provider network. A current proof is
+written only after restore digests, candidate health, source health and complete
+temporary-object cleanup all pass.
+
+This is same-host operational evidence. The encrypted archive and its master
+key share one machine, so the proof does not establish off-host recovery, key
+escrow, retention, database consistency, traffic cutover, provider detachment
+or full-machine disaster recovery. Treat the archive as sensitive application
+data and keep those separate gates blocking.
+
 ## Disposable source deployment pilot
 
 Treat every Git repository and Dockerfile as untrusted code. The implemented

@@ -105,6 +105,15 @@ jobs:
               done
               sleep 1
             done
+            docker ps -aq --filter label=com.foxos.temporary=stateful-rehearsal | while IFS= read -r rehearsal_container_id; do
+              if [ -n "$rehearsal_container_id" ]; then docker rm -f "$rehearsal_container_id" || true; fi
+            done
+            docker volume ls -q --filter label=com.foxos.temporary=stateful-rehearsal | while IFS= read -r rehearsal_volume_id; do
+              if [ -n "$rehearsal_volume_id" ]; then docker volume rm "$rehearsal_volume_id" || true; fi
+            done
+            docker network ls -q --filter label=com.foxos.temporary=stateful-rehearsal | while IFS= read -r rehearsal_network_id; do
+              if [ -n "$rehearsal_network_id" ]; then docker network rm "$rehearsal_network_id" || true; fi
+            done
             docker compose down || true
           }
           trap cleanup EXIT
@@ -138,6 +147,21 @@ jobs:
               if (guarantees.runtimeMutated || guarantees.providerMutated || guarantees.providerDetached) process.exit(1);
               if (guarantees.secretValuesIncluded || guarantees.ordinaryValuesIncluded) process.exit(1);
               if (guarantees.externalGitRequiredToReconstructCapturedRevision) process.exit(1);
+            });
+          '
+          docker compose exec -T foxos node /app/statefulRehearsalCli.js status | node -e '
+            let input = "";
+            process.stdin.on("data", chunk => input += chunk);
+            process.stdin.on("end", () => {
+              const status = JSON.parse(input);
+              const guarantees = status.guarantees || {};
+              if (status.summary.plans || status.summary.operations || status.summary.verified || status.summary.running) process.exit(1);
+              if (guarantees.sourceStopIncluded || guarantees.sourceRecreationIncluded) process.exit(1);
+              if (guarantees.routeMutationIncluded || guarantees.trafficCutoverIncluded) process.exit(1);
+              if (guarantees.providerMutationIncluded || guarantees.providerDetachIncluded) process.exit(1);
+              if (guarantees.offHostRecoveryProven) process.exit(1);
+              if (guarantees.environmentValuesIncluded || guarantees.secretValuesIncluded) process.exit(1);
+              if (guarantees.interruptedOperationsReplayed) process.exit(1);
             });
           '
 

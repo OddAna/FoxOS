@@ -8,7 +8,8 @@ const {
   PLAN_APPLICATION_MANIFEST_CONFIRMATION,
   applicationManifestConfirmation,
   createApplicationManifestManager,
-  resourceFingerprint
+  resourceFingerprint,
+  statefulRehearsalResourceFingerprint
 } = require('./applicationManifestManager');
 
 const RESOURCE_ID = 'res_' + '1'.repeat(32);
@@ -228,6 +229,7 @@ function harness(options = {}) {
     composeDeploymentStatus: options.composeDeploymentStatus || (() => ({ current: null, plans: [], operations: [] })),
     imageUpdateStatus: options.imageUpdateStatus || (() => imageProof(currentResources[0])),
     workloadEvidenceStatus: options.workloadEvidenceStatus || (() => ({ sourceCurrent: [], guarantees: {} })),
+    statefulRehearsalStatus: options.statefulRehearsalStatus || (() => ({ current: [], guarantees: {} })),
     clock: () => new Date('2026-08-04T20:30:00.000Z'),
     randomUUID: () => '00000000-0000-4000-8000-000000000007'
   });
@@ -447,6 +449,92 @@ test('external applications become redacted blocked import drafts and cannot be 
   );
 
   fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('a matching stateful rehearsal closes only the local restore blocker while off-host recovery stays blocked', () => {
+  const external = resource({
+    name: 'provider-stateful-app',
+    ownership: 'observed',
+    provider: 'coolify',
+    runtime: {
+      ...resource().runtime,
+      image: 'example/stateful:latest',
+      environmentVariableCount: 0,
+      constraints: {
+        ...resource().runtime.constraints,
+        memoryBytes: null,
+        nanoCpus: null,
+        pidsLimit: null
+      }
+    },
+    mounts: [{
+      type: 'volume',
+      name: 'provider-stateful-data',
+      source: '/var/lib/docker/volumes/provider-stateful-data/_data',
+      destination: '/data',
+      readOnly: false
+    }]
+  });
+  external.classification = classifyResource(external);
+  const rehearsalResourceFingerprint = statefulRehearsalResourceFingerprint(external);
+  const operation = {
+    schemaVersion: 1,
+    operationId: 'sro_' + '1'.repeat(32),
+    planId: 'srp_' + '2'.repeat(32),
+    resourceId: external.id,
+    resourceFingerprint: resourceFingerprint(external, []),
+    rehearsalResourceFingerprint,
+    status: 'verified-and-cleaned',
+    completedAt: '2026-08-05T02:00:00.000Z',
+    source: {
+      containerId: external.runtime.containerId,
+      imageId: external.runtime.imageId,
+      pauseState: 'unpaused',
+      pauseDurationMs: 120,
+      stopped: false,
+      recreated: false
+    },
+    backups: [{ authenticated: true, plaintextStored: false, offHost: false }],
+    restore: { verified: true, volumes: [{ verified: true }] },
+    candidate: { health: 'healthy', removedAfterProof: true },
+    cleanup: { completed: true },
+    guarantees: {
+      routeMutated: false,
+      trafficCutover: false,
+      providerMetadataMutated: false,
+      providerDetached: false,
+      environmentValuesIncluded: false,
+      secretValuesIncluded: false,
+      plaintextArchiveStored: false
+    }
+  };
+  external.runtime.status = 'Up 17 hours';
+  assert.equal(statefulRehearsalResourceFingerprint(external), rehearsalResourceFingerprint);
+  const { manager, root } = harness({
+    currentResource: external,
+    imageUpdateStatus: () => ({ current: null, operations: [] }),
+    statefulRehearsalStatus: () => ({ current: [operation], guarantees: {} })
+  });
+  try {
+    const draft = manager.createDraft({
+      resourceId: external.id,
+      confirmation: PLAN_APPLICATION_MANIFEST_CONFIRMATION
+    });
+    const blockerCodes = draft.gates.blockers.map((blocker) => blocker.code);
+    assert.equal(blockerCodes.includes('restore-proof-missing'), false);
+    assert.equal(blockerCodes.includes('recovery-target-unavailable'), true);
+    assert.deepEqual(draft.desired.recovery.restoreProofReference, {
+      type: 'foxos-stateful-restore-rehearsal',
+      operationId: operation.operationId,
+      verifiedAt: operation.completedAt,
+      localOnly: true
+    });
+    assert.equal(draft.evidence.restoreProof.offHostRecoveryProven, false);
+    assert.equal(draft.evidence.restoreProof.secretValuesIncluded, false);
+    assert.equal(draft.gates.status, 'blocked');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('database classification requires a dedicated lifecycle even without an observed mount', () => {

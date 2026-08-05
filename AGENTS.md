@@ -71,12 +71,24 @@
   build mounts, general Compose/build packs, persistence or real workloads without
   Burak's explicit approval and the remaining roadmap gates.
 - The workload-evidence path is separate from source deployment. It may capture
-  only a running, fully inspected provider-owned stateless application, use a
-  credential-free or encrypted-credential HTTPS Git adapter, store an
-  authenticated encrypted local source archive, and classify the observed
-  Docker environment through GET-only drift checks. This evidence never proves
-  source-to-runtime image binding, starts/builds/stops a workload, changes a
-  route, adopts/detaches a provider or authorizes cutover.
+  source only for a running, fully inspected provider-owned stateless
+  application, use a credential-free or encrypted-credential HTTPS Git adapter,
+  and store an authenticated encrypted local source archive. GET-only
+  environment capture also accepts the corresponding stateful application
+  class. This evidence never proves source-to-runtime image binding,
+  starts/builds/stops a workload, changes a route, adopts/detaches a provider or
+  authorizes cutover.
+- The stateful-rehearsal path is a separate narrow proof for running, fully
+  inspected provider-owned stateful applications. Preserve explicit
+  persistent/empty classification for every writable named volume, exact plan
+  and run confirmations, pre-pause drift checks, persisted pause intent,
+  immediate unpause, authenticated local encryption, exact-image temporary
+  restore, internal-network/dynamic-loopback candidate health proof, source
+  health re-proof and exact cleanup. It must not accept databases, bind mounts,
+  unsafe runtime overrides or protected resources; stop/recreate the source;
+  change routes/traffic/provider state; detach authority; claim off-host
+  recovery; or replay an interrupted operation. Do not widen this contract
+  without Burak's explicit approval and the remaining persistence gates.
 - The approved Compose extension is a second fixed disposable pilot. Preserve
   the `foxos-compose-lab` identity, public-Git manifest/commit/context pinning,
   two-or-three-service connected DAG, source-build-only services, no

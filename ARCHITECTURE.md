@@ -395,3 +395,41 @@ current image came from that source. Application Manifest records
 image, verifies health and proves update/rollback. External provider authority
 also remains blocking. This boundary therefore improves independence evidence
 without widening production deployment or cutover authority.
+
+### Implemented boundary: stateful restore rehearsal
+
+The stateful-rehearsal manager is the first production-resource mutation that
+addresses one persistence gate without taking workload authority. It accepts
+only a running, fully inspected, provider-owned `application` classified as
+`stateful`, with one to four writable named volumes, an existing healthy Docker
+health check, a captured FoxOS environment revision and an explicitly selected
+observed TCP port. Every named volume must be classified as persistent or
+empty-ephemeral. Databases, bind/unknown/read-only mounts, protected resources,
+custom command/entrypoint/user/workdir overrides and privileged or host-level
+runtime access are outside this boundary.
+
+Planning is read-only and stores resource/runtime/environment/health
+fingerprints plus names and references, never environment or secret values. An
+operation-specific confirmation starts a second drift check. FoxOS persists the
+pause intent, briefly pauses the exact source container while reading bounded
+volume archives and unpauses in an immediate cleanup path. It does not stop,
+recreate, rename or relabel the source and makes no route, traffic, provider or
+detach change.
+
+Persistent archives are authenticated server-local AES-256-GCM ciphertext. A
+temporary candidate uses the exact observed image ID, the resolved FoxOS-managed
+environment in memory, temporary named volumes, an internal Docker bridge and a
+dynamic loopback port with fixed CPU, memory and PID limits. Restored content
+digests, candidate health/isolation and source health must all pass. Every exact
+temporary container, volume and network is then removed before a current proof
+is published. Crash recovery can unpause and clean recorded objects but never
+replays an interrupted transaction.
+
+Application Manifest may use a matching current proof to close only
+`restore-proof-missing`. The proof fingerprint intentionally excludes volatile
+uptime and health-status text while binding stable resource identity,
+classification, container/image, mounts, ports, constraints and environment
+evidence. `recovery-target-unavailable` remains blocking because the archive and
+master key are on the same host. Off-host recovery, retention, key escrow,
+database consistency, route cutover, provider detachment and full-machine
+disaster recovery remain separate unimplemented gates.
