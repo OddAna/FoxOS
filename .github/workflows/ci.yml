@@ -114,6 +114,15 @@ jobs:
             docker network ls -q --filter label=com.foxos.temporary=stateful-rehearsal | while IFS= read -r rehearsal_network_id; do
               if [ -n "$rehearsal_network_id" ]; then docker network rm "$rehearsal_network_id" || true; fi
             done
+            docker ps -aq --filter label=com.foxos.stateful-shadow=true | while IFS= read -r shadow_container_id; do
+              if [ -n "$shadow_container_id" ]; then docker rm -f "$shadow_container_id" || true; fi
+            done
+            docker volume ls -q --filter label=com.foxos.stateful-shadow=true | while IFS= read -r shadow_volume_id; do
+              if [ -n "$shadow_volume_id" ]; then docker volume rm "$shadow_volume_id" || true; fi
+            done
+            docker network ls -q --filter label=com.foxos.stateful-shadow=true | while IFS= read -r shadow_network_id; do
+              if [ -n "$shadow_network_id" ]; then docker network rm "$shadow_network_id" || true; fi
+            done
             docker compose down || true
           }
           trap cleanup EXIT
@@ -162,6 +171,22 @@ jobs:
               if (guarantees.offHostRecoveryProven) process.exit(1);
               if (guarantees.environmentValuesIncluded || guarantees.secretValuesIncluded) process.exit(1);
               if (guarantees.interruptedOperationsReplayed) process.exit(1);
+            });
+          '
+          docker compose exec -T foxos node /app/statefulShadowCli.js status | node -e '
+            let input = "";
+            process.stdin.on("data", chunk => input += chunk);
+            process.stdin.on("end", () => {
+              const status = JSON.parse(input);
+              const guarantees = status.guarantees || {};
+              if (status.summary.plans || status.summary.operations || status.summary.active || status.summary.stale || status.summary.running) process.exit(1);
+              if (guarantees.sourceMutationIncluded || guarantees.sourcePauseIncluded) process.exit(1);
+              if (guarantees.sourceStopIncluded || guarantees.sourceRecreationIncluded) process.exit(1);
+              if (guarantees.sourceIdentityClaimed || !guarantees.separateFoxOSIdentity) process.exit(1);
+              if (!guarantees.internalNetworkOnly || guarantees.hostPortPublished || guarantees.externalNetworkIncluded) process.exit(1);
+              if (guarantees.routeCreated || guarantees.trafficCutover) process.exit(1);
+              if (guarantees.providerMutationIncluded || guarantees.providerDetachIncluded) process.exit(1);
+              if (guarantees.offHostRecoveryProven || guarantees.environmentValuesIncluded || guarantees.secretValuesIncluded) process.exit(1);
             });
           '
 

@@ -230,6 +230,7 @@ function harness(options = {}) {
     imageUpdateStatus: options.imageUpdateStatus || (() => imageProof(currentResources[0])),
     workloadEvidenceStatus: options.workloadEvidenceStatus || (() => ({ sourceCurrent: [], guarantees: {} })),
     statefulRehearsalStatus: options.statefulRehearsalStatus || (() => ({ current: [], guarantees: {} })),
+    statefulShadowStatus: options.statefulShadowStatus || (() => ({ current: [], guarantees: {} })),
     clock: () => new Date('2026-08-04T20:30:00.000Z'),
     randomUUID: () => '00000000-0000-4000-8000-000000000007'
   });
@@ -544,6 +545,112 @@ test('a matching stateful rehearsal closes only the local restore blocker while 
     assert.equal(draft.evidence.restoreProof.offHostRecoveryProven, false);
     assert.equal(draft.evidence.restoreProof.secretValuesIncluded, false);
     assert.equal(draft.gates.status, 'blocked');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a current isolated stateful shadow supplies tested health and runtime limits without claiming provider authority', () => {
+  const external = resource({
+    name: 'provider-stateful-app',
+    ownership: 'observed',
+    provider: 'coolify',
+    runtime: {
+      ...resource().runtime,
+      image: 'example/stateful:latest',
+      environmentVariableCount: 0,
+      constraints: {
+        ...resource().runtime.constraints,
+        memoryBytes: null,
+        nanoCpus: null,
+        pidsLimit: null
+      }
+    },
+    mounts: [{
+      type: 'volume',
+      name: 'provider-stateful-data',
+      source: '/var/lib/docker/volumes/provider-stateful-data/_data',
+      destination: '/data',
+      readOnly: false
+    }]
+  });
+  external.classification = classifyResource(external);
+  const operation = {
+    schemaVersion: 1,
+    operationId: 'sso_' + '3'.repeat(32),
+    planId: 'ssp_' + '4'.repeat(32),
+    sourceResourceId: external.id,
+    sourceResourceFingerprint: statefulRehearsalResourceFingerprint(external),
+    shadowResourceId: 'res_' + '5'.repeat(32),
+    status: 'active',
+    completedAt: '2026-08-05T03:00:00.000Z',
+    source: {
+      containerId: external.runtime.containerId,
+      imageId: external.runtime.imageId,
+      mutated: false,
+      paused: false,
+      stopped: false,
+      recreated: false
+    },
+    runtimeLimits: { memoryBytes: 268435456, nanoCpus: 500000000, pidsLimit: 256 },
+    shadow: {
+      containerId: 'd'.repeat(64),
+      internalNetworkVerified: true,
+      hostPortPublished: false,
+      externalNetwork: false,
+      routeCreated: false,
+      health: {
+        verified: true,
+        mode: 'internal-http',
+        privatePort: 8090,
+        hostPortPublished: false,
+        verifiedAt: '2026-08-05T03:00:00.000Z'
+      },
+      volumesRestored: [{ restored: true, destination: '/data' }]
+    },
+    registryProof: {
+      verified: true,
+      snapshotId: 'snap_' + '6'.repeat(24),
+      resourceId: 'res_' + '5'.repeat(32),
+      containerId: 'd'.repeat(64)
+    },
+    guarantees: {
+      sourceMutationIncluded: false,
+      sourcePauseIncluded: false,
+      sourceStopIncluded: false,
+      sourceRecreationIncluded: false,
+      sourceIdentityClaimed: false,
+      separateFoxOSIdentity: true,
+      internalNetworkOnly: true,
+      hostPortPublished: false,
+      externalNetworkIncluded: false,
+      routeCreated: false,
+      trafficCutover: false,
+      providerMutationIncluded: false,
+      providerDetachIncluded: false,
+      environmentValuesIncluded: false,
+      secretValuesIncluded: false
+    }
+  };
+  const { manager, root } = harness({
+    currentResource: external,
+    imageUpdateStatus: () => ({ current: null, operations: [] }),
+    statefulShadowStatus: () => ({ current: [operation], guarantees: {} })
+  });
+  try {
+    const draft = manager.createDraft({
+      resourceId: external.id,
+      confirmation: PLAN_APPLICATION_MANIFEST_CONFIRMATION
+    });
+    const blockerCodes = draft.gates.blockers.map((blocker) => blocker.code);
+    assert.equal(blockerCodes.includes('runtime-resource-limits-missing'), false);
+    assert.equal(blockerCodes.includes('foxos-health-proof-missing'), false);
+    assert.equal(blockerCodes.includes('external-provider-authority'), true);
+    assert.equal(blockerCodes.includes('recovery-target-unavailable'), true);
+    assert.deepEqual(draft.desired.runtime.constraints.memoryBytes, 268435456);
+    assert.equal(draft.evidence.healthProof.type, 'foxos-persistent-stateful-shadow-health');
+    assert.equal(draft.evidence.statefulShadowProof.trafficCutover, false);
+    assert.equal(draft.evidence.statefulShadowProof.providerDetached, false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

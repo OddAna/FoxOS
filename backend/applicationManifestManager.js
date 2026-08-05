@@ -409,6 +409,67 @@ function statefulRestoreProofDescriptor(operation, rehearsalResourceFingerprintV
   };
 }
 
+function statefulShadowProofDescriptor(operation, rehearsalResourceFingerprintValue, resource) {
+  const limits = operation && operation.runtimeLimits || {};
+  if (
+    !operation || operation.status !== 'active' ||
+    operation.sourceResourceId !== resource.id ||
+    operation.sourceResourceFingerprint !== rehearsalResourceFingerprintValue ||
+    !RESOURCE_ID_PATTERN.test(String(operation.shadowResourceId)) || operation.shadowResourceId === resource.id ||
+    !operation.source || operation.source.containerId !== resource.runtime.containerId ||
+    operation.source.imageId !== resource.runtime.imageId || operation.source.mutated !== false ||
+    operation.source.paused !== false || operation.source.stopped !== false || operation.source.recreated !== false ||
+    !operation.shadow || !operation.shadow.containerId || !operation.shadow.health || operation.shadow.health.verified !== true ||
+    operation.shadow.internalNetworkVerified !== true || operation.shadow.hostPortPublished !== false ||
+    operation.shadow.externalNetwork !== false || operation.shadow.routeCreated !== false ||
+    !Array.isArray(operation.shadow.volumesRestored) || operation.shadow.volumesRestored.length < 1 ||
+    operation.shadow.volumesRestored.some((volume) => volume.restored !== true) ||
+    !operation.registryProof || operation.registryProof.verified !== true ||
+    operation.registryProof.resourceId !== operation.shadowResourceId ||
+    operation.registryProof.containerId !== operation.shadow.containerId ||
+    !Number.isSafeInteger(limits.memoryBytes) || limits.memoryBytes < 1 ||
+    !Number.isSafeInteger(limits.nanoCpus) || limits.nanoCpus < 1 ||
+    !Number.isSafeInteger(limits.pidsLimit) || limits.pidsLimit < 1 ||
+    !operation.guarantees || operation.guarantees.sourceMutationIncluded !== false ||
+    operation.guarantees.sourcePauseIncluded !== false || operation.guarantees.sourceStopIncluded !== false ||
+    operation.guarantees.sourceRecreationIncluded !== false ||
+    operation.guarantees.sourceIdentityClaimed !== false || operation.guarantees.separateFoxOSIdentity !== true ||
+    operation.guarantees.internalNetworkOnly !== true || operation.guarantees.hostPortPublished !== false ||
+    operation.guarantees.externalNetworkIncluded !== false || operation.guarantees.routeCreated !== false ||
+    operation.guarantees.trafficCutover !== false || operation.guarantees.providerMutationIncluded !== false ||
+    operation.guarantees.providerDetachIncluded !== false || operation.guarantees.environmentValuesIncluded !== false ||
+    operation.guarantees.secretValuesIncluded !== false
+  ) return null;
+  return {
+    type: 'foxos-persistent-stateful-shadow',
+    operationId: operation.operationId,
+    planId: operation.planId,
+    sourceResourceId: operation.sourceResourceId,
+    shadowResourceId: operation.shadowResourceId,
+    shadowContainerId: operation.shadow.containerId,
+    healthProof: {
+      ...operation.shadow.health,
+      type: 'foxos-persistent-stateful-shadow-health',
+      verified: true,
+      containerId: operation.shadow.containerId,
+      resourceId: operation.shadowResourceId
+    },
+    runtimeLimits: {
+      memoryBytes: limits.memoryBytes,
+      nanoCpus: limits.nanoCpus,
+      pidsLimit: limits.pidsLimit
+    },
+    restartPolicy: 'unless-stopped',
+    internalNetworkOnly: true,
+    hostPortPublished: false,
+    trafficCutover: false,
+    providerDetached: false,
+    localSnapshot: true,
+    offHostRecoveryProven: false,
+    verifiedAt: operation.completedAt
+  };
+}
+
 function createApplicationManifestManager({
   dataRoot,
   resourceRegistry,
@@ -420,6 +481,7 @@ function createApplicationManifestManager({
   imageUpdateStatus = () => ({ current: null, operations: [] }),
   workloadEvidenceStatus = () => ({ sourceCurrent: [], guarantees: {} }),
   statefulRehearsalStatus = () => ({ current: [], guarantees: {} }),
+  statefulShadowStatus = () => ({ current: [], guarantees: {} }),
   clock = () => new Date(),
   randomUUID = () => crypto.randomUUID()
 }) {
@@ -434,7 +496,8 @@ function createApplicationManifestManager({
     composeDeploymentStatus,
     imageUpdateStatus,
     workloadEvidenceStatus,
-    statefulRehearsalStatus
+    statefulRehearsalStatus,
+    statefulShadowStatus
   ]) {
     if (typeof dependency !== 'function') throw new Error('Application manifest state adapters must be functions');
   }
@@ -494,9 +557,15 @@ function createApplicationManifestManager({
     const updateState = imageUpdateStatus();
     const workloadEvidenceState = workloadEvidenceStatus();
     const statefulRehearsalState = statefulRehearsalStatus();
+    const statefulShadowState = statefulShadowStatus();
     const currentResourceFingerprintValue = resourceFingerprint(resource, relationships);
     const restoreProof = statefulRestoreProofDescriptor(
       (statefulRehearsalState.current || []).find((operation) => operation.resourceId === resourceId),
+      statefulRehearsalResourceFingerprint(resource),
+      resource
+    );
+    const shadowProof = statefulShadowProofDescriptor(
+      (statefulShadowState.current || []).find((operation) => operation.sourceResourceId === resourceId),
       statefulRehearsalResourceFingerprint(resource),
       resource
     );
@@ -745,16 +814,26 @@ function createApplicationManifestManager({
         }
       }
     }
-    if (!resource.runtime.restartPolicy || resource.runtime.restartPolicy === 'no') {
+    const restartPolicy = shadowProof ? shadowProof.restartPolicy : resource.runtime.restartPolicy;
+    if (!restartPolicy || restartPolicy === 'no') {
       addBlocker(blockers, 'restart-policy-not-resilient', 'runtime', 'A resilient restart policy is required.');
     }
-    const constraints = resource.runtime.constraints || {};
+    const observedConstraints = resource.runtime.constraints || {};
+    const constraints = shadowProof ? {
+      ...observedConstraints,
+      privileged: false,
+      noNewPrivileges: true,
+      memoryBytes: shadowProof.runtimeLimits.memoryBytes,
+      nanoCpus: shadowProof.runtimeLimits.nanoCpus,
+      pidsLimit: shadowProof.runtimeLimits.pidsLimit
+    } : observedConstraints;
     if (!constraints.memoryBytes || !constraints.nanoCpus || !constraints.pidsLimit) {
       addBlocker(blockers, 'runtime-resource-limits-missing', 'runtime', 'CPU, memory and process limits must be explicit.');
     }
     if (constraints.privileged) {
       addBlocker(blockers, 'privileged-runtime', 'runtime', 'Privileged application runtimes cannot be finalized.');
     }
+    if (!healthProof && shadowProof) healthProof = shadowProof.healthProof;
     if (!healthProof || !healthProof.verified) {
       addBlocker(blockers, 'foxos-health-proof-missing', 'health', 'A FoxOS-owned current health proof is required.');
     }
@@ -783,7 +862,7 @@ function createApplicationManifestManager({
       runtime: {
         engine: resource.runtime.engine,
         desiredState: resource.runtime.state === 'running' ? 'running' : 'stopped',
-        restartPolicy: resource.runtime.restartPolicy,
+        restartPolicy,
         constraints,
         ports: (resource.ports || []).map((port) => ({
           privatePort: port.privatePort,
@@ -866,6 +945,7 @@ function createApplicationManifestManager({
         proof: rollbackOperation.rollback.proof
       } : null,
       restoreProof,
+      statefulShadowProof: shadowProof,
       secretValuesIncluded: false
     };
     return {
@@ -1009,5 +1089,6 @@ module.exports = {
   relatedRelationships,
   resourceFingerprint,
   statefulRehearsalResourceFingerprint,
-  statefulRestoreProofDescriptor
+  statefulRestoreProofDescriptor,
+  statefulShadowProofDescriptor
 };

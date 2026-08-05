@@ -269,6 +269,22 @@ test('FoxOS gateway stays protected while being classified as the FoxOS proxy', 
   assert.deepEqual(safeLabels(labels), labels);
 });
 
+test('a stateful shadow is a separate FoxOS application identity with migration-safe linkage labels', () => {
+  const labels = {
+    'com.foxos.managed': 'true',
+    'com.foxos.stateful-shadow': 'true',
+    'com.foxos.stateful-shadow.source-resource-id': 'res_' + '1'.repeat(32),
+    'com.foxos.stateful-shadow.operation': 'sso_' + '3'.repeat(32),
+    'com.foxos.resource.id': 'res_' + '2'.repeat(32)
+  };
+  assert.equal(roleFor(labels, 'henrygd/beszel:latest', 'foxos-stateful-shadow-example', [], []), 'application');
+  assert.deepEqual(safeLabels(labels), labels);
+  assert.equal(identityAliases({
+    Id: 'a'.repeat(64),
+    Names: ['/foxos-stateful-shadow-example']
+  }, labels).includes('foxos:' + labels['com.foxos.resource.id']), true);
+});
+
 test('a preserved rollback container cannot claim the adopted resource identity', () => {
   const labels = {
     'com.foxos.managed': 'true',

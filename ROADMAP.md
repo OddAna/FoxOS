@@ -176,6 +176,10 @@ target blocks only adoption/migration operations that require restore proof.
 - [x] Attach a matching real stateful application's same-host restore rehearsal
   to its Application Manifest while keeping off-host recovery and external
   authority blocking.
+- [x] Materialize that authenticated point-in-time proof as a separately
+  identified, persistent FoxOS-owned shadow with its own volumes, internal-only
+  network, resilient restart policy, explicit limits and current health proof,
+  without source mutation, route, traffic cutover or provider detachment.
 - [ ] Expand the implemented disposable dry-run, conflict detection, verified
   cutover and reversible rollback to real application classes one safety gate at
   a time.
@@ -242,6 +246,12 @@ target blocks only adoption/migration operations that require restore proof.
   source pause, encrypted archives, an internal-network candidate with no
   published host port, bounded host-namespace health proof and complete cleanup
   without traffic, route, provider or detach mutation.
+- [x] Keep a verified rehearsal snapshot running as a persistent FoxOS-owned
+  no-traffic shadow on separate volumes and a separate identity; registry proof
+  must confirm its restart policy, limits, mounts, absent host port and internal
+  network before it becomes current.
+- [ ] Add controlled shadow refresh/final synchronization before route cutover;
+  the current point-in-time shadow is not live replication.
 - [ ] Back up resource manifests, deployment metadata, environment configuration
   and proxy/TLS state without exposing secrets.
 - [ ] Provide per-resource restore and full-disaster restore workflows.

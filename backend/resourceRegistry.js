@@ -20,6 +20,9 @@ const SAFE_LABEL_KEYS = new Set([
   'com.foxos.deployment.disposable',
   'com.foxos.compose-deployment.disposable',
   'com.foxos.image-update.disposable',
+  'com.foxos.stateful-shadow',
+  'com.foxos.stateful-shadow.source-resource-id',
+  'com.foxos.stateful-shadow.operation',
   'com.foxos.deployment.group.id',
   'com.foxos.deployment.service',
   'com.foxos.deployment.revision',
@@ -234,6 +237,7 @@ function roleFor(labels, image, name, ports, routes) {
 
   if (isTrue(labels['com.foxos.gateway'])) return 'proxy';
   if (isTrue(labels['com.foxos.core'])) return 'core';
+  if (isTrue(labels['com.foxos.stateful-shadow'])) return 'application';
   if (/(^|[/_.-])(traefik|caddy|nginx|haproxy)(:|[/_.-]|$)/.test(identity) || name === 'coolify-proxy') return 'proxy';
   if (subtype === 'database' || /(postgres|mysql|mariadb|mongo|redis|qdrant|clickhouse|cassandra|elasticsearch|opensearch|influxdb)/.test(identity)) return 'database';
   if (/(worker|runner|agent|sentinel|realtime)/.test(identity)) return 'worker';
