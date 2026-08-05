@@ -206,7 +206,8 @@ target blocks only adoption/migration operations that require restore proof.
   secret/environment revisions.
 - [x] Capture a candidate workload's Docker environment through a value-free,
   keyed plan; recheck drift and persist sensitive names only as encrypted secret
-  references without changing the source container.
+  references without changing the source container. Provider-injected runtime
+  metadata is classified as excluded rather than copied into desired state.
 - [ ] Add reviewed import/rotation controls to the existing FoxOS interface.
 - [x] Prevent secret leakage through container discovery or repository manifests.
 
