@@ -545,6 +545,32 @@ test('a matching stateful rehearsal closes only the local restore blocker while 
     assert.equal(draft.evidence.restoreProof.offHostRecoveryProven, false);
     assert.equal(draft.evidence.restoreProof.secretValuesIncluded, false);
     assert.equal(draft.gates.status, 'blocked');
+
+    operation.mode = 'reversible-route-cutover';
+    operation.routeRehearsal = {
+      status: 'inactive',
+      activationProof: { verified: true, expectedAvailable: true, authorizedTls: true, statusCode: 200 },
+      removalProof: { verified: true, expectedAvailable: false, statusCode: 502 },
+      rollbackVerified: true,
+      sourceRemainedPausedThroughRollback: true,
+      coupledCutoverRehearsalProven: true,
+      productionTrafficCutover: false,
+      finalSynchronizationProven: false
+    };
+    operation.guarantees.routeMutated = true;
+    operation.guarantees.foxosCanaryTrafficCutover = true;
+    operation.guarantees.productionTrafficCutover = false;
+    operation.guarantees.finalSynchronizationProven = false;
+    operation.guarantees.coupledCutoverRehearsalProven = true;
+    const cutoverDraft = manager.createDraft({
+      resourceId: external.id,
+      confirmation: PLAN_APPLICATION_MANIFEST_CONFIRMATION
+    });
+    assert.equal(cutoverDraft.evidence.restoreProof.coupledCutoverRehearsalProven, true);
+    assert.equal(cutoverDraft.evidence.restoreProof.foxosCanaryRouteRolledBack, true);
+    assert.equal(cutoverDraft.evidence.restoreProof.productionTrafficCutover, false);
+    assert.equal(cutoverDraft.evidence.restoreProof.finalSynchronizationProven, false);
+    assert.equal(cutoverDraft.gates.blockers.some((blocker) => blocker.code === 'external-provider-authority'), true);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

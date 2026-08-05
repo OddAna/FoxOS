@@ -254,9 +254,15 @@ target blocks only adoption/migration operations that require restore proof.
   rehearsal. The previous healthy generation stays current until separate
   volumes/network/container pass digest, isolation, health and registry proof;
   failure before promotion leaves it untouched.
-- [ ] Couple final source quiesce/synchronization to reversible route cutover;
-  controlled refresh is still not live replication and does not prove that no
-  writes occurred after the snapshot.
+- [x] Couple final source quiesce to a reversible FoxOS HTTPS canary-route
+  rehearsal. The source remains paused from snapshot capture through candidate
+  restore, authorized-TLS activation and verified route removal; startup
+  recovery rolls back the route, unpauses the source and cleans exact temporary
+  resources without replay.
+- [ ] Perform the separately approved production-domain authority cutover. A
+  rolled-back canary rehearsal deliberately leaves
+  `finalSynchronizationProven=false`, does not move real traffic and does not
+  detach or mutate the existing provider.
 - [ ] Back up resource manifests, deployment metadata, environment configuration
   and proxy/TLS state without exposing secrets.
 - [ ] Provide per-resource restore and full-disaster restore workflows.

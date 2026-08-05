@@ -29,6 +29,11 @@
 		reverse_proxy foxos-route-adoption-lab:80
 	}
 
+	handle_path /_foxos/migrations/stateful-cutover/* {
+		header X-FoxOS-Route "foxos-stateful-cutover"
+		reverse_proxy foxos-route-stateful-cutover:8090
+	}
+
 	handle {
 		reverse_proxy foxos:8080
 	}

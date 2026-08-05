@@ -446,7 +446,8 @@ const statefulRehearsalManager = createStatefulRehearsalManager({
   dockerArchiveRequest: dockerClient.requestBuffer,
   resourceRegistry,
   encryptionStore,
-  secretManager
+  secretManager,
+  routeManager
 });
 const statefulShadowManager = createStatefulShadowManager({
   dataRoot: DATA_ROOT,
@@ -1125,6 +1126,15 @@ app.post('/api/stateful-rehearsals/plans', async (req, res) => {
   }
 });
 
+app.post('/api/stateful-rehearsals/cutover-plans', async (req, res) => {
+  try {
+    const plan = await statefulRehearsalManager.createCutoverPlan(req.body || {});
+    res.status(201).json({ plan });
+  } catch (error) {
+    sendStatefulRehearsalError(res, error, 'Could not plan stateful cutover rehearsal');
+  }
+});
+
 app.get('/api/stateful-rehearsals/plans/:planId', (req, res) => {
   try {
     res.json({ plan: statefulRehearsalManager.getPlan(req.params.planId) });
@@ -1142,6 +1152,18 @@ app.post('/api/stateful-rehearsals/plans/:planId/run', async (req, res) => {
     res.status(201).json({ operation });
   } catch (error) {
     sendStatefulRehearsalError(res, error, 'Could not run stateful rehearsal');
+  }
+});
+
+app.post('/api/stateful-rehearsals/cutover-plans/:planId/run', async (req, res) => {
+  try {
+    const operation = await statefulRehearsalManager.runPlan(
+      req.params.planId,
+      req.body && req.body.confirmation
+    );
+    res.status(201).json({ operation });
+  } catch (error) {
+    sendStatefulRehearsalError(res, error, 'Could not run stateful cutover rehearsal');
   }
 });
 

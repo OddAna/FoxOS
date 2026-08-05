@@ -354,6 +354,18 @@ function statefulRehearsalResourceFingerprint(resource) {
 }
 
 function statefulRestoreProofDescriptor(operation, rehearsalResourceFingerprintValue, resource) {
+  const routeRehearsal = operation && operation.routeRehearsal || null;
+  const coupledCutoverRehearsalProven = Boolean(
+    operation && operation.mode === 'reversible-route-cutover' && routeRehearsal &&
+    routeRehearsal.status === 'inactive' && routeRehearsal.rollbackVerified === true &&
+    routeRehearsal.sourceRemainedPausedThroughRollback === true &&
+    routeRehearsal.coupledCutoverRehearsalProven === true &&
+    routeRehearsal.productionTrafficCutover === false &&
+    routeRehearsal.finalSynchronizationProven === false &&
+    routeRehearsal.activationProof && routeRehearsal.activationProof.verified === true &&
+    routeRehearsal.removalProof && routeRehearsal.removalProof.verified === true
+  );
+  const restoreOnly = operation && (operation.mode === undefined || operation.mode === 'restore-only');
   if (
     !operation || operation.status !== 'verified-and-cleaned' ||
     operation.resourceId !== resource.id ||
@@ -379,7 +391,15 @@ function statefulRestoreProofDescriptor(operation, rehearsalResourceFingerprintV
     (operation.candidate.healthMode === 'docker-healthcheck' && operation.source.healthAfterProof.health !== 'healthy') ||
     operation.candidate.removedAfterProof !== true ||
     !operation.cleanup || operation.cleanup.completed !== true ||
-    !operation.guarantees || operation.guarantees.routeMutated !== false ||
+    !operation.guarantees ||
+    !(
+      (restoreOnly && operation.guarantees.routeMutated === false) ||
+      (coupledCutoverRehearsalProven && operation.guarantees.routeMutated === true &&
+        operation.guarantees.foxosCanaryTrafficCutover === true &&
+        operation.guarantees.productionTrafficCutover === false &&
+        operation.guarantees.finalSynchronizationProven === false &&
+        operation.guarantees.coupledCutoverRehearsalProven === true)
+    ) ||
     operation.guarantees.trafficCutover !== false ||
     operation.guarantees.providerMetadataMutated !== false ||
     operation.guarantees.providerDetached !== false ||
@@ -399,6 +419,10 @@ function statefulRestoreProofDescriptor(operation, rehearsalResourceFingerprintV
     candidateHealth: operation.candidate.health,
     candidateHealthMode: operation.candidate.healthMode,
     candidateRemovedAfterProof: true,
+    coupledCutoverRehearsalProven,
+    foxosCanaryRouteRolledBack: coupledCutoverRehearsalProven,
+    productionTrafficCutover: false,
+    finalSynchronizationProven: false,
     sourcePauseDurationMs: operation.source.pauseDurationMs,
     localEncryptedArchive: true,
     offHost: false,
