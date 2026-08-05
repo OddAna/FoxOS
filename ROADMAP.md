@@ -212,9 +212,11 @@ target blocks only adoption/migration operations that require restore proof.
   Docker, create encryption state, recover operations or expose an execution
   adapter, approval endpoint or run action.
 - [x] Add the read-only Settings scan and server-authoritative selection layer:
-  classify all observed resources, allow checkboxes only for evidence-complete
-  stateless review candidates, invalidate saved selections after snapshot
-  drift, and expose no apply, approval, source-stop or provider-detach action.
+  classify all observed resources, distinguish safe stateless preparation
+  candidates from evidence-complete execution readiness, allow candidates to be
+  selected while their missing evidence remains visible, invalidate saved
+  selections after snapshot drift, and expose no apply, approval, source-stop
+  or provider-detach action.
 - [x] Add the reviewed FoxOS interface for health target, applied runtime
   defaults, every route and replaceable certificate adapter selection. Persist
   only the allowlisted configuration on the server, bind it to the exact

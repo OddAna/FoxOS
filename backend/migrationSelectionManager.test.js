@@ -19,7 +19,8 @@ function planResource(index, overrides = {}) {
     classification: {
       authorityClass: 'provider-owned',
       stateClass: 'stateless',
-      workloadRole: 'application'
+      workloadRole: 'application',
+      independenceAudit: { eligibleForReadOnlyAudit: true }
     },
     evidence: { manifestRevisionId: 'manifest-' + index },
     availability: { currentMode: 'zero-downtime-required' },
@@ -81,7 +82,7 @@ test('persists only review-selectable resources and owner-only data', () => {
   assert.equal(fs.statSync(context.manager.paths.root).mode & 0o777, 0o700);
 });
 
-test('rejects resources that are blocked, protected or outside the plan', () => {
+test('rejects resources outside the reviewable class, protected or outside the plan', () => {
   const context = harness();
   for (const resourceId of [
     context.plan.resources[1].resourceId,
@@ -123,10 +124,31 @@ test('marks a saved selection stale when the registry snapshot changes', () => {
   }), (error) => error.code === 'stale-server-plan');
 });
 
-test('review-selectable predicate stays sealed to evidence-complete stateless resources', () => {
+test('review-selectable predicate accepts safe preparation candidates before evidence is complete', () => {
   assert.equal(isReviewSelectable(planResource('1')), true);
+  assert.equal(isReviewSelectable(planResource('1', { readiness: { evidenceComplete: false, reviewEligible: true } })), true);
+  assert.equal(isReviewSelectable(planResource('1', {
+    readiness: { evidenceComplete: false },
+    classification: {
+      authorityClass: 'provider-owned',
+      stateClass: 'stateless',
+      workloadRole: 'application',
+      independenceAudit: { eligibleForReadOnlyAudit: true }
+    }
+  })), true);
   assert.equal(isReviewSelectable(planResource('1', { migrationRequired: false })), false);
   assert.equal(isReviewSelectable(planResource('1', { protected: true })), false);
   assert.equal(isReviewSelectable(planResource('1', { strategy: 'drain-and-replace' })), false);
-  assert.equal(isReviewSelectable(planResource('1', { readiness: { evidenceComplete: false } })), false);
+  assert.equal(isReviewSelectable(planResource('1', {
+    readiness: { evidenceComplete: false, reviewEligible: false }
+  })), false);
+  assert.equal(isReviewSelectable(planResource('1', {
+    readiness: { evidenceComplete: false, reviewEligible: false },
+    classification: {
+      authorityClass: 'provider-owned',
+      stateClass: 'stateless',
+      workloadRole: 'application',
+      independenceAudit: { eligibleForReadOnlyAudit: false }
+    }
+  })), false);
 });

@@ -267,6 +267,11 @@ function createMigrationOrchestrator({
     const migrationRequired = Boolean(
       !resource.protected && classification && classification.authorityClass === 'provider-owned'
     );
+    const reviewEligible = Boolean(
+      migrationRequired && strategy === 'blue-green-atomic-route' &&
+      classification && classification.independenceAudit &&
+      classification.independenceAudit.eligibleForReadOnlyAudit === true
+    );
     const conflicts = (currentSnapshot.conflicts || []).filter((entry) => (
       (entry.resourceIds || []).includes(resource.id)
     )).map((entry) => ({
@@ -313,7 +318,9 @@ function createMigrationOrchestrator({
         ? 'already-foxos-managed'
         : evidenceComplete
           ? 'evidence-complete-apply-unavailable'
-          : 'evidence-incomplete';
+          : reviewEligible
+            ? 'review-eligible-evidence-incomplete'
+            : 'evidence-incomplete';
 
     const dependencies = manifest && manifest.desired && manifest.desired.dependencies || [];
     return {
@@ -355,6 +362,7 @@ function createMigrationOrchestrator({
       },
       readiness: {
         planningStatus,
+        reviewEligible,
         evidenceComplete,
         applyImplemented: false,
         applyApproved: false,
@@ -399,6 +407,10 @@ function createMigrationOrchestrator({
       )).length,
       evidenceComplete: migrationResources.filter((resource) => resource.readiness.evidenceComplete).length,
       evidenceIncomplete: migrationResources.filter((resource) => !resource.readiness.evidenceComplete).length,
+      reviewEligible: migrationResources.filter((resource) => resource.readiness.reviewEligible).length,
+      reviewEligibleEvidenceIncomplete: migrationResources.filter((resource) => (
+        resource.readiness.reviewEligible && !resource.readiness.evidenceComplete
+      )).length,
       applyImplemented: 0,
       byStrategy: countBy(resources, (resource) => resource.strategy),
       byAvailabilityMode: countBy(resources, (resource) => resource.availability.currentMode),

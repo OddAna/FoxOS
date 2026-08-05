@@ -164,6 +164,7 @@ test('whole-server planning is deterministic, class-aware, redacted and plan-onl
     assert.equal(first.summary.migrationRequired, 3);
     assert.equal(first.summary.alreadyFoxOSManaged, 1);
     assert.equal(first.summary.protectedSkipped, 1);
+    assert.equal(first.summary.reviewEligible, 1);
     assert.equal(first.summary.applyImplemented, 0);
     assert.equal(first.coordinationHints[0].dependencyDirectionKnown, false);
     assert.equal(first.coordinationHints[0].applyOrderInferred, false);
@@ -173,6 +174,7 @@ test('whole-server planning is deterministic, class-aware, redacted and plan-onl
     assert.equal(statelessPlan.availability.currentMode, 'zero-downtime-required');
     assert.equal(statelessPlan.availability.sourcePauseBudgetMs, 0);
     assert.equal(statelessPlan.readiness.evidenceComplete, true);
+    assert.equal(statelessPlan.readiness.reviewEligible, true);
     assert.equal(statelessPlan.blockers.evidence.length, 0);
     assert.equal(
       statelessPlan.blockers.transaction.some((entry) => entry.code === 'foxos-route-missing'),
