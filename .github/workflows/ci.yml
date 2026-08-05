@@ -75,6 +75,21 @@ jobs:
           docker compose -f docker-compose.yml -f docker-compose.gateway.yml -f docker-compose.ingress.yml config --quiet
           docker build --tag foxos-gateway-ci gateway
           docker build --tag foxos-ingress-ci ingress
+          ingress_check=$(docker run --detach --read-only \
+            --tmpfs /tmp:size=16m,mode=1777 \
+            --cap-drop ALL \
+            --cap-add NET_BIND_SERVICE \
+            --cap-add SETGID \
+            --cap-add SETUID \
+            --volume "$PWD/.foxos-data/ingress:/runtime:ro" \
+            foxos-ingress-ci)
+          sleep 1
+          if [[ "$(docker inspect --format '{{.State.Running}}' "$ingress_check")" != "true" ]]; then
+            docker logs "$ingress_check"
+            docker rm --force "$ingress_check"
+            exit 1
+          fi
+          docker rm --force "$ingress_check"
           docker run --rm --entrypoint caddy \
             -e FOXOS_DOMAIN=foxos.example.com \
             -e FOXOS_ACME_EMAIL=admin@example.com \
