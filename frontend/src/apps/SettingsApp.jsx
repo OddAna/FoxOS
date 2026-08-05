@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Settings, Globe, Monitor, Shield, User, Bell } from 'lucide-react';
+import { Settings, Globe, Monitor, Shield, User, Bell, Server } from 'lucide-react';
+import MigrationSettings from './MigrationSettings';
 
 const SettingsApp = () => {
   const [activeTab, setActiveTab] = useState('general');
@@ -11,6 +12,7 @@ const SettingsApp = () => {
     { id: 'security', icon: <Shield size={18} />, label: 'Güvenlik' },
     { id: 'notifications', icon: <Bell size={18} />, label: 'Bildirimler' },
     { id: 'users', icon: <User size={18} />, label: 'Kullanıcılar' },
+    { id: 'migration', icon: <Server size={18} />, label: 'Sunucu Geçişi' },
   ];
 
   return (
@@ -45,7 +47,7 @@ const SettingsApp = () => {
       </div>
       
       {/* Content */}
-      <div style={{ flex: 1, padding: '32px', overflowY: 'auto' }}>
+      <div data-settings-content style={{ flex: 1, padding: '32px', overflowY: 'auto' }}>
         <h2 style={{ fontSize: '24px', fontWeight: 'bold', marginBottom: '24px' }}>
           {tabs.find(t => t.id === activeTab)?.label}
         </h2>
@@ -62,7 +64,9 @@ const SettingsApp = () => {
           </div>
         )}
 
-        {activeTab !== 'general' && (
+        {activeTab === 'migration' && <MigrationSettings />}
+
+        {activeTab !== 'general' && activeTab !== 'migration' && (
           <p style={{ color: '#888', fontSize: '14px' }}>Bu bölüm yakında eklenecek.</p>
         )}
       </div>

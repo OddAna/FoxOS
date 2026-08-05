@@ -414,6 +414,14 @@ test('health is public while management APIs require a session', async () => {
     body: '{}'
   });
   assert.equal(migrationPlanResponse.status, 401);
+  const migrationSelectionResponse = await fetch(baseUrl() + '/api/migration-selections/current');
+  assert.equal(migrationSelectionResponse.status, 401);
+  const migrationSelectionSaveResponse = await fetch(baseUrl() + '/api/migration-selections/current', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}'
+  });
+  assert.equal(migrationSelectionSaveResponse.status, 401);
   const statelessMigrationsResponse = await fetch(baseUrl() + '/api/stateless-migrations');
   assert.equal(statelessMigrationsResponse.status, 401);
   const statelessMigrationPlanResponse = await fetch(baseUrl() + '/api/stateless-migrations/plans', {
@@ -729,6 +737,32 @@ test('setup creates an authenticated session and unlocks the workspace', async (
     serverMigrationPlan.planId + '.json'
   );
   assert.equal(fs.statSync(migrationPlanFile).mode & 0o777, 0o600);
+
+  const migrationSelectionStatusResponse = await fetch(
+    baseUrl() + '/api/migration-selections/current',
+    { headers: { Cookie: cookie } }
+  );
+  assert.equal(migrationSelectionStatusResponse.status, 200);
+  const migrationSelectionStatus = await migrationSelectionStatusResponse.json();
+  assert.equal(migrationSelectionStatus.state, 'empty');
+  assert.equal(migrationSelectionStatus.guarantees.reviewOnly, true);
+  assert.equal(migrationSelectionStatus.guarantees.applyImplemented, false);
+
+  const blockedMigrationSelectionResponse = await fetch(
+    baseUrl() + '/api/migration-selections/current',
+    {
+      method: 'PUT',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        serverPlanId: serverMigrationPlan.planId,
+        resourceIds: [serverMigrationPlan.resources[0].resourceId],
+        confirmation: 'SAVE MIGRATION SELECTION'
+      })
+    }
+  );
+  assert.equal(blockedMigrationSelectionResponse.status, 409);
+  assert.equal((await blockedMigrationSelectionResponse.json()).code, 'resource-not-review-selectable');
+  assert.equal(dockerRequestLog.length, 0);
 
   dockerRequestLog.length = 0;
   const statelessStatusResponse = await fetch(baseUrl() + '/api/stateless-migrations', {

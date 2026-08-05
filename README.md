@@ -253,6 +253,8 @@ The authenticated API exposes:
 | `POST /api/resources/scan` | Run a read-only inventory and atomically store a new snapshot |
 | `GET /api/resources` | Read the latest stored snapshot, ownership status, relationships, conflicts and adoption blockers |
 | `GET /api/resources/export` | Download a redacted provider-neutral migration plan |
+| `GET /api/migration-selections/current` | Read the current snapshot-bound, review-only interface selection |
+| `PUT /api/migration-selections/current` | Save eligible resource IDs for later review without starting a migration |
 | `POST /api/resources/:resourceId/adoption-plan` | Create a deterministic import draft for the strictly disposable pilot |
 | `GET /api/secrets` | Read encrypted-secret metadata without returning values |
 | `POST /api/secrets` | Create a new encrypted secret revision |
@@ -590,6 +592,21 @@ with `POST /api/migration-orchestrator/plans`, and read one through
 `.foxos-data/migration-orchestrator/`. This version has deliberately no apply,
 cutover or provider-detach endpoint; planning makes zero Docker requests and
 changes no runtime, route or provider state.
+
+The existing Settings window now includes **Server Migration**. Its manual scan
+uses the same read-only registry and orchestrator, keeps repeated instances such
+as multiple WordPress containers separate, and shows exact resource identity,
+health, current authority, class, routes, storage, availability policy,
+relationships and blockers. Resources are separated into review-ready,
+missing-evidence, unsupported-in-this-version, already-FoxOS-managed and
+protected-system states.
+
+Only evidence-complete stateless blue/green resources can be selected. Saving a
+selection writes an owner-only record under `.foxos-data/migration-selections/`
+and binds it to the exact server plan and registry snapshot. A later inventory
+change makes that selection stale instead of silently applying it to different
+runtime state. Browser storage is never the authority. The interface exposes no
+start, apply, approve, source-stop or provider-detach action.
 
 ## Sealed stateless transaction core
 
@@ -1056,8 +1073,10 @@ Do not copy its contents into Git or logs.
 - File operations are synchronous; very large copy/move operations can take time
 - No multi-user roles or permission levels
 - No audit log yet
-- General resource migration is not available; only the explicitly labeled
-  disposable pilot can be adopted, routed, backed up, restored and rolled back
+- General resource migration is not available. Settings can scan, classify and
+  save a snapshot-bound review selection, but it cannot start a transition;
+  only the explicitly labeled disposable pilot can currently be adopted,
+  routed, backed up, restored and rolled back
 - The stateless transaction has a real-Docker disposable route/TLS and failure
   proof, but normal Application Manifest materialization and arbitrary
   production domain/TLS authority are still sealed and not exposed for apply
