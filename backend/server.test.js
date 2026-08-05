@@ -422,6 +422,18 @@ test('health is public while management APIs require a session', async () => {
     body: '{}'
   });
   assert.equal(migrationSelectionSaveResponse.status, 401);
+  const migrationRunsResponse = await fetch(baseUrl() + '/api/migration-runs');
+  assert.equal(migrationRunsResponse.status, 401);
+  const migrationRunStartResponse = await fetch(baseUrl() + '/api/migration-runs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}'
+  });
+  assert.equal(migrationRunStartResponse.status, 401);
+  const migrationRunResponse = await fetch(
+    baseUrl() + '/api/migration-runs/mrun_' + '1'.repeat(32)
+  );
+  assert.equal(migrationRunResponse.status, 401);
   const statelessMigrationsResponse = await fetch(baseUrl() + '/api/stateless-migrations');
   assert.equal(statelessMigrationsResponse.status, 401);
   const statelessMigrationPlanResponse = await fetch(baseUrl() + '/api/stateless-migrations/plans', {
@@ -771,6 +783,27 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   );
   assert.equal(blockedMigrationSelectionResponse.status, 409);
   assert.equal((await blockedMigrationSelectionResponse.json()).code, 'resource-not-review-selectable');
+  assert.equal(dockerRequestLog.length, 0);
+
+  const migrationRunsStatusResponse = await fetch(baseUrl() + '/api/migration-runs', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(migrationRunsStatusResponse.status, 200);
+  const migrationRunsStatus = await migrationRunsStatusResponse.json();
+  assert.equal(migrationRunsStatus.summary.runs, 0);
+  assert.equal(migrationRunsStatus.guarantees.separateSaveActionRequired, false);
+
+  const blockedMigrationRunResponse = await fetch(baseUrl() + '/api/migration-runs', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      serverPlanId: serverMigrationPlan.planId,
+      resourceIds: [serverMigrationPlan.resources[0].resourceId],
+      confirmation: 'START SERVER MIGRATION'
+    })
+  });
+  assert.equal(blockedMigrationRunResponse.status, 409);
+  assert.equal((await blockedMigrationRunResponse.json()).code, 'resource-not-selectable');
   assert.equal(dockerRequestLog.length, 0);
 
   dockerRequestLog.length = 0;

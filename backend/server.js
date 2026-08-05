@@ -22,6 +22,10 @@ const {
   createMigrationSelectionManager
 } = require('./migrationSelectionManager');
 const {
+  MigrationRunError,
+  createMigrationRunManager
+} = require('./migrationRunManager');
+const {
   StatelessMigrationError,
   createStatelessMigrationManager
 } = require('./statelessMigrationManager');
@@ -32,6 +36,7 @@ const {
   StatelessMigrationReviewError,
   createStatelessMigrationReviewManager
 } = require('./statelessMigrationReviewManager');
+const { createUiApprovalManager } = require('./uiApprovalManager');
 const { createBackupManager } = require('./backupManager');
 const { createDockerClient } = require('./dockerClient');
 const { createEncryptionStore } = require('./encryptionStore');
@@ -518,15 +523,27 @@ const statelessMigrationManifestCompiler = createStatelessMigrationManifestCompi
   resourceRegistry,
   compileApplicationManifest: (resourceId) => applicationManifestManager.compile(resourceId)
 });
+const uiApprovalManager = createUiApprovalManager();
 const statelessMigrationManager = createStatelessMigrationManager({
   dataRoot: DATA_ROOT,
   getServerMigrationPlan: (planId) => migrationOrchestrator.getPlan(planId),
-  compileExecutionContract: (input) => statelessMigrationManifestCompiler.compile(input)
+  compileExecutionContract: (input) => statelessMigrationManifestCompiler.compile(input),
+  approvalVerifier: (input) => uiApprovalManager.verify(input)
 });
 const statelessMigrationReviewManager = createStatelessMigrationReviewManager({
   dataRoot: DATA_ROOT,
   getStatelessMigrationPlan: (planId) => statelessMigrationManager.getPlan(planId),
   getLatestRegistrySnapshot: () => resourceRegistry.getLatest()
+});
+const migrationRunManager = createMigrationRunManager({
+  dataRoot: DATA_ROOT,
+  getServerMigrationPlan: (planId) => migrationOrchestrator.getPlan(planId),
+  getLatestRegistrySnapshot: () => resourceRegistry.getLatest(),
+  saveSelection: (input) => migrationSelectionManager.save(input),
+  prepareStatelessPlan: (input) => statelessMigrationManager.createPlan(input),
+  getStatelessReviewStatus: (planId) => statelessMigrationReviewManager.status(planId),
+  executeStatelessMigration: (planId, approval) => statelessMigrationManager.execute(planId, approval),
+  issueApproval: (input) => uiApprovalManager.issue(input)
 });
 
 function sendAdoptionError(res, error, action) {
@@ -641,6 +658,17 @@ function sendMigrationSelectionError(res, error, action) {
       ? 'Migration selection operation failed'
       : error.message,
     code: error.code || 'migration-selection-error'
+  });
+}
+
+function sendMigrationRunError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof MigrationRunError)
+      ? 'Server migration run failed'
+      : error.message,
+    code: error.code || 'migration-run-error'
   });
 }
 
@@ -1608,6 +1636,35 @@ app.put('/api/migration-selections/current', (req, res) => {
     res.json({ selection, status: migrationSelectionManager.status() });
   } catch (error) {
     sendMigrationSelectionError(res, error, 'Could not save the migration selection');
+  }
+});
+
+app.get('/api/migration-runs', (req, res) => {
+  try {
+    res.json(migrationRunManager.status());
+  } catch (error) {
+    sendMigrationRunError(res, error, 'Could not read server migration runs');
+  }
+});
+
+app.post('/api/migration-runs', (req, res) => {
+  try {
+    const run = migrationRunManager.start(req.body || {}, {
+      type: 'foxos-session',
+      username: req.session.username,
+      sessionToken: req.session.token
+    });
+    res.status(202).json({ run });
+  } catch (error) {
+    sendMigrationRunError(res, error, 'Could not start server migration');
+  }
+});
+
+app.get('/api/migration-runs/:runId', (req, res) => {
+  try {
+    res.json({ run: migrationRunManager.getRun(req.params.runId) });
+  } catch (error) {
+    sendMigrationRunError(res, error, 'Could not read server migration run');
   }
 });
 

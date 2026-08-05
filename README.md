@@ -253,8 +253,11 @@ The authenticated API exposes:
 | `POST /api/resources/scan` | Run a read-only inventory and atomically store a new snapshot |
 | `GET /api/resources` | Read the latest stored snapshot, ownership status, relationships, conflicts and adoption blockers |
 | `GET /api/resources/export` | Download a redacted provider-neutral migration plan |
-| `GET /api/migration-selections/current` | Read the current snapshot-bound, review-only interface selection |
-| `PUT /api/migration-selections/current` | Save eligible resource IDs for later review without starting a migration |
+| `GET /api/migration-selections/current` | Read the snapshot-bound selection persisted internally by the latest start request |
+| `PUT /api/migration-selections/current` | Internal compatibility surface for selection persistence; it never executes a migration |
+| `GET /api/migration-runs` | Read owner-only whole-server migration run history and the latest state |
+| `POST /api/migration-runs` | Persist the exact selection and start immutable all-resource preflight followed by serial execution when every gate is ready |
+| `GET /api/migration-runs/:runId` | Read one migration run, per-resource blockers and verified operation IDs |
 | `GET /api/stateless-migrations/plans/:planId/review` | Read the server-owned reviewed configuration and drift state for one stateless plan |
 | `PUT /api/stateless-migrations/plans/:planId/review` | Save health target, runtime confirmation, every route confirmation and certificate adapter choice without applying them |
 | `POST /api/resources/:resourceId/adoption-plan` | Create a deterministic import draft for the strictly disposable pilot |
@@ -603,12 +606,22 @@ relationships and blockers. Resources are separated into review-ready,
 missing-evidence, unsupported-in-this-version, already-FoxOS-managed and
 protected-system states.
 
-Only evidence-complete stateless blue/green resources can be selected. Saving a
-selection writes an owner-only record under `.foxos-data/migration-selections/`
-and binds it to the exact server plan and registry snapshot. A later inventory
-change makes that selection stale instead of silently applying it to different
-runtime state. Browser storage is never the authority. The interface exposes no
-start, apply, approve, source-stop or provider-detach action.
+Running, fully inspected provider-owned stateless blue/green preparation
+candidates can be selected even while their unresolved evidence remains
+visible. The user-facing action is `Geçişi Başlat`; there is no separate save
+step. That request writes the exact IDs under
+`.foxos-data/migration-selections/`, creates an owner-only run under
+`.foxos-data/migration-runs/` and binds both to the exact plan and Registry
+snapshot. A later inventory change fails closed before execution. Browser
+storage is never authority.
+
+The run prepares every selected member before it changes any runtime. A blocker
+on one member prevents partial execution. When all gates are complete, explicit
+required dependencies determine order and resources execute serially. Each
+transaction receives an in-memory, short-lived, one-time grant bound to the
+authenticated FoxOS session, plan, resource and evidence fingerprint. Raw
+grants are not returned or stored. There is no separate approve endpoint,
+source-stop, provider-detach or destructive cleanup action.
 
 Opening an eligible resource prepares its deterministic stateless review plan
 in the same Settings page. The interface selects a health target from observed
@@ -630,9 +643,11 @@ health-gates it, stages a conflict-checked TLS route, switches traffic
 atomically, requires zero unavailable probe samples, preserves the source and
 automatically rolls traffic back if any post-switch proof fails.
 
-Production construction is deliberately sealed: it has no runtime adapter, no
-FoxOS UI approval provider, no run endpoint and no approve endpoint. Only
-owner-authenticated review planning is exposed. The transaction implementation
+Production construction now has the authenticated run coordinator and
+short-lived FoxOS UI approval provider, but it deliberately has no general
+runtime/route/TLS execution adapter and no separate approve endpoint. The run
+therefore records exact blockers and executes zero resources until all evidence,
+review and production adapter gates are complete. The transaction implementation
 cannot stop or recreate the source, detach the provider or perform destructive
 source cleanup. Approval values and adapter-returned sensitive fields are never
 persisted.
@@ -651,10 +666,10 @@ Authenticated clients can use `GET /api/stateless-migrations`, create a
 review-only plan with `POST /api/stateless-migrations/plans`, and read one with
 `GET /api/stateless-migrations/plans/:planId`. Its reviewed configuration is
 available through `GET` and `PUT`
-`/api/stateless-migrations/plans/:planId/review`. There is intentionally no API
-or CLI operation that starts a migration. A later, separately authorized FoxOS
-step must supply a short-lived, one-time, complete-contract-bound approval and
-the reviewed runtime/route adapters before execution can be enabled.
+`/api/stateless-migrations/plans/:planId/review`. Whole-server execution starts
+only through `POST /api/migration-runs`; it supplies the one-time,
+complete-contract-bound approval internally and remains blocked until the
+reviewed production runtime/route adapters exist.
 
 The transaction is exercised against real Docker by a separate, deliberately
 non-production lab command:
@@ -686,9 +701,10 @@ The Settings review stores the operator's replaceable adapter selection without
 storing adapter credentials or activating a provider. DNS and certificate
 implementations remain replaceable; FoxOS does not infer Cloudflare or any other
 provider and the clean base installation still needs no domain, token, external
-account or paid service. Production still has no runtime adapter, approval
-verifier, run endpoint or approve endpoint, so creating or reviewing this
-contract cannot start a migration or change traffic.
+account or paid service. Production still has no general runtime/route adapter
+or separate approve endpoint, so creating or reviewing this contract alone
+cannot change traffic. `Geçişi Başlat` creates a durable preflight run and fails
+closed before mutation while those adapters or resource evidence are missing.
 
 The authenticated API and standalone CLI use the same compiler context. A CLI
 status read initializes no Docker connection or encryption key; the heavier
@@ -1087,12 +1103,13 @@ Do not copy its contents into Git or logs.
 - File operations are synchronous; very large copy/move operations can take time
 - No multi-user roles or permission levels
 - No audit log yet
-- General resource migration is not available. Settings can scan, classify and
-  save a snapshot-bound preparation selection for safe stateless candidates and
-  show each candidate's unresolved evidence, but it cannot start a transition;
-  selection does not mean execution-ready. Only the explicitly labeled
-  disposable pilot can currently be adopted, routed, backed up, restored and
-  rolled back
+- Settings now starts a durable whole-server migration run from one selected
+  action, persists the exact intent internally, preflights all members and is
+  ready to serialize verified transactions. General production execution still
+  fails closed because the provider-neutral Docker/route/TLS adapter is not yet
+  injected; selection does not mean execution-ready. Only the explicitly
+  labeled disposable pilot can currently complete the full candidate, route,
+  traffic and rollback transaction
 - The stateless transaction has a real-Docker disposable route/TLS and failure
   proof, but normal Application Manifest materialization and arbitrary
   production domain/TLS authority are still sealed and not exposed for apply
