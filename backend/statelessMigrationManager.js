@@ -52,6 +52,27 @@ class StatelessMigrationError extends Error {
   }
 }
 
+function transactionFailure(error) {
+  if (error instanceof StatelessMigrationError) return error;
+  if (
+    error && error.name === 'ProductionStatelessMigrationError' &&
+    /^[a-z0-9][a-z0-9-]{2,80}$/.test(String(error.code || '')) &&
+    typeof error.message === 'string' && error.message.length >= 1 && error.message.length <= 240 &&
+    !/[\r\n\0]/.test(error.message)
+  ) {
+    return new StatelessMigrationError(
+      error.message,
+      Number.isInteger(error.statusCode) ? error.statusCode : 500,
+      error.code
+    );
+  }
+  return new StatelessMigrationError(
+    'Stateless migration transaction failed',
+    500,
+    'stateless-migration-failed'
+  );
+}
+
 function hash(value, length = 32) {
   return crypto.createHash('sha256').update(String(value)).digest('hex').slice(0, length);
 }
@@ -672,11 +693,7 @@ function createStatelessMigrationManager({
       prune(operationsRoot, MAX_OPERATIONS, 'startedAt', 'operationId');
       return operation;
     } catch (error) {
-      const failure = error instanceof StatelessMigrationError ? error : new StatelessMigrationError(
-        'Stateless migration transaction failed',
-        500,
-        'stateless-migration-failed'
-      );
+      const failure = transactionFailure(error);
       if (switched) {
         operation.rollback.automaticAttempted = true;
         try {

@@ -660,6 +660,16 @@ One authenticated `Geçişi Başlat` action performs the complete transaction:
    samples with zero unavailable responses. Any failed post-switch proof routes
    traffic back to the continuously running source and verifies rollback.
 
+Candidate startup uses the verified running-process contract, not a mutable
+process title or an unreviewed provider wrapper. Ordinary argv is accepted only
+when its executable exists inside the source container. Next standalone
+runtimes are reconstructed from the observed Node executable, observed
+standalone working directory and existing `server.js`; this avoids rerunning a
+wrapper that may perform database schema work. Unknown process-title patterns
+fail closed before route or traffic changes. Bounded adapter failures keep their
+actionable code in the owner-only run record without storing environment or
+secret values.
+
 The transaction has no method that can stop or recreate the source, detach the
 provider, delete provider state or perform destructive source cleanup. A
 successful cutover leaves the source available as the exact rollback target.

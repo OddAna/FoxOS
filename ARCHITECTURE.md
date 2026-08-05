@@ -414,6 +414,15 @@ operation-scoped TCP bridges that span the observed source network and
 aliases include the operation identity so common names such as `db` cannot
 cross-connect unrelated migrations.
 
+Candidate startup is not copied blindly from a mutable process title or a
+provider wrapper. FoxOS verifies that an observed argv begins with an executable
+inside the source container and preserves its current working directory. For a
+Next standalone runtime whose process deliberately overwrites `/proc/1/cmdline`
+with a `next-server` title, FoxOS binds the observed executable, observed
+standalone working directory and existing `server.js` directly, avoiding a
+wrapper that may rerun database migrations. Unsupported titles fail closed with
+an actionable, allowlisted operation error before route or traffic mutation.
+
 FoxOS Caddy owns candidate routes and future ACME HTTP-01 renewal. For the first
 legacy adapter, the exact matching browser-trusted certificate is imported from
 readable Traefik ACME storage as one-time migration input without calling a
