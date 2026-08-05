@@ -141,7 +141,12 @@ function redactedEnvironment(record) {
 }
 
 function providerRuntimeEnvironmentName(provider, name) {
-  if (provider === 'coolify') return /^COOLIFY_[A-Z0-9_]*$/.test(name);
+  if (provider === 'coolify') {
+    return (
+      /^COOLIFY_[A-Z0-9_]*$/.test(name) ||
+      /^SERVICE_(?:FQDN|NAME|URL)_[A-Z0-9_]+$/.test(name)
+    );
+  }
   return false;
 }
 
@@ -206,13 +211,33 @@ function createWorkloadEvidenceManager({
     return { snapshot, resource };
   }
 
-  function candidate(resource) {
+  function sourceCandidate(resource) {
     const audit = resource.classification && resource.classification.independenceAudit;
     if (!audit || !audit.eligibleForReadOnlyAudit) {
       throw new WorkloadEvidenceError(
         'Only a running, fully inspected provider-owned stateless application can capture workload evidence',
         409,
         'not-a-stateless-application-candidate'
+      );
+    }
+  }
+
+  function environmentCandidate(resource) {
+    const classification = resource.classification || {};
+    const eligible = (
+      resource.role === 'application' &&
+      resource.runtime && resource.runtime.state === 'running' &&
+      resource.runtime.inspection === 'complete' &&
+      !resource.protected &&
+      classification.workloadRole === 'application' &&
+      ['stateless', 'stateful'].includes(classification.stateClass) &&
+      classification.authorityClass === 'provider-owned'
+    );
+    if (!eligible) {
+      throw new WorkloadEvidenceError(
+        'Only a running, fully inspected provider-owned stateless or stateful application can capture environment evidence',
+        409,
+        'not-an-environment-evidence-candidate'
       );
     }
   }
@@ -270,7 +295,7 @@ function createWorkloadEvidenceManager({
       throw new WorkloadEvidenceError('Exact workload source planning confirmation is required', 400, 'confirmation-required');
     }
     const { snapshot, resource } = latestSnapshotResource(input.resourceId);
-    candidate(resource);
+    sourceCandidate(resource);
     const repository = validateRepositoryUrl(input.repository);
     const ref = validateGitRef(input.ref);
     const contextPath = validateRelativePath(input.contextPath, '.');
@@ -344,7 +369,7 @@ function createWorkloadEvidenceManager({
       throw new WorkloadEvidenceError('Exact workload source capture confirmation is required', 400, 'confirmation-required');
     }
     const { snapshot, resource } = latestSnapshotResource(plan.resourceId);
-    candidate(resource);
+    sourceCandidate(resource);
     if (
       currentFingerprint(snapshot, resource) !== plan.resourceFingerprint ||
       resource.runtime.containerId !== plan.observedContainerId ||
@@ -435,7 +460,7 @@ function createWorkloadEvidenceManager({
       throw new WorkloadEvidenceError('Exact workload environment planning confirmation is required', 400, 'confirmation-required');
     }
     const { snapshot, resource } = latestSnapshotResource(input.resourceId);
-    candidate(resource);
+    environmentCandidate(resource);
     const values = await inspectEnvironment(resource);
     if (values.size !== resource.runtime.environmentVariableCount) {
       throw new WorkloadEvidenceError('Observed environment count changed after registry scan', 409, 'environment-count-mismatch');
@@ -472,6 +497,7 @@ function createWorkloadEvidenceManager({
       registrySnapshotId: snapshot.snapshotId,
       resourceFingerprint: currentFingerprint(snapshot, resource),
       observedContainerId: resource.runtime.containerId,
+      stateClass: resource.classification.stateClass,
       environmentFingerprint: secretManager.fingerprintEnvironment(
         Array.from(values, ([name, value]) => name + '=' + value)
       ),
@@ -505,7 +531,7 @@ function createWorkloadEvidenceManager({
       throw new WorkloadEvidenceError('Exact workload environment capture confirmation is required', 400, 'confirmation-required');
     }
     const { snapshot, resource } = latestSnapshotResource(plan.resourceId);
-    candidate(resource);
+    environmentCandidate(resource);
     if (
       currentFingerprint(snapshot, resource) !== plan.resourceFingerprint ||
       resource.runtime.containerId !== plan.observedContainerId
@@ -542,6 +568,7 @@ function createWorkloadEvidenceManager({
       resourceId: resource.id,
       resourceFingerprint: plan.resourceFingerprint,
       observedContainerId: resource.runtime.containerId,
+      stateClass: resource.classification.stateClass,
       environment: redactedEnvironment(environment),
       capturedFromPlanId: plan.planId,
       capturedAt: now(),

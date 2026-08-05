@@ -48,7 +48,7 @@ function resource() {
         nanoCpus: null,
         pidsLimit: null
       },
-      environmentVariableCount: 5,
+      environmentVariableCount: 6,
       inspection: 'complete'
     },
     ports: [{ privatePort: 3000, protocol: 'tcp', hostIp: null, hostPort: null }],
@@ -96,6 +96,7 @@ function harness() {
           'NODE_ENV=production',
           'CRM_TARGET=dual',
           'COOLIFY_FQDN=site.example.test',
+          'SERVICE_URL_SITE=https://site.example.test',
           'DAAS_HUB_SHARED_SECRET=' + RUNTIME_SECRET_VALUE,
           'HIGHLEVEL_API_TOKEN=another-encrypted-runtime-value'
         ]
@@ -190,19 +191,19 @@ test('environment capture classifies sensitive names, rejects drift and persists
     });
     assert.deepEqual(plan.ordinaryNames, ['CRM_TARGET', 'NODE_ENV']);
     assert.deepEqual(plan.secretNames, ['DAAS_HUB_SHARED_SECRET', 'HIGHLEVEL_API_TOKEN']);
-    assert.deepEqual(plan.excludedNames, ['COOLIFY_FQDN']);
+    assert.deepEqual(plan.excludedNames, ['COOLIFY_FQDN', 'SERVICE_URL_SITE']);
     assert.equal(plan.valuesIncluded, false);
     assert.equal(JSON.stringify(plan).includes(RUNTIME_SECRET_VALUE), false);
     assert.deepEqual(dockerCalls.map((call) => call.method), ['GET']);
 
     const capture = await manager.captureEnvironment(plan.planId, plan.confirmation);
-    assert.equal(capture.environment.variableCount, 5);
+    assert.equal(capture.environment.variableCount, 6);
     assert.equal(capture.environment.managedVariableCount, 4);
-    assert.equal(capture.environment.excludedVariableCount, 1);
-    assert.deepEqual(capture.environment.excluded, [{
-      name: 'COOLIFY_FQDN',
-      reason: 'provider-runtime-metadata'
-    }]);
+    assert.equal(capture.environment.excludedVariableCount, 2);
+    assert.deepEqual(capture.environment.excluded, [
+      { name: 'COOLIFY_FQDN', reason: 'provider-runtime-metadata' },
+      { name: 'SERVICE_URL_SITE', reason: 'provider-runtime-metadata' }
+    ]);
     assert.equal(capture.environment.secretValuesIncluded, false);
     assert.equal(capture.environment.ordinaryValuesIncluded, false);
     assert.equal(capture.guarantees.runtimeMutated, false);
@@ -210,10 +211,10 @@ test('environment capture classifies sensitive names, rejects drift and persists
     const environment = secretManager.getEnvironmentRevision(RESOURCE_ID);
     assert.equal(environment.revision, capture.environment.revision);
     assert.equal(environment.secretRefs.length, 2);
-    assert.deepEqual(environment.excluded, [{
-      name: 'COOLIFY_FQDN',
-      reason: 'provider-runtime-metadata'
-    }]);
+    assert.deepEqual(environment.excluded, [
+      { name: 'COOLIFY_FQDN', reason: 'provider-runtime-metadata' },
+      { name: 'SERVICE_URL_SITE', reason: 'provider-runtime-metadata' }
+    ]);
     assert.equal(JSON.stringify(capture).includes(RUNTIME_SECRET_VALUE), false);
     const persistedSecrets = fs.readdirSync(secretManager.paths.recordsRoot, { recursive: true })
       .filter((entry) => String(entry).endsWith('.json'))
@@ -228,6 +229,48 @@ test('environment capture classifies sensitive names, rejects drift and persists
     await assert.rejects(
       () => manager.captureEnvironment(plan.planId, plan.confirmation),
       (error) => error.code === 'environment-evidence-plan-stale'
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('stateful application environment evidence stays GET-only while source capture remains stateless-only', async () => {
+  const { dockerCalls, manager, root, setSnapshot } = harness();
+  try {
+    const stateful = resource();
+    stateful.mounts = [{
+      type: 'volume',
+      name: 'site-data',
+      source: '/var/lib/docker/volumes/site-data/_data',
+      destination: '/data',
+      readOnly: false
+    }];
+    stateful.classification = classifyResource(stateful);
+    assert.equal(stateful.classification.stateClass, 'stateful');
+    setSnapshot(snapshot(stateful));
+
+    const plan = await manager.planEnvironment({
+      resourceId: RESOURCE_ID,
+      confirmation: PLAN_ENVIRONMENT_CONFIRMATION
+    });
+    assert.equal(plan.stateClass, 'stateful');
+    assert.equal(plan.guarantees.runtimeMutated, false);
+    const capture = await manager.captureEnvironment(plan.planId, plan.confirmation);
+    assert.equal(capture.stateClass, 'stateful');
+    assert.equal(capture.environment.managedVariableCount, 4);
+    assert.deepEqual(dockerCalls.map((call) => call.method), ['GET', 'GET']);
+
+    await assert.rejects(
+      () => manager.planSource({
+        resourceId: RESOURCE_ID,
+        repository: 'https://github.com/example/private-site.git',
+        ref: 'main',
+        credentialSecret: 'git/site/read',
+        username: 'x-access-token',
+        confirmation: PLAN_SOURCE_CONFIRMATION
+      }),
+      (error) => error.code === 'not-a-stateless-application-candidate'
     );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

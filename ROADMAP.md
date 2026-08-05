@@ -208,6 +208,8 @@ target blocks only adoption/migration operations that require restore proof.
   keyed plan; recheck drift and persist sensitive names only as encrypted secret
   references without changing the source container. Provider-injected runtime
   metadata is classified as excluded rather than copied into desired state.
+  This read-only evidence path covers fully inspected provider-owned stateless
+  and stateful applications; persistence and cutover authority do not expand.
 - [ ] Add reviewed import/rotation controls to the existing FoxOS interface.
 - [x] Prevent secret leakage through container discovery or repository manifests.
 
