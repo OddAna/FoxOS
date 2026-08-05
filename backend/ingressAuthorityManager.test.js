@@ -81,3 +81,38 @@ test('staged routes switch through owned ingress and remove host authority on ro
   assert.equal(hostCalls.some((call) => call.includes('--to-ports') && call.includes('9443')), true);
   fs.rmSync(dataRoot, { recursive: true, force: true });
 });
+
+test('legacy readiness waits for a browser-trusted response before traffic authority', async () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-ingress-legacy-'));
+  let requests = 0;
+  const manager = createIngressAuthorityManager({
+    dataRoot,
+    dockerRequest: async () => ({}),
+    dockerExec: async () => ({ exitCode: 0 }),
+    hostCommand: async () => ({ success: false }),
+    delay: async () => {},
+    httpsRequest: (options, callback) => {
+      requests += 1;
+      const request = new EventEmitter();
+      request.setTimeout = () => {};
+      request.destroy = (error) => request.emit('error', error);
+      request.end = () => {
+        if (requests === 1) return setImmediate(() => request.emit('error', new Error('backend resolving')));
+        const response = new EventEmitter();
+        response.statusCode = 307;
+        response.headers = {};
+        response.socket = { authorized: true };
+        response.resume = () => setImmediate(() => response.emit('end'));
+        callback(response);
+      };
+      assert.equal(options.hostname, 'foxos-ingress');
+      assert.equal(options.servername, 'app.example.com');
+      return request;
+    }
+  });
+  const proof = await manager.verifyLegacyDomain({ hostname: 'app.example.com', attempts: 2 });
+  assert.equal(proof.legacyReady, true);
+  assert.equal(proof.attempts, 2);
+  assert.equal(requests, 2);
+  fs.rmSync(dataRoot, { recursive: true, force: true });
+});

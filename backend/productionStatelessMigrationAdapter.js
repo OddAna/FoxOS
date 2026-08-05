@@ -95,7 +95,8 @@ function createProductionStatelessMigrationAdapter({
     !resourceRegistry || typeof resourceRegistry.getLatest !== 'function' ||
     !secretManager || typeof secretManager.resolveEnvironment !== 'function' ||
     !certificateImporter || typeof certificateImporter.importDomain !== 'function' ||
-    !ingressAuthority || typeof ingressAuthority.stageRoutes !== 'function'
+    !ingressAuthority || typeof ingressAuthority.stageRoutes !== 'function' ||
+    typeof ingressAuthority.verifyLegacyDomain !== 'function'
   ) {
     throw new Error('Production stateless adapter requires Docker, registry, secrets, certificate and ingress adapters');
   }
@@ -516,6 +517,12 @@ function createProductionStatelessMigrationAdapter({
       proxyContainerId: adapterState.proxy.containerId,
       legacyNetwork: adapterState.proxy.legacyNetwork
     });
+    for (const route of plan.executionContract.routes) {
+      await ingressAuthority.verifyLegacyDomain({
+        hostname: route.domain,
+        requestPath: route.path
+      });
+    }
     for (const route of plan.executionContract.routes) {
       await certificateImporter.importDomain({
         domain: route.domain,
