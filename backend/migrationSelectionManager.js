@@ -32,13 +32,18 @@ function readJson(target, fallback = null) {
 }
 
 function isReviewSelectable(resource) {
+  const plannedEligibility = resource && resource.readiness && resource.readiness.reviewEligible;
+  const reviewEligible = plannedEligibility === true || Boolean(
+    plannedEligibility === undefined &&
+    resource && resource.classification && resource.classification.independenceAudit &&
+    resource.classification.independenceAudit.eligibleForReadOnlyAudit === true
+  );
   return Boolean(
     resource &&
     resource.migrationRequired === true &&
     resource.protected !== true &&
     resource.strategy === 'blue-green-atomic-route' &&
-    resource.readiness &&
-    resource.readiness.evidenceComplete === true
+    reviewEligible
   );
 }
 
@@ -172,7 +177,8 @@ function createMigrationSelectionManager({
         stateClass: resource.classification && resource.classification.stateClass || null,
         workloadRole: resource.classification && resource.classification.workloadRole || null,
         manifestRevisionId: resource.evidence && resource.evidence.manifestRevisionId || null,
-        availabilityMode: resource.availability && resource.availability.currentMode || null
+        availabilityMode: resource.availability && resource.availability.currentMode || null,
+        evidenceComplete: resource.readiness && resource.readiness.evidenceComplete === true
       };
     });
 

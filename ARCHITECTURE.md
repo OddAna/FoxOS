@@ -390,6 +390,13 @@ route or provider state, contains no ordinary environment or secret values and
 has no apply endpoint. A resource whose evidence is complete is reported as
 `evidence-complete-apply-unavailable`, never as migrated or approved.
 
+Selection for preparation is deliberately earlier than execution readiness. A
+running, fully inspected, provider-owned stateless application may be marked
+`reviewEligible` and selected so the operator can work through its missing
+source, environment, route and proof requirements. `evidenceComplete` remains a
+separate, stricter state. Selection changes no runtime and can never bypass the
+sealed approval or execution gates.
+
 ### Implemented boundary: sealed stateless transaction core
 
 The first apply-side slice is a provider-neutral transaction state machine,
@@ -659,6 +666,12 @@ for every compiled route. The browser is not authority: the allowlisted record
 is owner-only on the server and is bound to the stateless plan, whole-server
 plan, registry snapshot, resource, manifest revision, evidence fingerprint and
 execution contract. Registry or contract drift makes it stale.
+
+The scan screen does not call an evidence-incomplete candidate ready to run. It
+calls the safe read-only audit class eligible for migration preparation, allows
+that preparation set to be saved server-side, and keeps unresolved contract
+evidence visible in the same detail page. Execution readiness and approval
+remain separate and false.
 
 This boundary remains plan-and-review-only. A certificate adapter selection is
 intent, not a credential or active provider binding. Production still receives

@@ -69,7 +69,7 @@ const SELECT_STYLE = {
 };
 
 const REVIEW_STATES = {
-  ready: 'İncelemeye uygun',
+  ready: 'Geçiş hazırlığına uygun',
   blocked: 'Eksik bilgi',
   unsupported: 'Bu sürümde desteklenmiyor',
   managed: 'FoxOS yönetiminde',
@@ -143,7 +143,12 @@ function reviewState(resource) {
   if (resource.protected) return 'protected';
   if (!resource.migrationRequired) return 'managed';
   if (resource.strategy !== 'blue-green-atomic-route') return 'unsupported';
-  if (!resource.readiness?.evidenceComplete) return 'blocked';
+  const plannedEligibility = resource.readiness?.reviewEligible;
+  const reviewEligible = plannedEligibility === true || (
+    plannedEligibility === undefined &&
+    resource.classification?.independenceAudit?.eligibleForReadOnlyAudit === true
+  );
+  if (!reviewEligible) return 'blocked';
   return 'ready';
 }
 
@@ -516,6 +521,7 @@ const MigrationSettings = () => {
             <DetailLine label="Yönetim">{CLASS_LABELS[classification.authorityClass] || classification.authorityClass}</DetailLine>
             <DetailLine label="Kaynak sınıfı">{CLASS_LABELS[classification.workloadRole] || classification.workloadRole} · {CLASS_LABELS[classification.stateClass] || classification.stateClass}</DetailLine>
             <DetailLine label="İnceleme stratejisi">{STRATEGY_LABELS[detailResource.strategy] || detailResource.strategy}</DetailLine>
+            <DetailLine label="Hazırlık durumu">{detailResource.readiness?.evidenceComplete ? 'Önkoşullar tamam' : 'Eksikler ayrıntılarda çözülecek'}</DetailLine>
             <DetailLine label="Erişilebilirlik">{AVAILABILITY_LABELS[detailResource.availability?.currentMode] || detailResource.availability?.currentMode}</DetailLine>
             <DetailLine label="İmaj" mono>{observed.runtime?.image}</DetailLine>
             <DetailLine label="Container" mono>{shortId(observed.runtime?.containerId)}</DetailLine>

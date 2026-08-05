@@ -1088,9 +1088,11 @@ Do not copy its contents into Git or logs.
 - No multi-user roles or permission levels
 - No audit log yet
 - General resource migration is not available. Settings can scan, classify and
-  save a snapshot-bound review selection, but it cannot start a transition;
-  only the explicitly labeled disposable pilot can currently be adopted,
-  routed, backed up, restored and rolled back
+  save a snapshot-bound preparation selection for safe stateless candidates and
+  show each candidate's unresolved evidence, but it cannot start a transition;
+  selection does not mean execution-ready. Only the explicitly labeled
+  disposable pilot can currently be adopted, routed, backed up, restored and
+  rolled back
 - The stateless transaction has a real-Docker disposable route/TLS and failure
   proof, but normal Application Manifest materialization and arbitrary
   production domain/TLS authority are still sealed and not exposed for apply
