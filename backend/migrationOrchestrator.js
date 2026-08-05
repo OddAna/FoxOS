@@ -2,6 +2,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { canonicalJson } = require('./applicationManifestManager');
+const { TRANSACTION_PROVEN_MANIFEST_BLOCKERS } = require('./statelessMigrationManifestCompiler');
 const { atomicWriteJson } = require('./resourceRegistry');
 
 const MIGRATION_ORCHESTRATOR_SCHEMA_VERSION = 1;
@@ -288,11 +289,19 @@ function createMigrationOrchestrator({
     }
 
     const manifestBlockers = manifest && manifest.gates && manifest.gates.blockers || [];
+    const transactionAcquiredBlockers = strategy === 'blue-green-atomic-route'
+      ? uniqueBlockers(manifestBlockers.filter((entry) => (
+        TRANSACTION_PROVEN_MANIFEST_BLOCKERS.has(entry.code)
+      )).map((entry) => ({ ...entry, source: 'stateless-transaction' })))
+      : [];
     const authorityBlockers = uniqueBlockers(manifestBlockers.filter((entry) => (
       entry.code === 'external-provider-authority'
     )).map((entry) => ({ ...entry, source: 'application-manifest' })));
     const evidenceBlockers = uniqueBlockers([
-      ...manifestBlockers.filter((entry) => entry.code !== 'external-provider-authority')
+      ...manifestBlockers.filter((entry) => (
+        entry.code !== 'external-provider-authority' &&
+        !(strategy === 'blue-green-atomic-route' && TRANSACTION_PROVEN_MANIFEST_BLOCKERS.has(entry.code))
+      ))
         .map((entry) => ({ ...entry, source: 'application-manifest' })),
       ...(compileFailure ? [compileFailure] : [])
     ]);
@@ -341,6 +350,7 @@ function createMigrationOrchestrator({
       blockers: {
         authority: authorityBlockers,
         evidence: evidenceBlockers,
+        transaction: transactionAcquiredBlockers,
         implementation: gaps
       },
       readiness: {

@@ -118,6 +118,14 @@
   this adapter or its UI-approval emulator into `server.js`, accept a real
   domain, expose a run/approve API, migrate an existing container or infer
   provider-detach permission from the lab proof.
+- The generic stateless manifest compiler is review-only. Preserve exact
+  registry/manifest drift binding, immutable OCI-to-image binding, value-free
+  environment references, all observed domain/path routes with exact private
+  ports, no writable mounts or host ports, explicit candidate limits and
+  replaceable browser-trusted certificate/DNS adapter selection. Production may
+  receive this compiler while remaining sealed, but do not inject a runtime or
+  route adapter, add run/approve endpoints, select a provider, or start a real
+  transition before the reviewed interface and Burak's explicit authorization.
 - Read `ARCHITECTURE.md` before changing discovery, deployment, domains,
   secrets, persistence, backup or migration behavior.
 

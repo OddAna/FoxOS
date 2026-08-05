@@ -200,6 +200,7 @@ function harness(options = {}) {
       assert.equal(planId, SERVER_PLAN_ID);
       return plan;
     },
+    compileExecutionContract: options.compiler === undefined ? null : options.compiler,
     executionAdapter: adapter,
     approvalVerifier: verifier,
     clock: () => new Date('2026-08-05T10:00:00.000Z'),
@@ -232,6 +233,51 @@ test('stateless review plans are deterministic, owner-only and require a future 
   assert.equal(first.readiness.blockers.length, 0);
   assert.equal(fs.statSync(manager.paths.root).mode & 0o777, 0o700);
   assert.equal(fs.statSync(path.join(manager.paths.plansRoot, first.planId + '.json')).mode & 0o777, 0o600);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('a provider-neutral manifest contract is fingerprinted into the review plan and its blockers fail closed', () => {
+  const contract = {
+    contractId: 'smcontract_' + 'a'.repeat(32),
+    readiness: {
+      status: 'blocked',
+      blockers: [{
+        code: 'route-private-port-ambiguous',
+        section: 'routes',
+        severity: 'blocking',
+        source: 'stateless-manifest-compiler',
+        message: 'Select the exact private port.'
+      }]
+    },
+    guarantees: {
+      runtimeMutated: false,
+      providerDetached: false,
+      secretValuesIncluded: false
+    }
+  };
+  const { manager, root } = harness({ compiler: () => contract });
+  const plan = prepare(manager);
+  assert.deepEqual(plan.executionContract, contract);
+  assert.equal(plan.readiness.manifestCompilerConfigured, true);
+  assert.equal(plan.readiness.manifestContractStatus, 'blocked');
+  assert.equal(plan.readiness.status, 'blocked');
+  assert.equal(plan.readiness.blockers.some((entry) => (
+    entry.code === 'route-private-port-ambiguous' && entry.message === 'Select the exact private port.'
+  )), true);
+  assert.equal(manager.status().executionGate.manifestCompilerConfigured, true);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('an unsafe execution contract is rejected before a plan is persisted', () => {
+  const { manager, root } = harness({
+    compiler: () => ({
+      contractId: 'smcontract_' + 'a'.repeat(32),
+      readiness: { status: 'ready', blockers: [] },
+      guarantees: { runtimeMutated: true, providerDetached: false, secretValuesIncluded: false }
+    })
+  });
+  assert.throws(() => prepare(manager), (error) => error.code === 'execution-contract-invalid');
+  assert.equal(manager.status().summary.plans, 0);
   fs.rmSync(root, { recursive: true, force: true });
 });
 

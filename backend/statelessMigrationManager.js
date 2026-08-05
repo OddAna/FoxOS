@@ -90,7 +90,8 @@ function safeBlocker(blocker, source) {
     code: blocker.code,
     section: blocker.section || 'unknown',
     severity: blocker.severity || 'blocking',
-    source: blocker.source || source
+    source: blocker.source || source,
+    message: blocker.message || null
   };
 }
 
@@ -140,7 +141,7 @@ function adapterStatus(executionAdapter, approvalVerifier) {
   };
 }
 
-function executionBlockers(resource, adapter) {
+function executionBlockers(resource, adapter, executionContract = null) {
   const evidence = resource.blockers && resource.blockers.evidence || [];
   const conflicts = resource.conflicts || [];
   const implementation = resource.blockers && resource.blockers.implementation || [];
@@ -153,7 +154,9 @@ function executionBlockers(resource, adapter) {
       source: 'resource-registry'
     })),
     ...implementation.filter((entry) => !REPLACED_IMPLEMENTATION_BLOCKERS.has(entry.code))
-      .map((entry) => safeBlocker(entry, 'orchestrator-implementation'))
+      .map((entry) => safeBlocker(entry, 'orchestrator-implementation')),
+    ...(executionContract && executionContract.readiness && executionContract.readiness.blockers || [])
+      .map((entry) => safeBlocker(entry, 'stateless-manifest-compiler'))
   ];
   if (!resource.readiness || resource.readiness.evidenceComplete !== true) {
     blockers.push({
@@ -250,12 +253,16 @@ function safeRollbackProof(value) {
 function createStatelessMigrationManager({
   dataRoot,
   getServerMigrationPlan,
+  compileExecutionContract = null,
   executionAdapter = null,
   approvalVerifier = null,
   clock = () => new Date(),
   randomUUID = () => crypto.randomUUID()
 }) {
-  if (!dataRoot || typeof getServerMigrationPlan !== 'function') {
+  if (
+    !dataRoot || typeof getServerMigrationPlan !== 'function' ||
+    (compileExecutionContract !== null && typeof compileExecutionContract !== 'function')
+  ) {
     throw new Error('Stateless migration manager requires a data root and server-plan adapter');
   }
   const root = path.join(dataRoot, 'stateless-migrations');
@@ -371,7 +378,23 @@ function createStatelessMigrationManager({
       );
     }
     const adapter = adapterStatus(executionAdapter, approvalVerifier);
-    const blockers = executionBlockers(resource, adapter);
+    const executionContract = compileExecutionContract
+      ? compileExecutionContract({ serverPlan, resource })
+      : null;
+    if (
+      executionContract &&
+      (!executionContract.contractId || !executionContract.readiness || !executionContract.guarantees ||
+        executionContract.guarantees.runtimeMutated !== false ||
+        executionContract.guarantees.providerDetached !== false ||
+        executionContract.guarantees.secretValuesIncluded !== false)
+    ) {
+      throw new StatelessMigrationError(
+        'Stateless execution contract is invalid or unsafe',
+        409,
+        'execution-contract-invalid'
+      );
+    }
+    const blockers = executionBlockers(resource, adapter, executionContract);
     const evidenceFingerprint = hash(canonicalJson({
       serverPlanId: serverPlan.planId,
       sourceSnapshotId: serverPlan.sourceSnapshotId,
@@ -381,7 +404,8 @@ function createStatelessMigrationManager({
       dependencies: resource.dependencies,
       conflicts: resource.conflicts,
       blockers: resource.blockers,
-      readiness: resource.readiness
+      readiness: resource.readiness,
+      executionContract
     }), 64);
     const core = {
       schemaVersion: STATELESS_MIGRATION_SCHEMA_VERSION,
@@ -399,6 +423,7 @@ function createStatelessMigrationManager({
         evidenceFingerprint
       },
       strategy: 'blue-green-atomic-route',
+      executionContract,
       transaction: {
         steps: [
           'revalidate-immutable-evidence-and-source-health',
@@ -418,6 +443,8 @@ function createStatelessMigrationManager({
       readiness: {
         status: blockers.length ? 'blocked' : 'backend-ready-ui-approval-required',
         evidenceComplete: resource.readiness && resource.readiness.evidenceComplete === true,
+        manifestCompilerConfigured: typeof compileExecutionContract === 'function',
+        manifestContractStatus: executionContract && executionContract.readiness.status || 'not-configured',
         executionAdapterReady: adapter.ready,
         uiApprovalRequired: true,
         uiApprovalConfigured: adapter.approvalVerifierConfigured,
@@ -805,6 +832,7 @@ function createStatelessMigrationManager({
         uiApprovalRequired: true,
         uiApprovalConfigured: adapter.approvalVerifierConfigured,
         runtimeAdapterConfigured: adapter.configured,
+        manifestCompilerConfigured: typeof compileExecutionContract === 'function',
         processLockPresent: fs.existsSync(operationLockFile),
         runEndpointExposed: false,
         approveEndpointExposed: false

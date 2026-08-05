@@ -122,6 +122,15 @@ function providerFor(labels) {
 
 function parseTraefikRoutes(labels = {}) {
   const routes = [];
+  const servicePorts = new Map();
+
+  for (const [key, rawPort] of Object.entries(labels)) {
+    const match = key.match(/^traefik\.http\.services\.([A-Za-z0-9_.-]+)\.loadbalancer\.server\.port$/);
+    const port = Number.parseInt(String(rawPort), 10);
+    if (match && Number.isInteger(port) && port >= 1 && port <= 65535) {
+      servicePorts.set(match[1], port);
+    }
+  }
 
   for (const [key, rule] of Object.entries(labels)) {
     if (!key.startsWith('traefik.http.routers.') || !key.endsWith('.rule')) {
@@ -132,6 +141,10 @@ function parseTraefikRoutes(labels = {}) {
     const entrypoints = String(labels[routerPrefix + '.entrypoints'] || '');
     const tlsEnabled = isTrue(labels[routerPrefix + '.tls']);
     const secure = tlsEnabled || /(^|,)(https|websecure)(,|$)/.test(entrypoints) || key.includes('.https-');
+    const serviceName = String(labels[routerPrefix + '.service'] || '').replace(/@docker$/, '');
+    const privatePort = servicePorts.get(serviceName) || (servicePorts.size === 1
+      ? Array.from(servicePorts.values())[0]
+      : null);
     const paths = Array.from(String(rule).matchAll(/PathPrefix\([`"]([^`"]+)[`"]\)/g))
       .map((match) => match[1])
       .filter((value) => /^\/[a-zA-Z0-9._~!$&'()*+,;=:@%/-]*$/.test(value));
@@ -146,7 +159,8 @@ function parseTraefikRoutes(labels = {}) {
           domain,
           scheme: secure ? 'https' : 'http',
           path: redactRoutePath(paths[0] || '/'),
-          tls: secure
+          tls: secure,
+          ...(privatePort ? { privatePort } : {})
         });
       }
     }
