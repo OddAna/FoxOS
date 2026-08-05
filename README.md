@@ -659,6 +659,12 @@ adapter must be reviewed in the later FoxOS interface. Production still has no
 runtime adapter, approval verifier, run endpoint or approve endpoint, so
 creating this contract cannot start a migration or change traffic.
 
+The authenticated API and standalone CLI use the same compiler context. A CLI
+status read initializes no Docker connection or encryption key; the heavier
+read-only planning context is created only when a review plan is requested.
+That context disables deployment-queue startup and operation recovery, so
+preparing a plan cannot silently reinterpret or resume older runtime work.
+
 ## Server-owned workload source and environment evidence
 
 A running, fully inspected, provider-owned stateless application can capture

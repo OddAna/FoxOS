@@ -205,6 +205,10 @@ target blocks only adoption/migration operations that require restore proof.
   exact private port, keep environment values out of the plan, require an
   explicit browser-trusted certificate adapter selection, and keep certificate
   and DNS implementations replaceable.
+- [x] Keep the authenticated API and standalone CLI on the same read-only
+  planning/compiler context. Status inspection stays lazy and does not contact
+  Docker, create encryption state, recover operations or expose an execution
+  adapter, approval endpoint or run action.
 - [ ] Add the reviewed FoxOS interface for health target, runtime defaults,
   every route and certificate adapter selection. Only after that interface
   supplies a short-lived one-time approval may a production Docker/route
