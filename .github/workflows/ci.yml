@@ -70,6 +70,8 @@ jobs:
           FOXOS_DOMAIN=foxos.example.com \
           FOXOS_ACME_EMAIL=admin@example.com \
           docker compose -f docker-compose.yml -f docker-compose.gateway.yml config --quiet
+          FOXOS_DOMAIN=foxos.example.com \
+          FOXOS_ACME_EMAIL=admin@example.com \
           docker compose -f docker-compose.yml -f docker-compose.gateway.yml -f docker-compose.ingress.yml config --quiet
           docker build --tag foxos-gateway-ci gateway
           docker build --tag foxos-ingress-ci ingress
