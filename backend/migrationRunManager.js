@@ -82,6 +82,9 @@ function createMigrationRunManager({
   saveSelection,
   prepareStatelessPlan,
   getStatelessReviewStatus,
+  prepareResourceEvidence = null,
+  refreshServerMigrationPlan = null,
+  prepareStatelessReview = null,
   executeStatelessMigration,
   issueApproval,
   clock = () => new Date(),
@@ -255,20 +258,64 @@ function createMigrationRunManager({
       }
 
       setRunState(run, 'preparing', 'immutable-preflight');
+      let serverPlanId = run.serverPlanId;
+      if (prepareResourceEvidence || refreshServerMigrationPlan) {
+        if (typeof prepareResourceEvidence !== 'function' || typeof refreshServerMigrationPlan !== 'function') {
+          throw new MigrationRunError(
+            'Migration evidence preparation is configured incompletely',
+            500,
+            'evidence-preparation-adapter-incomplete'
+          );
+        }
+        setRunState(run, 'preparing', 'server-owned-evidence-capture');
+        await prepareResourceEvidence(run.executionOrder);
+        const refreshedPlan = refreshServerMigrationPlan();
+        if (!refreshedPlan || refreshedPlan.sourceSnapshotId !== run.sourceSnapshotId) {
+          throw new MigrationRunError(
+            'Server inventory changed while migration evidence was captured',
+            409,
+            'migration-snapshot-stale'
+          );
+        }
+        const refreshedIds = new Set((refreshedPlan.resources || []).map((resource) => resource.resourceId));
+        if (run.executionOrder.some((resourceId) => !refreshedIds.has(resourceId))) {
+          throw new MigrationRunError(
+            'A selected resource disappeared while migration evidence was captured',
+            409,
+            'resource-not-in-refreshed-plan'
+          );
+        }
+        serverPlanId = refreshedPlan.planId;
+        run.serverPlanId = refreshedPlan.planId;
+        run.selectionId = saveSelection({
+          serverPlanId: refreshedPlan.planId,
+          resourceIds: run.executionOrder,
+          confirmation: SAVE_MIGRATION_SELECTION_CONFIRMATION
+        }).selectionId;
+        run.updatedAt = now();
+        persist(run);
+      }
       const preparedPlans = new Map();
       let anyBlocked = false;
       for (const resourceId of run.executionOrder) {
         const result = run.resources.find((resource) => resource.resourceId === resourceId);
         try {
           const plan = prepareStatelessPlan({
-            serverPlanId: run.serverPlanId,
+            serverPlanId,
             resourceId,
             confirmation: PREPARE_STATELESS_MIGRATION_CONFIRMATION
           });
           result.statelessPlanId = plan.planId;
           result.blockers = uniqueBlockers(plan.readiness && plan.readiness.blockers || []);
           if (!result.blockers.length) {
-            const review = getStatelessReviewStatus(plan.planId);
+            let review = getStatelessReviewStatus(plan.planId);
+            if (
+              typeof prepareStatelessReview === 'function' &&
+              (review.stale || review.state !== 'complete' || !review.current || review.current.reviewComplete !== true)
+            ) {
+              prepareStatelessReview(plan);
+              review = getStatelessReviewStatus(plan.planId);
+            }
             if (review.stale || review.state !== 'complete' || !review.current || review.current.reviewComplete !== true) {
               result.blockers = uniqueBlockers([
                 ...(review.current && review.current.reviewBlockers || []),

@@ -63,6 +63,10 @@ not use the host package manager for its own runtime.
 - **Controlled shadow refresh** — a newer verified rehearsal can build a
   separate shadow generation; the previous healthy generation remains current
   until the replacement passes restore, isolation, health and registry proof
+- **Stateless production migration** — eligible provider-owned web applications
+  can be cloned into a constrained FoxOS runtime, health-checked, moved behind
+  FoxOS-owned TLS and ingress with zero unavailable probe samples, and rolled
+  back while the original container remains running
 
 FoxOS is currently an **alpha**. See [Current limitations](#current-limitations)
 before exposing it to other users.
@@ -133,18 +137,17 @@ Do not publish FoxOS directly to the public internet. Read
 
 ### 3. Optional independent public HTTPS
 
-FoxOS can publish its own HTTPS endpoint without Coolify. The first gateway
-adapter uses Caddy and Cloudflare **DNS only** for ACME DNS-01 validation; web
-traffic goes directly from the browser to the FoxOS gateway.
+FoxOS can publish its own HTTPS endpoint without Coolify, Cloudflare, a DNS API
+token, or a paid certificate service. Its Caddy gateway uses the public,
+provider-neutral ACME HTTP-01 flow and keeps certificate state on the server.
 
 This is a separate, opt-in adapter. `install.sh` never invokes
 `install-gateway.sh`, and the normal SSH-tunnel installation above does not need
-Cloudflare or any other DNS provider.
+any domain or certificate provider.
 
-1. Create a DNS-only `A` record for the chosen FoxOS hostname pointing to the
-   server.
-2. Create a Cloudflare API token limited to the one zone with only
-   `Zone:Read` and `DNS:Edit`.
+1. Create an `A`/`AAAA` record for the chosen FoxOS hostname pointing to the
+   server. The DNS host is your choice; FoxOS does not call its API.
+2. Make sure inbound TCP ports `80` and `443` reach this server.
 3. Run:
 
 ```bash
@@ -152,14 +155,12 @@ chmod +x install-gateway.sh
 ./install-gateway.sh
 ```
 
-The installer asks for the hostname, ACME contact email and token without
-printing the token. It binds the direct agent port to `127.0.0.1`, enables
-secure session cookies, writes the credential to an owner-only Docker secret,
-and starts the isolated `foxos-gateway` service.
-
-The gateway uses host port `8443` by default so it can coexist with another
-process already using `443`. Open `https://your-foxos-domain:8443`. Set
-`FOXOS_HTTPS_PORT=443` when standard HTTPS port `443` is free.
+The installer asks only for the hostname and ACME contact email. It binds the
+direct agent port to `127.0.0.1`, enables secure session cookies, and starts the
+isolated `foxos-gateway` service on standard ports `80` and `443`. If another
+proxy already owns those ports, migrate ingress authority through FoxOS before
+retiring that proxy; a nonstandard HTTPS port alone cannot complete public
+HTTP-01 certificate validation.
 
 ## How it controls the host
 
@@ -167,7 +168,7 @@ process already using `443`. Open `https://your-foxos-domain:8443`. Set
 Browser
   │  authenticated, same-origin HTTPS
   ▼
-FoxOS-owned gateway (optional Caddy + DNS-01 TLS)
+FoxOS-owned gateway (optional Caddy + HTTP-01 TLS)
   │  private Compose network
   ▼
 FoxOS agent container (Node.js + built React UI)
@@ -594,9 +595,10 @@ docker compose exec -T foxos node /app/migrationOrchestratorCli.js get PLAN_ID
 Authenticated clients can use `GET /api/migration-orchestrator`, create a plan
 with `POST /api/migration-orchestrator/plans`, and read one through
 `GET /api/migration-orchestrator/plans/:planId`. Plans are owner-only under
-`.foxos-data/migration-orchestrator/`. This version has deliberately no apply,
-cutover or provider-detach endpoint; planning makes zero Docker requests and
-changes no runtime, route or provider state.
+`.foxos-data/migration-orchestrator/`. Planning itself makes zero Docker
+requests and changes no runtime, route or provider state. Execution is a
+separate authenticated transaction started only through the Server Migration
+screen; there is no provider-detach or destructive source-cleanup endpoint.
 
 The existing Settings window now includes **Server Migration**. Its manual scan
 uses the same read-only registry and orchestrator, keeps repeated instances such
@@ -623,34 +625,46 @@ authenticated FoxOS session, plan, resource and evidence fingerprint. Raw
 grants are not returned or stored. There is no separate approve endpoint,
 source-stop, provider-detach or destructive cleanup action.
 
-Opening an eligible resource prepares its deterministic stateless review plan
-in the same Settings page. The interface selects a health target from observed
-routes, shows the compiler-owned CPU, memory, PID, restart, filesystem and
-host-port policy, and requires every route plus its certificate adapter to be
-reviewed separately. `Kaydet ve Yeniden Değerlendir` writes only an allowlisted
-owner-only record under `.foxos-data/stateless-migration-reviews/`. It is bound
-to the exact server plan, snapshot, resource, manifest revision, evidence
-fingerprint and execution contract; drift invalidates it. Saving does not
-create a candidate, change a route, issue an approval or start a migration.
+For selected stateless resources, the run captures the current environment into
+server-owned ordinary values and encrypted secret references, recompiles the
+plan, and writes the allowlisted review contract automatically. The contract is
+bound to the exact server plan, Registry snapshot, resource, manifest revision,
+evidence fingerprint and execution contract; drift invalidates it before
+candidate creation. The user does not need a separate save or approve action.
 
-## Sealed stateless transaction core
+## Stateless production migration
 
-The next migration slice implements the provider-neutral state machine for one
-stateless blue/green resource without making it executable on a production
-installation yet. It revalidates immutable evidence and source health, creates
-a separate FoxOS-owned candidate through an injected runtime adapter,
-health-gates it, stages a conflict-checked TLS route, switches traffic
-atomically, requires zero unavailable probe samples, preserves the source and
-automatically rolls traffic back if any post-switch proof fails.
+The production transaction accepts running, fully inspected, provider-owned
+stateless Docker applications with an observed HTTPS route, no writable mounts,
+an exact content-addressed local image or immutable OCI digest, and a complete
+environment revision. Unsupported, stateful, database, privileged, ambiguous
+or drifted resources remain blocked before traffic changes.
 
-Production construction now has the authenticated run coordinator and
-short-lived FoxOS UI approval provider, but it deliberately has no general
-runtime/route/TLS execution adapter and no separate approve endpoint. The run
-therefore records exact blockers and executes zero resources until all evidence,
-review and production adapter gates are complete. The transaction implementation
-cannot stop or recreate the source, detach the provider or perform destructive
-source cleanup. Approval values and adapter-returned sensitive fields are never
-persisted.
+One authenticated `Geçişi Başlat` action performs the complete transaction:
+
+1. Revalidate the Registry snapshot, source container identity, image,
+   environment, route, proxy and current public health.
+2. Keep the source running and create a separate constrained candidate on
+   FoxOS-owned routing and egress networks, with no host port or writable mount.
+3. Bridge discovered server-local URL dependencies through operation-scoped
+   aliases. Secret values are resolved in memory and never written into plans,
+   operation records or logs.
+4. Import the existing matching browser-trusted certificate as migration input
+   into FoxOS Caddy storage, then stage and validate the FoxOS route. Caddy owns
+   later provider-neutral ACME HTTP-01 renewal; no DNS API or Cloudflare account
+   is required.
+5. Switch only the selected domain through FoxOS-owned HAProxy and reversible
+   host ingress rules. Domains not selected for migration continue through a
+   temporary FoxOS-owned bridge to the existing proxy.
+6. Require eight successful public TLS, route-identity and candidate-identity
+   samples with zero unavailable responses. Any failed post-switch proof routes
+   traffic back to the continuously running source and verifies rollback.
+
+The transaction has no method that can stop or recreate the source, detach the
+provider, delete provider state or perform destructive source cleanup. A
+successful cutover leaves the source available as the exact rollback target.
+Retiring the old proxy, provider networks, database runtime or source container
+is a later per-resource audit, never an automatic side effect of this step.
 
 ```bash
 docker compose exec -T foxos node /app/statelessMigrationCli.js status
@@ -668,8 +682,8 @@ review-only plan with `POST /api/stateless-migrations/plans`, and read one with
 available through `GET` and `PUT`
 `/api/stateless-migrations/plans/:planId/review`. Whole-server execution starts
 only through `POST /api/migration-runs`; it supplies the one-time,
-complete-contract-bound approval internally and remains blocked until the
-reviewed production runtime/route adapters exist.
+complete-contract-bound approval internally. The standalone CLI above remains
+a planning/status surface and cannot bypass the authenticated UI start action.
 
 The transaction is exercised against real Docker by a separate, deliberately
 non-production lab command:
@@ -684,10 +698,8 @@ It creates only exact-labeled disposable objects, uses a reserved
 start time and restart count constant, and proves both a zero-unavailable-sample
 switch with explicit rollback and a one-sample injected failure with automatic
 rollback. It then removes every lab container and network. The TLS certificate
-is ephemeral and operation-pinned; this proves the transaction mechanics, not
-browser-trusted production certificate issuance or arbitrary-domain routing.
-The command does not configure the sealed production manager or create an
-execution endpoint.
+is ephemeral and operation-pinned. The lab remains a safe transaction
+regression test and does not authorize or target a production domain.
 
 Normal evidence-ready stateless OCI workloads now also receive a deterministic
 execution contract inside their review plan. The compiler rechecks the exact
@@ -697,14 +709,11 @@ and describes a separate constrained candidate with no host port or writable
 mount. Environment output contains names and encrypted references only.
 
 Each route declares FoxOS as desired authority and requires browser-trusted TLS.
-The Settings review stores the operator's replaceable adapter selection without
-storing adapter credentials or activating a provider. DNS and certificate
-implementations remain replaceable; FoxOS does not infer Cloudflare or any other
-provider and the clean base installation still needs no domain, token, external
-account or paid service. Production still has no general runtime/route adapter
-or separate approve endpoint, so creating or reviewing this contract alone
-cannot change traffic. `Geçişi Başlat` creates a durable preflight run and fails
-closed before mutation while those adapters or resource evidence are missing.
+DNS and certificate implementations remain replaceable; FoxOS does not infer
+Cloudflare or any other provider, and the clean base installation still needs
+no domain, token, external account or paid service. Creating or reviewing a
+contract alone cannot change traffic; only the authenticated migration run can
+consume its one-time approval.
 
 The authenticated API and standalone CLI use the same compiler context. A CLI
 status read initializes no Docker connection or encryption key; the heavier
@@ -1103,16 +1112,19 @@ Do not copy its contents into Git or logs.
 - File operations are synchronous; very large copy/move operations can take time
 - No multi-user roles or permission levels
 - No audit log yet
-- Settings now starts a durable whole-server migration run from one selected
-  action, persists the exact intent internally, preflights all members and is
-  ready to serialize verified transactions. General production execution still
-  fails closed because the provider-neutral Docker/route/TLS adapter is not yet
-  injected; selection does not mean execution-ready. Only the explicitly
-  labeled disposable pilot can currently complete the full candidate, route,
-  traffic and rollback transaction
-- The stateless transaction has a real-Docker disposable route/TLS and failure
-  proof, but normal Application Manifest materialization and arbitrary
-  production domain/TLS authority are still sealed and not exposed for apply
+- Automatic production migration currently supports only eligible stateless
+  Docker web applications. Stateful applications, databases, workers,
+  privileged containers, writable mounts and ambiguous routes remain blocked
+- The first certificate handoff imports an already valid matching certificate
+  from readable Traefik ACME storage. After import, FoxOS Caddy owns renewal;
+  other legacy proxy storage formats need their own migration adapters
+- A migrated stateless application may still depend on a database or service
+  that has not moved yet. FoxOS bridges that dependency without joining the
+  candidate to the provider network, but the application is not fully
+  independent until those dependencies have their own verified migrations
+- A local content-addressed Docker image is enough for same-server cutover and
+  rollback, but off-host image export or a FoxOS-owned registry is still needed
+  for full disaster reconstruction after loss of the server
 - Off-host recovery currently gates each disposable adoption operation; there
   is no scheduled retention policy, database-consistent backup, key escrow or
   full-machine disaster restore workflow yet
@@ -1136,8 +1148,9 @@ Do not copy its contents into Git or logs.
   adopt, reconcile or detach normal production resources
 - App Store images are maintained by their respective third-party projects, not
   by FoxOS
-- The included FoxOS-owned HTTPS gateway currently ships one DNS-01 adapter for
-  Cloudflare-managed zones; additional DNS providers are not yet packaged
+- The FoxOS HTTPS gateway uses provider-neutral ACME HTTP-01. Public certificate
+  issuance or renewal requires ports `80` and `443` to reach FoxOS while the
+  challenge is active
 
 ## Development
 
@@ -1169,9 +1182,11 @@ FoxOS/
 ├── Dockerfile                 # Multi-stage production image
 ├── docker-compose.yml         # Privileged Linux host integration
 ├── docker-compose.gateway.yml # Optional independent HTTPS gateway
+├── docker-compose.ingress.yml # FoxOS-owned production ingress authority
 ├── install.sh                 # Environment checks and startup
-├── install-gateway.sh         # Owner-only DNS secret and HTTPS startup
-├── gateway/                   # Caddy build, config, and secret entrypoint
+├── install-gateway.sh         # Provider-neutral HTTPS startup
+├── gateway/                   # Caddy HTTP-01 TLS and runtime routes
+├── ingress/                   # HAProxy domain switch and legacy fallback
 ├── SECURITY.md                # Deployment and disclosure guidance
 ├── backend/
 │   ├── server.js              # Auth, files, host terminal, metrics, Docker API
@@ -1187,7 +1202,10 @@ FoxOS/
 │   ├── workloadEvidenceManager.js # Encrypted source archive and environment evidence capture
 │   ├── statefulRehearsalManager.js # Same-host encrypted restore and isolated health proof
 │   ├── statefulShadowManager.js # Persistent internal FoxOS-owned stateful shadow
-│   ├── statelessMigrationManager.js # Sealed blue/green transaction state machine
+│   ├── statelessMigrationManager.js # Blue/green transaction state machine
+│   ├── productionStatelessMigrationAdapter.js # Candidate, health and traffic adapter
+│   ├── ingressAuthorityManager.js # Caddy, HAProxy and reversible host ingress
+│   ├── traefikCertificateImporter.js # Existing certificate migration input
 │   ├── statelessMigrationLabAdapter.js # Real-Docker disposable adapter and rollback proof
 │   ├── statelessMigrationLabGateway.js # Operation-pinned lab TLS switch and probe
 │   ├── applicationManifestManager.js # Provider-neutral import drafts and desired revisions

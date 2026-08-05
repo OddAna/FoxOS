@@ -252,16 +252,23 @@ function createStatelessMigrationManifestCompiler({
     }
 
     const source = manifest.desired && manifest.desired.source || null;
+    const immutableOciSource = Boolean(
+      source && source.type === 'oci-image' &&
+      IMMUTABLE_IMAGE_PATTERN.test(String(source.immutableReference || ''))
+    );
+    const localImageIdSource = Boolean(
+      source && source.type === 'docker-image-id' && source.contentAddressed === true &&
+      source.localDockerAuthority === true && source.providerRequiredAtRuntime === false
+    );
     if (
-      !source || source.type !== 'oci-image' ||
-      !IMMUTABLE_IMAGE_PATTERN.test(String(source.immutableReference || '')) ||
-      !IMAGE_ID_PATTERN.test(String(source.imageId || '')) ||
+      (!immutableOciSource && !localImageIdSource) ||
+      !IMAGE_ID_PATTERN.test(String(source && source.imageId || '')) ||
       source.imageId !== resource.runtime.imageId
     ) {
       blockers.push(blocker(
         'immutable-oci-runtime-binding-missing',
         'source',
-        'The first generic stateless contract requires an immutable OCI reference bound to the observed image ID.'
+        'The stateless contract requires either an immutable OCI reference or the exact local content-addressed image ID.'
       ));
     }
     if ((resource.mounts || []).some((mount) => mount.readOnly !== true)) {
@@ -316,6 +323,7 @@ function createStatelessMigrationManifestCompiler({
         immutableReference: source && source.immutableReference || null,
         imageId: source && source.imageId || null,
         observedContainerId: resource.runtime && resource.runtime.containerId || null,
+        localDockerAuthority: Boolean(localImageIdSource),
         providerRequiredAtRuntime: false
       },
       candidate: {

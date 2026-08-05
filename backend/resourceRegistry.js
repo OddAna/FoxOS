@@ -23,6 +23,7 @@ const SAFE_LABEL_KEYS = new Set([
   'com.foxos.stateful-shadow',
   'com.foxos.stateful-shadow.source-resource-id',
   'com.foxos.stateful-shadow.operation',
+  'com.foxos.migration.source-resource-id',
   'com.foxos.deployment.group.id',
   'com.foxos.deployment.service',
   'com.foxos.deployment.revision',

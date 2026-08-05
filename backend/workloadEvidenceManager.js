@@ -588,6 +588,15 @@ function createWorkloadEvidenceManager({
     return capture;
   }
 
+  async function captureEnvironmentForMigration(resourceId) {
+    const plan = await planEnvironment({
+      resourceId,
+      secretNames: [],
+      confirmation: PLAN_ENVIRONMENT_CONFIRMATION
+    });
+    return captureEnvironment(plan.planId, plan.confirmation);
+  }
+
   function status() {
     let sourceCurrent = [];
     let environmentCurrent = [];
@@ -632,6 +641,7 @@ function createWorkloadEvidenceManager({
   ensureDirectory(root);
   return {
     captureEnvironment,
+    captureEnvironmentForMigration,
     captureSource,
     getEnvironmentCapture,
     getEnvironmentPlan: (planId) => getRecord(environmentPlansRoot, planId, 'Environment evidence plan'),
