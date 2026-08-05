@@ -28,6 +28,10 @@ const {
 const {
   createStatelessMigrationManifestCompiler
 } = require('./statelessMigrationManifestCompiler');
+const {
+  StatelessMigrationReviewError,
+  createStatelessMigrationReviewManager
+} = require('./statelessMigrationReviewManager');
 const { createBackupManager } = require('./backupManager');
 const { createDockerClient } = require('./dockerClient');
 const { createEncryptionStore } = require('./encryptionStore');
@@ -519,6 +523,11 @@ const statelessMigrationManager = createStatelessMigrationManager({
   getServerMigrationPlan: (planId) => migrationOrchestrator.getPlan(planId),
   compileExecutionContract: (input) => statelessMigrationManifestCompiler.compile(input)
 });
+const statelessMigrationReviewManager = createStatelessMigrationReviewManager({
+  dataRoot: DATA_ROOT,
+  getStatelessMigrationPlan: (planId) => statelessMigrationManager.getPlan(planId),
+  getLatestRegistrySnapshot: () => resourceRegistry.getLatest()
+});
 
 function sendAdoptionError(res, error, action) {
   const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
@@ -643,6 +652,17 @@ function sendStatelessMigrationError(res, error, action) {
       ? 'Stateless migration planning failed'
       : error.message,
     code: error.code || 'stateless-migration-error'
+  });
+}
+
+function sendStatelessMigrationReviewError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof StatelessMigrationReviewError)
+      ? 'Stateless migration review failed'
+      : error.message,
+    code: error.code || 'stateless-migration-review-error'
   });
 }
 
@@ -1613,6 +1633,29 @@ app.get('/api/stateless-migrations/plans/:planId', (req, res) => {
     res.json({ plan: statelessMigrationManager.getPlan(req.params.planId) });
   } catch (error) {
     sendStatelessMigrationError(res, error, 'Could not read stateless migration review');
+  }
+});
+
+app.get('/api/stateless-migrations/plans/:planId/review', (req, res) => {
+  try {
+    res.json(statelessMigrationReviewManager.status(req.params.planId));
+  } catch (error) {
+    sendStatelessMigrationReviewError(res, error, 'Could not read stateless migration reviewed configuration');
+  }
+});
+
+app.put('/api/stateless-migrations/plans/:planId/review', (req, res) => {
+  try {
+    const review = statelessMigrationReviewManager.save({
+      ...(req.body || {}),
+      statelessPlanId: req.params.planId
+    });
+    res.json({
+      review,
+      status: statelessMigrationReviewManager.status(req.params.planId)
+    });
+  } catch (error) {
+    sendStatelessMigrationReviewError(res, error, 'Could not save stateless migration reviewed configuration');
   }
 });
 

@@ -651,10 +651,19 @@ environment, persistence, dependency and classification failures still block.
 The contract is fingerprinted into the stateless review plan and cannot be
 changed after UI approval without invalidating that approval.
 
-This boundary is plan-only. Production construction receives the compiler but
-still receives no execution adapter or approval verifier, exposes no run or
-approve endpoint and cannot mutate Docker, routes, DNS, TLS or provider state.
-The next interface must explicitly review the health target, applied runtime
-defaults, every route and the replaceable certificate adapter. Burak's later
-authorization is still required before any existing workload, traffic, domain
-or provider authority is changed.
+Production construction now also exposes a review-only Settings interface. It
+selects one observed route as the bounded HTTP health target, displays and
+confirms the complete compiler-owned candidate runtime specification, and
+requires separate confirmation plus a replaceable certificate adapter choice
+for every compiled route. The browser is not authority: the allowlisted record
+is owner-only on the server and is bound to the stateless plan, whole-server
+plan, registry snapshot, resource, manifest revision, evidence fingerprint and
+execution contract. Registry or contract drift makes it stale.
+
+This boundary remains plan-and-review-only. A certificate adapter selection is
+intent, not a credential or active provider binding. Production still receives
+no execution adapter or approval verifier, exposes no run or approve endpoint
+and cannot mutate Docker, routes, DNS, TLS or provider state. Burak's later
+authorization is required before a short-lived one-time execution approval or
+any action affecting an existing workload, traffic, domain or provider
+authority is added.

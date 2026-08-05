@@ -56,6 +56,18 @@ const SECONDARY_BUTTON_STYLE = {
   fontWeight: 'bold'
 };
 
+const SELECT_STYLE = {
+  minWidth: '210px',
+  maxWidth: '100%',
+  background: '#24242a',
+  color: '#fff',
+  border: '1px solid rgba(255,255,255,0.16)',
+  padding: '9px 12px',
+  borderRadius: '8px',
+  outline: 'none',
+  fontSize: '13px'
+};
+
 const REVIEW_STATES = {
   ready: 'İncelemeye uygun',
   blocked: 'Eksik bilgi',
@@ -98,6 +110,12 @@ const AVAILABILITY_LABELS = {
   'already-managed': 'Mevcut çalışma korunacak',
   'not-applicable': 'Uygulanmaz',
   'unknown-blocked': 'Belirsiz — engelli'
+};
+
+const CERTIFICATE_ADAPTER_LABELS = {
+  'acme-http-01': 'ACME HTTP-01',
+  'acme-dns-01': 'ACME DNS-01',
+  'imported-certificate': 'Sunucudaki özel sertifika'
 };
 
 const BLOCKER_LABELS = {
@@ -153,6 +171,30 @@ function shortId(value) {
   return value.length > 22 ? value.slice(0, 12) + '…' + value.slice(-6) : value;
 }
 
+function reviewDraftFromStatus(status) {
+  const current = !status?.stale ? status?.current : null;
+  if (!current) return status?.defaults || null;
+  return {
+    healthRouteId: current.configuration.healthTarget?.routeId || null,
+    runtimeConfirmed: current.configuration.runtime?.confirmed === true,
+    routes: (current.configuration.routes || []).map((route) => ({
+      routeId: route.routeId,
+      confirmed: route.confirmed === true,
+      certificateAdapter: route.certificateAdapter || null
+    }))
+  };
+}
+
+function formatMemory(value) {
+  if (!Number.isFinite(value)) return '—';
+  return `${Math.round(value / 1024 / 1024)} MiB`;
+}
+
+function formatCpu(value) {
+  if (!Number.isFinite(value)) return '—';
+  return `${value / 1_000_000_000} CPU`;
+}
+
 function DetailLine({ label, children, mono = false }) {
   return (
     <>
@@ -185,6 +227,12 @@ const MigrationSettings = () => {
   const [scanning, setScanning] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState(null);
+  const [reviewPlan, setReviewPlan] = useState(null);
+  const [reviewStatus, setReviewStatus] = useState(null);
+  const [reviewDraft, setReviewDraft] = useState(null);
+  const [reviewLoading, setReviewLoading] = useState(false);
+  const [reviewSaving, setReviewSaving] = useState(false);
+  const [reviewMessage, setReviewMessage] = useState(null);
 
   const applyLoadedState = useCallback((registryPayload, orchestratorPayload, selectionPayload) => {
     const currentSnapshot = registryPayload.snapshot || null;
@@ -236,6 +284,47 @@ const MigrationSettings = () => {
     const scrollContainer = rootRef.current?.closest('[data-settings-content]');
     scrollContainer?.scrollTo({ top: 0 });
   }, [detailResourceId]);
+
+  useEffect(() => {
+    let active = true;
+    const resource = (plan?.resources || []).find((entry) => entry.resourceId === detailResourceId);
+    setReviewPlan(null);
+    setReviewStatus(null);
+    setReviewDraft(null);
+    setReviewMessage(null);
+    if (!resource || reviewState(resource) !== 'ready') {
+      setReviewLoading(false);
+      return () => { active = false; };
+    }
+
+    const loadReview = async () => {
+      setReviewLoading(true);
+      try {
+        const planResponse = await apiFetch('/api/stateless-migrations/plans', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            serverPlanId: plan.planId,
+            resourceId: resource.resourceId,
+            confirmation: 'PREPARE STATELESS MIGRATION'
+          })
+        });
+        const planPayload = await planResponse.json();
+        const statusResponse = await apiFetch(`/api/stateless-migrations/plans/${planPayload.plan.planId}/review`);
+        const statusPayload = await statusResponse.json();
+        if (!active) return;
+        setReviewPlan(planPayload.plan);
+        setReviewStatus(statusPayload);
+        setReviewDraft(reviewDraftFromStatus(statusPayload));
+      } catch (error) {
+        if (active) setReviewMessage({ type: 'error', text: error.message });
+      } finally {
+        if (active) setReviewLoading(false);
+      }
+    };
+    loadReview();
+    return () => { active = false; };
+  }, [detailResourceId, plan]);
 
   const resources = useMemo(() => plan?.resources || [], [plan]);
   const snapshotResources = useMemo(() => new Map(
@@ -329,6 +418,50 @@ const MigrationSettings = () => {
     }
   };
 
+  const updateReviewRoute = (routeId, patch) => {
+    setReviewDraft((current) => ({
+      ...current,
+      routes: (current?.routes || []).map((route) => (
+        route.routeId === routeId ? { ...route, ...patch } : route
+      ))
+    }));
+    setReviewMessage(null);
+  };
+
+  const saveReview = async () => {
+    if (!reviewPlan || !reviewDraft) return;
+    setReviewSaving(true);
+    setReviewMessage(null);
+    try {
+      const response = await apiFetch(`/api/stateless-migrations/plans/${reviewPlan.planId}/review`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          serverPlanId: reviewPlan.serverPlanId,
+          resourceId: reviewPlan.resource.resourceId,
+          executionContractId: reviewPlan.executionContract.contractId,
+          healthRouteId: reviewDraft.healthRouteId,
+          runtimeConfirmed: reviewDraft.runtimeConfirmed,
+          routes: reviewDraft.routes,
+          confirmation: 'SAVE STATELESS MIGRATION REVIEW'
+        })
+      });
+      const payload = await response.json();
+      setReviewStatus(payload.status);
+      setReviewDraft(reviewDraftFromStatus(payload.status));
+      setReviewMessage({
+        type: payload.review.reviewComplete ? 'success' : 'error',
+        text: payload.review.reviewComplete
+          ? 'İnceleme yapılandırması tamamlandı. Geçiş başlatılmadı; çalıştırma kapısı kapalı.'
+          : `${payload.review.reviewBlockers.length} inceleme gereksinimi eksik. Geçiş başlatılmadı.`
+      });
+    } catch (error) {
+      setReviewMessage({ type: 'error', text: error.message });
+    } finally {
+      setReviewSaving(false);
+    }
+  };
+
   if (loading) {
     return (
       <div ref={rootRef} style={{ color: '#888', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -347,6 +480,10 @@ const MigrationSettings = () => {
     const mounts = observed.mounts || [];
     const dependencies = detailResource.dependencies || [];
     const isReady = state === 'ready';
+    const executionContract = reviewPlan?.executionContract || null;
+    const contractBlockers = executionContract?.readiness?.blockers || [];
+    const reviewedRoutes = new Map((reviewDraft?.routes || []).map((route) => [route.routeId, route]));
+    const runtimeDefaults = new Set(executionContract?.uiReview?.runtimeDefaultsApplied || []);
 
     return (
       <div ref={rootRef}>
@@ -414,6 +551,141 @@ const MigrationSettings = () => {
             </div>
           )) : <div style={{ color: '#888', fontSize: '13px' }}>Doğrulanmış bir kaynak bağımlılığı bulunamadı.</div>}
         </DetailSection>
+
+        {isReady && (
+          <>
+            <DetailSection title="Geçiş İncelemesi" description="Bu ayarlar yalnızca mevcut plan ve manifest için sunucuda saklanır. Kaydetmek çalışma durumunu, rotaları veya sağlayıcıyı değiştirmez.">
+              {reviewLoading ? (
+                <div style={{ color: '#888', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Loader2 size={15} className="spin" /> İnceleme sözleşmesi hazırlanıyor…
+                </div>
+              ) : reviewMessage?.type === 'error' && !reviewPlan ? (
+                <div style={{ color: '#ff8a84', fontSize: '13px' }}>{reviewMessage.text}</div>
+              ) : reviewStatus?.stale ? (
+                <div style={{ color: '#ccc', fontSize: '13px' }}>Sunucu envanteri değişti. Bu incelemeyi kaydetmeden önce yeniden tarama yapmalısın.</div>
+              ) : contractBlockers.length ? (
+                <div>
+                  {contractBlockers.map((blocker, index) => (
+                    <div key={`${blocker.code}-${index}`} style={{ fontSize: '13px', marginTop: index ? '10px' : 0 }}>
+                      {BLOCKER_LABELS[blocker.code] || blocker.message || blocker.code}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 160px) minmax(0, 1fr)', rowGap: '10px', columnGap: '16px', fontSize: '13px' }}>
+                  <DetailLine label="Plan" mono>{shortId(reviewPlan?.planId)}</DetailLine>
+                  <DetailLine label="Sözleşme" mono>{shortId(executionContract?.contractId)}</DetailLine>
+                  <DetailLine label="Kayıt durumu">{reviewStatus?.state === 'complete' ? 'İnceleme tamamlandı' : 'İnceleme eksik'}</DetailLine>
+                  <DetailLine label="Çalıştırma">Kapalı</DetailLine>
+                </div>
+              )}
+            </DetailSection>
+
+            {executionContract && !contractBlockers.length && reviewDraft && !reviewStatus?.stale && (
+              <>
+                <DetailSection title="Sağlık Hedefi" description="FoxOS aday uygulamayı bu gözlenen iç port ve yol üzerinden doğrulayacak.">
+                  <select
+                    value={reviewDraft.healthRouteId || ''}
+                    onChange={(event) => {
+                      setReviewDraft((current) => ({ ...current, healthRouteId: event.target.value || null }));
+                      setReviewMessage(null);
+                    }}
+                    style={SELECT_STYLE}
+                  >
+                    <option value="">Sağlık hedefi seç</option>
+                    {(executionContract.routes || []).map((route) => (
+                      <option key={route.routeId} value={route.routeId}>
+                        {route.domain}{route.path} → :{route.upstreamPrivatePort}
+                      </option>
+                    ))}
+                  </select>
+                  <div style={{ color: '#888', fontSize: '12px', marginTop: '9px' }}>Kabul edilen HTTP durumları: 200–399</div>
+                </DetailSection>
+
+                <DetailSection title="Çalışma Sınırları" description="Manifest derleyicisinin sabitlediği aday container ayarları.">
+                  <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 160px) minmax(0, 1fr)', rowGap: '10px', columnGap: '16px', fontSize: '13px', marginBottom: '16px' }}>
+                    <DetailLine label={`Bellek${runtimeDefaults.has('memoryBytes') ? ' · varsayılan' : ''}`}>{formatMemory(executionContract.candidate.runtime.memoryBytes)}</DetailLine>
+                    <DetailLine label={`CPU${runtimeDefaults.has('nanoCpus') ? ' · varsayılan' : ''}`}>{formatCpu(executionContract.candidate.runtime.nanoCpus)}</DetailLine>
+                    <DetailLine label={`PID sınırı${runtimeDefaults.has('pidsLimit') ? ' · varsayılan' : ''}`}>{executionContract.candidate.runtime.pidsLimit}</DetailLine>
+                    <DetailLine label="Yeniden başlatma">{executionContract.candidate.runtime.restartPolicy}</DetailLine>
+                    <DetailLine label="Çalışma kullanıcısı">{executionContract.candidate.runtime.user || 'İmaj varsayılanı'}</DetailLine>
+                    <DetailLine label="Kök dosya sistemi">{executionContract.candidate.runtime.readOnlyRootFilesystem ? 'Salt okunur' : 'Yazılabilir'}</DetailLine>
+                    <DetailLine label="Host portu">Yayınlanmayacak</DetailLine>
+                    <DetailLine label="Yazılabilir mount">Yok</DetailLine>
+                    <DetailLine label="Yetkili çalışma">Kapalı</DetailLine>
+                    <DetailLine label="Ek yetkiler">Kapalı · tüm capabilities düşürülecek</DetailLine>
+                  </div>
+                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: '9px', fontSize: '13px', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={reviewDraft.runtimeConfirmed === true}
+                      onChange={(event) => {
+                        setReviewDraft((current) => ({ ...current, runtimeConfirmed: event.target.checked }));
+                        setReviewMessage(null);
+                      }}
+                    />
+                    Bu çalışma sınırlarını inceledim
+                  </label>
+                </DetailSection>
+
+                <DetailSection title="Rotalar ve Sertifikalar" description="Her rota kendi alan adı, yolu, iç portu ve değiştirilebilir sertifika adaptörüyle ayrı ayrı incelenir.">
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '9px' }}>
+                    {(executionContract.routes || []).map((route) => {
+                      const reviewed = reviewedRoutes.get(route.routeId) || {};
+                      return (
+                        <div key={route.routeId} style={RESOURCE_CARD_STYLE}>
+                          <div style={{ fontSize: '13px', overflowWrap: 'anywhere' }}>https://{route.domain}{route.path}</div>
+                          <div style={{ color: '#888', fontSize: '12px', marginTop: '3px' }}>İç port: {route.upstreamPrivatePort} · HTTP → HTTPS</div>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px', marginTop: '14px' }}>
+                            <select
+                              aria-label={`${route.domain}${route.path} sertifika adaptörü`}
+                              value={reviewed.certificateAdapter || ''}
+                              onChange={(event) => updateReviewRoute(route.routeId, { certificateAdapter: event.target.value || null })}
+                              style={SELECT_STYLE}
+                            >
+                              <option value="">Sertifika adaptörü seç</option>
+                              {(reviewStatus?.certificateAdapters || []).map((adapter) => (
+                                <option key={adapter} value={adapter}>{CERTIFICATE_ADAPTER_LABELS[adapter] || adapter}</option>
+                              ))}
+                            </select>
+                            <label style={{ display: 'inline-flex', alignItems: 'center', gap: '9px', fontSize: '13px', cursor: 'pointer' }}>
+                              <input
+                                type="checkbox"
+                                checked={reviewed.confirmed === true}
+                                onChange={(event) => updateReviewRoute(route.routeId, { confirmed: event.target.checked })}
+                              />
+                              Rotayı inceledim
+                            </label>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div style={{ color: '#888', fontSize: '12px', marginTop: '10px', lineHeight: 1.45 }}>
+                    ACME seçimleri belirli bir DNS firması veya ücretli hizmet zorunluluğu oluşturmaz. Erişim bilgileri bu ekranda saklanmaz.
+                  </div>
+                </DetailSection>
+
+                <DetailSection title="İnceleme Kaydı">
+                  {reviewMessage && (
+                    <div style={{ marginBottom: '14px', color: reviewMessage.type === 'error' ? '#ff8a84' : '#75da85', fontSize: '13px' }}>
+                      {reviewMessage.text}
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={saveReview}
+                    disabled={reviewSaving}
+                    style={{ ...PRIMARY_BUTTON_STYLE, cursor: reviewSaving ? 'wait' : 'pointer', opacity: reviewSaving ? 0.6 : 1 }}
+                  >
+                    {reviewSaving ? <Loader2 size={15} className="spin" /> : <CheckCircle2 size={15} />}
+                    Kaydet ve Yeniden Değerlendir
+                  </button>
+                </DetailSection>
+              </>
+            )}
+          </>
+        )}
 
         <DetailSection title="Engeller ve Sonraki Gereksinimler" last>
           {blockers.length ? blockers.map((blocker, index) => (

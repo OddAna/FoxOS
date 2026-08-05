@@ -430,6 +430,15 @@ test('health is public while management APIs require a session', async () => {
     body: '{}'
   });
   assert.equal(statelessMigrationPlanResponse.status, 401);
+  const statelessReviewPath = '/api/stateless-migrations/plans/smplan_' + '1'.repeat(32) + '/review';
+  const statelessMigrationReviewResponse = await fetch(baseUrl() + statelessReviewPath);
+  assert.equal(statelessMigrationReviewResponse.status, 401);
+  const statelessMigrationReviewSaveResponse = await fetch(baseUrl() + statelessReviewPath, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}'
+  });
+  assert.equal(statelessMigrationReviewSaveResponse.status, 401);
   const statelessMigrationRunResponse = await fetch(
     baseUrl() + '/api/stateless-migrations/plans/smplan_' + '1'.repeat(32) + '/run',
     { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }
