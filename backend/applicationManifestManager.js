@@ -320,6 +320,83 @@ function resourceFingerprint(resource, relationships) {
   return 'sha256:' + hash(canonicalJson({ resource, relationships }), 64);
 }
 
+function statefulRehearsalResourceFingerprint(resource) {
+  return 'sha256:' + hash(canonicalJson({
+    schemaVersion: resource.schemaVersion,
+    id: resource.id,
+    kind: resource.kind,
+    name: resource.name,
+    role: resource.role,
+    ownership: resource.ownership,
+    provider: resource.provider,
+    protected: resource.protected,
+    classification: resource.classification && {
+      revision: resource.classification.revision,
+      workloadRole: resource.classification.workloadRole,
+      stateClass: resource.classification.stateClass,
+      authorityClass: resource.classification.authorityClass,
+      status: resource.classification.status
+    },
+    runtime: resource.runtime && {
+      containerId: resource.runtime.containerId,
+      image: resource.runtime.image,
+      imageId: resource.runtime.imageId,
+      state: resource.runtime.state,
+      restartPolicy: resource.runtime.restartPolicy,
+      healthConfigured: Boolean(resource.runtime.health && resource.runtime.health.configured),
+      constraints: resource.runtime.constraints,
+      environmentVariableCount: resource.runtime.environmentVariableCount,
+      inspection: resource.runtime.inspection
+    },
+    ports: resource.ports,
+    mounts: resource.mounts
+  }), 64);
+}
+
+function statefulRestoreProofDescriptor(operation, rehearsalResourceFingerprintValue, resource) {
+  if (
+    !operation || operation.status !== 'verified-and-cleaned' ||
+    operation.resourceId !== resource.id ||
+    operation.rehearsalResourceFingerprint !== rehearsalResourceFingerprintValue ||
+    !operation.source || operation.source.containerId !== resource.runtime.containerId ||
+    operation.source.imageId !== resource.runtime.imageId ||
+    operation.source.stopped !== false || operation.source.recreated !== false ||
+    operation.source.pauseState !== 'unpaused' ||
+    !operation.restore || operation.restore.verified !== true ||
+    !Array.isArray(operation.backups) || operation.backups.length < 1 ||
+    operation.backups.some((backup) => (
+      backup.authenticated !== true || backup.plaintextStored !== false || backup.offHost !== false
+    )) ||
+    !operation.candidate || operation.candidate.health !== 'healthy' ||
+    operation.candidate.removedAfterProof !== true ||
+    !operation.cleanup || operation.cleanup.completed !== true ||
+    !operation.guarantees || operation.guarantees.routeMutated !== false ||
+    operation.guarantees.trafficCutover !== false ||
+    operation.guarantees.providerMetadataMutated !== false ||
+    operation.guarantees.providerDetached !== false ||
+    operation.guarantees.environmentValuesIncluded !== false ||
+    operation.guarantees.secretValuesIncluded !== false ||
+    operation.guarantees.plaintextArchiveStored !== false
+  ) return null;
+  return {
+    type: 'foxos-stateful-restore-rehearsal',
+    operationId: operation.operationId,
+    planId: operation.planId,
+    resourceId: operation.resourceId,
+    volumeCount: operation.backups.length,
+    restoredVolumeCount: (operation.restore.volumes || []).filter((volume) => volume.verified).length,
+    candidateHealth: operation.candidate.health,
+    candidateRemovedAfterProof: true,
+    sourcePauseDurationMs: operation.source.pauseDurationMs,
+    localEncryptedArchive: true,
+    offHost: false,
+    offHostRecoveryProven: false,
+    environmentValuesIncluded: false,
+    secretValuesIncluded: false,
+    verifiedAt: operation.completedAt
+  };
+}
+
 function createApplicationManifestManager({
   dataRoot,
   resourceRegistry,
@@ -330,6 +407,7 @@ function createApplicationManifestManager({
   composeDeploymentStatus = () => ({ current: null, plans: [], operations: [], guarantees: {} }),
   imageUpdateStatus = () => ({ current: null, operations: [] }),
   workloadEvidenceStatus = () => ({ sourceCurrent: [], guarantees: {} }),
+  statefulRehearsalStatus = () => ({ current: [], guarantees: {} }),
   clock = () => new Date(),
   randomUUID = () => crypto.randomUUID()
 }) {
@@ -343,7 +421,8 @@ function createApplicationManifestManager({
     sourceDeploymentStatus,
     composeDeploymentStatus,
     imageUpdateStatus,
-    workloadEvidenceStatus
+    workloadEvidenceStatus,
+    statefulRehearsalStatus
   ]) {
     if (typeof dependency !== 'function') throw new Error('Application manifest state adapters must be functions');
   }
@@ -402,6 +481,13 @@ function createApplicationManifestManager({
     const composeDeploymentState = composeDeploymentStatus();
     const updateState = imageUpdateStatus();
     const workloadEvidenceState = workloadEvidenceStatus();
+    const statefulRehearsalState = statefulRehearsalStatus();
+    const currentResourceFingerprintValue = resourceFingerprint(resource, relationships);
+    const restoreProof = statefulRestoreProofDescriptor(
+      (statefulRehearsalState.current || []).find((operation) => operation.resourceId === resourceId),
+      statefulRehearsalResourceFingerprint(resource),
+      resource
+    );
     const ownedRoutes = (routeState.routes || []).filter((route) => (
       route.resourceId === resourceId && route.owner === 'foxos' && route.status === 'active'
     ));
@@ -516,7 +602,7 @@ function createApplicationManifestManager({
       sourceAuthority = 'foxos-workload-source-archive';
       source = workloadSourceArchiveDescriptor(
         workloadSourceRevision,
-        resourceFingerprint(resource, relationships),
+        currentResourceFingerprintValue,
         resource
       );
       sourceGuarantees = workloadEvidenceState.guarantees || {};
@@ -611,7 +697,9 @@ function createApplicationManifestManager({
       if (!recoveryState.configured || !recoveryState.ready || !recoveryState.offHost) {
         addBlocker(blockers, 'recovery-target-unavailable', 'recovery', 'Persistent data requires a ready off-host recovery target.');
       }
-      addBlocker(blockers, 'restore-proof-missing', 'recovery', 'Persistent data requires a resource-scoped tested restore proof.');
+      if (!restoreProof) {
+        addBlocker(blockers, 'restore-proof-missing', 'recovery', 'Persistent data requires a resource-scoped tested restore proof.');
+      }
     }
     const dependencies = [...relationships, ...composeDependencies].sort((left, right) => (
       left.relationshipId.localeCompare(right.relationshipId)
@@ -734,13 +822,18 @@ function createApplicationManifestManager({
         required: persistenceRequired,
         adapter: persistenceRequired ? recoveryState.adapter || null : null,
         offHost: persistenceRequired ? Boolean(recoveryState.offHost) : false,
-        restoreProofReference: null
+        restoreProofReference: persistenceRequired && restoreProof ? {
+          type: restoreProof.type,
+          operationId: restoreProof.operationId,
+          verifiedAt: restoreProof.verifiedAt,
+          localOnly: true
+        } : null
       }
     };
     const revisionId = 'arev_' + hash(canonicalJson(desired), 32);
     const evidence = {
       registrySnapshotId: snapshot.snapshotId,
-      resourceFingerprint: resourceFingerprint(resource, relationships),
+      resourceFingerprint: currentResourceFingerprintValue,
       observedProvider: resource.provider,
       observedContainerId: resource.runtime.containerId,
       environmentRevision: environment && environment.revision || null,
@@ -760,6 +853,7 @@ function createApplicationManifestManager({
         verified: true,
         proof: rollbackOperation.rollback.proof
       } : null,
+      restoreProof,
       secretValuesIncluded: false
     };
     return {
@@ -901,5 +995,7 @@ module.exports = {
   canonicalJson,
   createApplicationManifestManager,
   relatedRelationships,
-  resourceFingerprint
+  resourceFingerprint,
+  statefulRehearsalResourceFingerprint,
+  statefulRestoreProofDescriptor
 };

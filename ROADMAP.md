@@ -173,6 +173,9 @@ target blocks only adoption/migration operations that require restore proof.
 - [x] Capture a real stateless workload's private/public Git revision as an
   authenticated encrypted local archive and its observed environment as a
   drift-checked local revision without runtime, route or provider mutation.
+- [x] Attach a matching real stateful application's same-host restore rehearsal
+  to its Application Manifest while keeping off-host recovery and external
+  authority blocking.
 - [ ] Expand the implemented disposable dry-run, conflict detection, verified
   cutover and reversible rollback to real application classes one safety gate at
   a time.
@@ -234,12 +237,16 @@ target blocks only adoption/migration operations that require restore proof.
 - [ ] Configure scheduled encrypted backups with retention and off-host targets.
 - [x] Require an encrypted off-host upload/download plus actual temporary-volume
   restore proof for every disposable adoption operation.
+- [x] Add an exact-confirmation same-host restore rehearsal for provider-owned
+  stateful applications with explicitly classified named volumes, temporary
+  source pause, encrypted archives, isolated candidate health proof and complete
+  cleanup without traffic, route, provider or detach mutation.
 - [ ] Back up resource manifests, deployment metadata, environment configuration
   and proxy/TLS state without exposing secrets.
 - [ ] Provide per-resource restore and full-disaster restore workflows.
-- [ ] Expand the implemented per-operation disposable volume restore proof into
-  scheduled and off-host automated restore verification; a backup without a
-  tested restore is not considered complete.
+- [ ] Expand the implemented disposable and real-workload same-host volume
+  restore proofs into scheduled and off-host automated verification; a backup
+  without a tested restore is not considered complete.
 
 ## Operations and safety
 

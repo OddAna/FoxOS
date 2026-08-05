@@ -52,6 +52,10 @@ not use the host package manager for its own runtime.
   private or public Git commit into an authenticated encrypted local source
   archive and capture its live environment into ordinary names plus encrypted
   secret revisions without changing that workload
+- **Stateful restore rehearsal** — an explicitly selected provider-owned
+  stateful application can prove a same-host encrypted named-volume restore in
+  an isolated healthy candidate without stopping, recreating or routing traffic
+  away from the source
 
 FoxOS is currently an **alpha**. See [Current limitations](#current-limitations)
 before exposing it to other users.
@@ -252,6 +256,11 @@ The authenticated API exposes:
 | `POST /api/workload-evidence/source-plans/:planId/capture` | Reverify, encrypt, authenticate and store the bounded source archive locally |
 | `POST /api/workload-evidence/environment-plans` | Read one candidate container environment through Docker `GET` and plan value-free classification |
 | `POST /api/workload-evidence/environment-plans/:planId/capture` | Recheck drift and store an immutable local environment/secret revision |
+| `GET /api/stateful-rehearsals` | Read redacted stateful rehearsal plans, operations, current proofs and guarantees |
+| `POST /api/stateful-rehearsals/plans` | Create a GET-only, exact-confirmation plan with explicit persistent/empty volume classification |
+| `GET /api/stateful-rehearsals/plans/:planId` | Read one immutable rehearsal plan and its operation-specific run confirmation |
+| `POST /api/stateful-rehearsals/plans/:planId/run` | Revalidate drift, pause briefly, encrypt/restore, health-gate and clean the isolated candidate |
+| `GET /api/stateful-rehearsals/operations/:operationId` | Read one redacted rehearsal result and cleanup state |
 | `GET /api/recovery/status` | Read local encryption and off-host backup readiness without credentials |
 | `GET /api/deployments` | Read FoxOS-owned disposable source revisions, plans, operations and current state |
 | `POST /api/deployments/plans` | Resolve a public HTTPS Git branch/tag to an immutable commit and create a reviewed Dockerfile plan |
@@ -586,6 +595,53 @@ FoxOS builds the revision, health-gates it and proves update/rollback, the
 manifest remains blocked by `source-runtime-binding-missing` and external
 provider authority.
 
+## Stateful restore rehearsal
+
+The first real stateful safety transaction is deliberately narrow. It accepts
+only a running, fully inspected, provider-owned application whose writable
+mounts are one to four named Docker volumes. The operator must classify every
+volume as either persistent or empty-ephemeral and must identify an observed
+TCP application port. Bind mounts, databases, protected resources, custom
+command/user overrides, privileged or host access and unhealthy sources fail
+closed.
+
+Planning is Docker `GET` only. Running requires a plan-specific exact
+confirmation and rechecks the resource, immutable image, environment revision,
+mounts, health definition and runtime safety before mutation. FoxOS records the
+pause request, briefly pauses the source while reading consistent volume
+archives, then unpauses it immediately. The source is never stopped, recreated,
+renamed or detached.
+
+Persistent archives are encrypted locally with AES-256-GCM, written owner-only
+and authenticated before use; plaintext archives and environment/secret values
+are not stored. FoxOS restores them into temporary named volumes attached to a
+constrained candidate using the exact observed image. The candidate has a fresh
+internal Docker network and a Docker-assigned `127.0.0.1` port only. A proof is
+current only after restored content matches, candidate health passes, source
+health is re-proven and every temporary container, volume and network is
+removed. Startup recovery may unpause and clean an interrupted operation but
+never replays it.
+
+```bash
+docker compose exec -T foxos node /app/statefulRehearsalCli.js plan RESOURCE_ID \
+  --persistent-volume APP_DATA_VOLUME \
+  --empty-volume OPTIONAL_EMPTY_SOCKET_VOLUME \
+  --private-port 8090 \
+  --confirm "PLAN STATEFUL REHEARSAL"
+
+# Use the returned plan ID and its exact confirmation.
+docker compose exec -T foxos node /app/statefulRehearsalCli.js run PLAN_ID \
+  --confirm "RUN STATEFUL REHEARSAL PLAN_ID"
+
+docker compose exec -T foxos node /app/statefulRehearsalCli.js status
+```
+
+This proves a same-host restore and closes only the Application Manifest's local
+restore-test blocker. The encrypted archive and master key are on the same
+server, so it does **not** prove off-host recovery, key escrow, scheduled
+retention, database consistency, domain cutover, provider detachment or full
+machine disaster recovery. Those gates remain blocking.
+
 ## Disposable adoption pilot
 
 FoxOS now has the first provider-neutral import draft, dry-run plan, apply and
@@ -750,6 +806,9 @@ Do not copy its contents into Git or logs.
 - Off-host recovery currently gates each disposable adoption operation; there
   is no scheduled retention policy, database-consistent backup, key escrow or
   full-machine disaster restore workflow yet
+- Real provider-owned stateful applications have a same-host, named-volume-only
+  restore rehearsal. It does not yet support bind mounts, databases, off-host
+  recovery, route cutover, adoption or provider detachment
 - A fresh installation intentionally has no external backup adapter configured;
   ordinary FoxOS host management does not require one
 - The App Store catalog is intentionally small and reviewed; arbitrary Compose
