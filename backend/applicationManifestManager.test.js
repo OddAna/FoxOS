@@ -497,13 +497,24 @@ test('a matching stateful rehearsal closes only the local restore blocker while 
     },
     backups: [{ authenticated: true, plaintextStored: false, offHost: false }],
     restore: { verified: true, volumes: [{ verified: true }] },
-    candidate: { health: 'healthy', healthMode: 'loopback-http', removedAfterProof: true },
+    candidate: {
+      health: 'healthy',
+      healthMode: 'internal-http',
+      healthProbe: 'host-namespace-to-internal-ip',
+      hostBinding: 'none',
+      hostPortPublished: false,
+      internalNetwork: true,
+      externalNetwork: false,
+      removedAfterProof: true
+    },
     cleanup: { completed: true },
     guarantees: {
       routeMutated: false,
       trafficCutover: false,
       providerMetadataMutated: false,
       providerDetached: false,
+      candidateHadExternalNetwork: false,
+      candidateHostPortPublished: false,
       environmentValuesIncluded: false,
       secretValuesIncluded: false,
       plaintextArchiveStored: false

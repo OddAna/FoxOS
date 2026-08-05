@@ -370,7 +370,12 @@ function statefulRestoreProofDescriptor(operation, rehearsalResourceFingerprintV
       backup.authenticated !== true || backup.plaintextStored !== false || backup.offHost !== false
     )) ||
     !operation.candidate || operation.candidate.health !== 'healthy' ||
-    !['docker-healthcheck', 'loopback-http'].includes(operation.candidate.healthMode) ||
+    operation.candidate.internalNetwork !== true || operation.candidate.externalNetwork !== false ||
+    operation.candidate.hostBinding !== 'none' ||
+    !['docker-healthcheck', 'internal-http'].includes(operation.candidate.healthMode) ||
+    operation.candidate.hostPortPublished !== false ||
+    (operation.candidate.healthMode === 'internal-http' &&
+      operation.candidate.healthProbe !== 'host-namespace-to-internal-ip') ||
     (operation.candidate.healthMode === 'docker-healthcheck' && operation.source.healthAfterProof.health !== 'healthy') ||
     operation.candidate.removedAfterProof !== true ||
     !operation.cleanup || operation.cleanup.completed !== true ||
@@ -378,6 +383,8 @@ function statefulRestoreProofDescriptor(operation, rehearsalResourceFingerprintV
     operation.guarantees.trafficCutover !== false ||
     operation.guarantees.providerMetadataMutated !== false ||
     operation.guarantees.providerDetached !== false ||
+    operation.guarantees.candidateHadExternalNetwork !== false ||
+    operation.guarantees.candidateHostPortPublished !== false ||
     operation.guarantees.environmentValuesIncluded !== false ||
     operation.guarantees.secretValuesIncluded !== false ||
     operation.guarantees.plaintextArchiveStored !== false

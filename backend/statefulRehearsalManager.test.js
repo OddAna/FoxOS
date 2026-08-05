@@ -179,7 +179,8 @@ function createHarness({
   failCandidateHealth = false,
   emptyArchive = null,
   sourceHealth = 'healthy',
-  sourceDockerHealth = true
+  sourceDockerHealth = true,
+  networkInternal = true
 } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-stateful-rehearsal-'));
   const calls = [];
@@ -237,6 +238,13 @@ function createHarness({
       networkName = payload.Name;
       return { Id: 'network-' + payload.Name };
     }
+    if (method === 'GET' && requestPath.startsWith('/networks/network-')) {
+      return {
+        Id: requestPath.slice('/networks/'.length),
+        Name: networkName,
+        Internal: networkInternal
+      };
+    }
     if (method === 'POST' && requestPath === '/volumes/create') {
       temporaryVolumes.add(payload.Name);
       return { Name: payload.Name };
@@ -261,8 +269,8 @@ function createHarness({
           } : {})
         },
         NetworkSettings: {
-          Networks: networkName ? { [networkName]: {} } : {},
-          Ports: { '8090/tcp': [{ HostIp: '127.0.0.1', HostPort: '49152' }] }
+          Networks: networkName ? { [networkName]: { IPAddress: '172.30.0.2' } } : {},
+          Ports: { '8090/tcp': null }
         }
       };
     }
@@ -312,8 +320,8 @@ function createHarness({
     resourceRegistry: { getLatest: () => snapshot },
     encryptionStore,
     secretManager,
-    httpProbe: async ({ port, healthPath }) => {
-      calls.push({ method: 'HTTP_GET', requestPath: `http://127.0.0.1:${port}${healthPath}` });
+    httpProbe: async ({ host, port, healthPath }) => {
+      calls.push({ method: 'HTTP_GET', requestPath: `http://${host}:${port}${healthPath}` });
       return { statusCode: failCandidateHealth ? 503 : 200 };
     },
     clock: () => new Date('2026-08-05T02:00:00.000Z'),
@@ -397,7 +405,7 @@ test('planning fails closed when the source health check is not currently health
   }
 });
 
-test('a source without Docker health requires an explicit bounded loopback HTTP proof', async () => {
+test('a source without Docker health requires an explicit bounded internal HTTP proof', async () => {
   const harness = createHarness({ sourceDockerHealth: false });
   try {
     await assert.rejects(
@@ -409,19 +417,21 @@ test('a source without Docker health requires an explicit bounded loopback HTTP 
       (error) => error.code === 'invalid-http-health-path'
     );
     const created = await plan(harness.manager, { httpHealthPath: '/' });
-    assert.equal(created.health.mode, 'loopback-http');
+    assert.equal(created.health.mode, 'internal-http');
     assert.equal(created.health.healthPath, '/');
     assert.equal(created.health.expectedStatus, 200);
     const operation = await harness.manager.runPlan(created.planId, created.confirmation);
     const state = harness.state();
     assert.equal(operation.status, 'verified-and-cleaned');
-    assert.equal(operation.candidate.healthMode, 'loopback-http');
+    assert.equal(operation.candidate.healthMode, 'internal-http');
+    assert.equal(operation.candidate.healthProbe, 'host-namespace-to-internal-ip');
+    assert.equal(operation.candidate.hostPortPublished, false);
     assert.equal(operation.source.healthAfterProof.status, 'running');
     assert.equal(operation.source.healthAfterProof.paused, false);
     assert.equal(operation.source.healthAfterProof.health, null);
     assert.equal(Object.hasOwn(state.candidatePayload, 'Healthcheck'), false);
     assert.equal(
-      harness.calls.some((call) => call.method === 'HTTP_GET' && call.requestPath === 'http://127.0.0.1:49152/'),
+      harness.calls.some((call) => call.method === 'HTTP_GET' && call.requestPath === 'http://172.30.0.2:8090/'),
       true
     );
   } finally {
@@ -464,7 +474,8 @@ test('a successful rehearsal encrypts, restores, health-gates and completely cle
     assert.equal(operation.restore.emptyVolumesRecreated[0].recreatedEmpty, true);
     assert.equal(operation.candidate.health, 'healthy');
     assert.equal(operation.candidate.internalNetwork, true);
-    assert.equal(operation.candidate.hostBinding, '127.0.0.1:dynamic');
+    assert.equal(operation.candidate.hostBinding, 'none');
+    assert.equal(operation.candidate.hostPortPublished, false);
     assert.equal(operation.candidate.removedAfterProof, true);
     assert.equal(operation.guarantees.routeMutated, false);
     assert.equal(operation.guarantees.providerMetadataMutated, false);
@@ -479,9 +490,7 @@ test('a successful rehearsal encrypts, restores, health-gates and completely cle
     ]);
     assert.equal(state.candidatePayload.Env.some((entry) => entry.startsWith('COOLIFY_')), false);
     assert.equal(state.candidatePayload.HostConfig.NetworkMode.startsWith('foxos-stateful-rehearsal-'), true);
-    assert.deepEqual(state.candidatePayload.HostConfig.PortBindings['8090/tcp'], [
-      { HostIp: '127.0.0.1', HostPort: '0' }
-    ]);
+    assert.equal(Object.hasOwn(state.candidatePayload.HostConfig, 'PortBindings'), false);
     const archiveFile = path.join(harness.root, operation.backups[0].archiveFile);
     const encrypted = fs.readFileSync(archiveFile);
     assert.equal(encrypted.includes(harness.persistentArchive), false);
@@ -517,6 +526,27 @@ test('candidate health failure unpauses the source, removes every temporary obje
     assert.equal(state.networkName, null);
     assert.deepEqual(state.temporaryVolumes, []);
     assert.equal(harness.manager.status().summary.verified, 0);
+  } finally {
+    fs.rmSync(harness.root, { recursive: true, force: true });
+  }
+});
+
+test('a network that Docker does not verify as internal fails closed before candidate creation', async () => {
+  const harness = createHarness({ networkInternal: false });
+  try {
+    const created = await plan(harness.manager);
+    await assert.rejects(
+      () => harness.manager.runPlan(created.planId, created.confirmation),
+      (error) => error.code === 'candidate-network-not-internal'
+    );
+    const operation = harness.manager.status().operations[0];
+    const state = harness.state();
+    assert.equal(operation.status, 'failed-and-cleaned');
+    assert.equal(operation.cleanup.completed, true);
+    assert.equal(state.sourcePaused, false);
+    assert.equal(state.candidateExists, false);
+    assert.equal(state.networkName, null);
+    assert.deepEqual(state.temporaryVolumes, []);
   } finally {
     fs.rmSync(harness.root, { recursive: true, force: true });
   }

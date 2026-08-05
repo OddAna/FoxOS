@@ -1,6 +1,7 @@
 const crypto = require('node:crypto');
 const dns = require('node:dns').promises;
 const fs = require('node:fs');
+const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
@@ -517,7 +518,8 @@ function sanitizeBuildLog(value) {
   return output;
 }
 
-async function defaultHostProbe({ port, healthPath, timeoutMs = 5000 }) {
+async function defaultHostProbe({ host = '127.0.0.1', port, healthPath, timeoutMs = 5000 }) {
+  if (net.isIP(host) !== 4) throw new Error('Health probe host must be a literal IPv4 address');
   const marker = '\nFOXOS_HTTP_STATUS:';
   const result = await runFile('nsenter', [
     '-t', '1', '-n',
@@ -526,7 +528,7 @@ async function defaultHostProbe({ port, healthPath, timeoutMs = 5000 }) {
     '--max-filesize', String(64 * 1024),
     '--header', 'User-Agent: FoxOS-source-health/1',
     '--write-out', marker + '%{http_code}',
-    'http://127.0.0.1:' + port + healthPath
+    'http://' + host + ':' + port + healthPath
   ], { timeoutMs: timeoutMs + 1000, maxBuffer: 128 * 1024 });
   const separator = result.stdout.lastIndexOf(marker);
   if (separator === -1) throw new Error('Health probe did not return an HTTP status');

@@ -604,7 +604,8 @@ volume as either persistent or empty-ephemeral and must identify an observed
 TCP application port. A source with Docker health must currently be healthy. If
 the image has no Docker health definition, the operator must provide a bounded
 absolute HTTP path that FoxOS will request only through the temporary
-candidate's dynamic loopback binding. Bind mounts, databases, protected
+candidate's verified internal Docker address from the host network namespace.
+The candidate has no published host port. Bind mounts, databases, protected
 resources, custom command/user overrides and privileged or host access fail
 closed.
 
@@ -619,11 +620,13 @@ Persistent archives are encrypted locally with AES-256-GCM, written owner-only
 and authenticated before use; plaintext archives and environment/secret values
 are not stored. FoxOS restores them into temporary named volumes attached to a
 constrained candidate using the exact observed image. The candidate has a fresh
-internal Docker network and a Docker-assigned `127.0.0.1` port only. A proof is
-current only after restored content matches, candidate health passes, source
-health is re-proven and every temporary container, volume and network is
-removed. Startup recovery may unpause and clean an interrupted operation but
-never replays it.
+internal Docker network and no published host port. FoxOS verifies the network
+is internal, reads the candidate's private RFC1918 address from Docker, and uses
+a bounded host-namespace HTTP probe only for that address and selected private
+port. A proof is current only after restored content matches, candidate health
+passes, source health is re-proven and every temporary container, volume and
+network is removed. Startup recovery may unpause and clean an interrupted
+operation but never replays it.
 
 ```bash
 docker compose exec -T foxos node /app/statefulRehearsalCli.js plan RESOURCE_ID \
@@ -642,7 +645,8 @@ docker compose exec -T foxos node /app/statefulRehearsalCli.js status
 
 Omit `--health-http-path` when the source already has a Docker healthcheck. The
 fallback accepts only a path without a query, fragment or traversal; FoxOS does
-not execute an operator-provided command or request an arbitrary host.
+not execute an operator-provided command, accept an operator-provided host or
+publish the candidate port.
 
 This proves a same-host restore and closes only the Application Manifest's local
 restore-test blocker. The encrypted archive and master key are on the same

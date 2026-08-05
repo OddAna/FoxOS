@@ -151,11 +151,12 @@ Stateful rehearsal records and encrypted archives are owner-only state under
 running, fully inspected, provider-owned stateful applications with one to four
 explicitly classified writable named volumes. An existing Docker healthcheck
 must be healthy; otherwise the plan requires a bounded absolute HTTP path that
-is probed only on the candidate's dynamic `127.0.0.1` binding. FoxOS never
-executes an operator-provided health command or requests an arbitrary host. It
-rejects databases, bind mounts, read-only/unknown mounts, protected resources,
-custom runtime overrides, host namespaces, privilege, devices and added
-capabilities.
+is probed from the host network namespace only at the candidate's Docker-observed
+private address on FoxOS's verified internal network. The candidate publishes no
+host port. FoxOS never executes an operator-provided health command or accepts
+an operator-provided host. It rejects databases, bind mounts,
+read-only/unknown mounts, protected resources, custom runtime overrides, host
+namespaces, privilege, devices and added capabilities.
 
 Planning performs Docker reads only. Running requires the operation-specific
 exact confirmation and revalidates container, image, mounts, environment,
@@ -171,10 +172,12 @@ authentication, written with `0600` permissions and decrypted again to verify
 their content digest. Plaintext archives, environment values and secret values
 are not persisted or returned. Temporary candidates use the same observed
 immutable image ID, temporary named volumes, an internal Docker bridge, a
-dynamic loopback binding, `no-new-privileges` and fixed CPU/memory/PID limits.
-They never receive an external route or provider network. A current proof is
-written only after restore digests, candidate health, source health and complete
-temporary-object cleanup all pass.
+private RFC1918 address with no published port, `no-new-privileges` and fixed
+CPU/memory/PID limits. They never receive an external route or provider network.
+A current proof is written only after restore digests, candidate health, source
+health and complete temporary-object cleanup all pass. Failed HTTP probes retain
+only bounded state/status/error categories, never response bodies or target
+addresses.
 
 This is same-host operational evidence. The encrypted archive and its master
 key share one machine, so the proof does not establish off-host recovery, key
