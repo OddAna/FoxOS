@@ -418,9 +418,24 @@ operations, APIs or CLI output.
 The production server intentionally constructs this manager without execution
 adapters or an approval verifier. Its execution gate reports `sealed`, startup
 never replays an interrupted operation, and only authenticated status/plan/get
-review endpoints exist. There is no run or approve endpoint. Real Docker,
-route, TLS and availability adapters must be implemented and proven in the
-disposable lab before Burak can authorize interface work or any live workload
+review endpoints exist. There is no run or approve endpoint.
+
+The first real adapter is restricted to an explicitly confirmed disposable
+Docker lab. It pulls one reviewed immutable image digest, creates a separately
+constrained candidate and an operation-owned TLS gateway on loopback ports,
+uses only a reserved `.foxos.invalid` hostname and operation-scoped path, pins
+the ephemeral certificate and hostname, and samples route availability and
+upstream identity every 10 ms across the switch. Source container ID,
+`StartedAt` and restart count remain invariant. The proof covers a clean switch
+with zero unavailable samples, explicit rollback, an injected unavailable
+sample with verified automatic rollback, and exact labeled cleanup.
+
+This lab gateway is not a production certificate or arbitrary-domain adapter.
+It has no production API route, cannot accept a real domain, cannot detach a
+provider and is never injected into the production manager. The remaining
+backend boundary is compiling an evidence-complete normal stateless manifest
+into a candidate plus a provider-neutral FoxOS domain/route/TLS transaction;
+only after that boundary is proven can interface work authorize a live
 transition.
 
 ### Implemented boundary: server-owned workload source and environment evidence

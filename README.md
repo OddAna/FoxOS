@@ -625,6 +625,24 @@ CLI operation that starts a migration. The later FoxOS interface must supply a
 short-lived, one-time, plan/resource/evidence-bound approval and the reviewed
 runtime/route adapters before execution can be enabled.
 
+The transaction is exercised against real Docker by a separate, deliberately
+non-production lab command:
+
+```bash
+docker compose exec -T foxos node /app/statelessMigrationLabCli.js proof \
+  --confirm "RUN DISPOSABLE STATELESS LAB"
+```
+
+It creates only exact-labeled disposable objects, uses a reserved
+`.foxos.invalid` hostname and loopback ports, holds the source container ID,
+start time and restart count constant, and proves both a zero-unavailable-sample
+switch with explicit rollback and a one-sample injected failure with automatic
+rollback. It then removes every lab container and network. The TLS certificate
+is ephemeral and operation-pinned; this proves the transaction mechanics, not
+browser-trusted production certificate issuance or arbitrary-domain routing.
+The command does not configure the sealed production manager or create an
+execution endpoint.
+
 ## Server-owned workload source and environment evidence
 
 A running, fully inspected, provider-owned stateless application can capture
@@ -1018,6 +1036,9 @@ Do not copy its contents into Git or logs.
 - No audit log yet
 - General resource migration is not available; only the explicitly labeled
   disposable pilot can be adopted, routed, backed up, restored and rolled back
+- The stateless transaction has a real-Docker disposable route/TLS and failure
+  proof, but normal Application Manifest materialization and arbitrary
+  production domain/TLS authority are still sealed and not exposed for apply
 - Off-host recovery currently gates each disposable adoption operation; there
   is no scheduled retention policy, database-consistent backup, key escrow or
   full-machine disaster restore workflow yet
@@ -1092,6 +1113,9 @@ FoxOS/
 │   ├── workloadEvidenceManager.js # Encrypted source archive and environment evidence capture
 │   ├── statefulRehearsalManager.js # Same-host encrypted restore and isolated health proof
 │   ├── statefulShadowManager.js # Persistent internal FoxOS-owned stateful shadow
+│   ├── statelessMigrationManager.js # Sealed blue/green transaction state machine
+│   ├── statelessMigrationLabAdapter.js # Real-Docker disposable adapter and rollback proof
+│   ├── statelessMigrationLabGateway.js # Operation-pinned lab TLS switch and probe
 │   ├── applicationManifestManager.js # Provider-neutral import drafts and desired revisions
 │   ├── adoptionManager.js     # Disposable plan/apply/rollback transaction
 │   └── package.json

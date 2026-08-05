@@ -109,6 +109,15 @@
   imported containers, arbitrary registries, credentials, persistence, secrets,
   routes or real workloads without Burak's explicit approval and the missing
   safety gates in `ROADMAP.md`.
+- The real stateless migration adapter is an execution proof only for the exact
+  disposable lab contract. Preserve the reviewed image digest, `slab_*` run
+  identity, `.foxos.invalid` hostname, operation-scoped path, loopback-only
+  ports, source container/start-time/restart-count continuity, constrained
+  candidate and gateway, certificate/hostname pin, continuous zero-unavailable
+  probe, injected-fault rollback and exact run-labeled cleanup. Never inject
+  this adapter or its UI-approval emulator into `server.js`, accept a real
+  domain, expose a run/approve API, migrate an existing container or infer
+  provider-detach permission from the lab proof.
 - Read `ARCHITECTURE.md` before changing discovery, deployment, domains,
   secrets, persistence, backup or migration behavior.
 

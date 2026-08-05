@@ -114,7 +114,43 @@ function createDockerClient(socketPath) {
     });
   }
 
-  return { request, requestBuffer, requestBuild };
+  async function exec(containerId, command, options = {}) {
+    if (!/^[a-f0-9]{12,64}$/i.test(String(containerId || ''))) {
+      throw new Error('Docker exec requires an exact container ID');
+    }
+    if (
+      !Array.isArray(command) || command.length < 1 || command.length > 32 ||
+      command.some((value) => typeof value !== 'string' || value.length > 4096 || value.includes('\0'))
+    ) {
+      throw new Error('Docker exec command is invalid');
+    }
+    const created = await request('POST', '/containers/' + containerId + '/exec', {
+      AttachStdout: true,
+      AttachStderr: true,
+      Tty: true,
+      Cmd: command
+    });
+    if (!created || !/^[a-f0-9]{12,64}$/i.test(String(created.Id || ''))) {
+      throw new Error('Docker did not return an exec identity');
+    }
+    const output = await requestRaw('POST', '/exec/' + created.Id + '/start', JSON.stringify({
+      Detach: false,
+      Tty: true
+    }), {
+      contentType: 'application/json',
+      maxResponseBytes: options.maxResponseBytes || 256 * 1024,
+      timeoutMs: options.timeoutMs || 15000
+    });
+    const details = await request('GET', '/exec/' + created.Id + '/json');
+    const exitCode = Number.isInteger(details && details.ExitCode) ? details.ExitCode : null;
+    return {
+      execId: created.Id,
+      exitCode,
+      output: output.toString('utf8')
+    };
+  }
+
+  return { exec, request, requestBuffer, requestBuild };
 }
 
 module.exports = {
