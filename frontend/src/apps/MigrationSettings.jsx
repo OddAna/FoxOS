@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  AlertTriangle,
   ArrowLeft,
   CheckCircle2,
   ChevronRight,
@@ -11,31 +10,58 @@ import {
 } from 'lucide-react';
 import { apiFetch } from '../api';
 
-const CARD_STYLE = {
-  background: 'rgba(255,255,255,0.05)',
-  border: '1px solid rgba(255,255,255,0.08)',
-  borderRadius: '12px'
+const RESOURCE_CARD_STYLE = {
+  background: 'rgba(255,255,255,0.055)',
+  border: '1px solid rgba(255,255,255,0.09)',
+  borderRadius: '14px',
+  padding: '16px'
 };
 
-const BUTTON_STYLE = {
-  border: '1px solid rgba(255,255,255,0.16)',
-  borderRadius: '8px',
-  padding: '9px 14px',
+const ACTION_BUTTON_STYLE = {
+  border: '1px solid rgba(255,255,255,0.15)',
+  background: 'rgba(255,255,255,0.08)',
   color: '#fff',
-  fontSize: '13px',
-  fontWeight: 'bold',
+  borderRadius: '8px',
+  padding: '7px 10px',
   display: 'inline-flex',
   alignItems: 'center',
-  justifyContent: 'center',
-  gap: '8px'
+  gap: '6px',
+  cursor: 'pointer',
+  fontSize: '12px'
+};
+
+const PRIMARY_BUTTON_STYLE = {
+  background: '#0ea5e9',
+  color: '#fff',
+  border: 'none',
+  padding: '9px 14px',
+  borderRadius: '8px',
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: '7px',
+  fontSize: '13px',
+  fontWeight: 'bold'
+};
+
+const SECONDARY_BUTTON_STYLE = {
+  background: 'rgba(255,255,255,0.08)',
+  color: '#fff',
+  border: '1px solid rgba(255,255,255,0.16)',
+  padding: '9px 14px',
+  borderRadius: '8px',
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: '7px',
+  fontSize: '13px',
+  fontWeight: 'bold'
 };
 
 const REVIEW_STATES = {
-  ready: { label: 'İnceleme planına uygun', color: '#4ade80' },
-  blocked: { label: 'Eksik bilgi', color: '#f59e0b' },
-  unsupported: { label: 'Bu sürümde desteklenmiyor', color: '#aaa' },
-  managed: { label: 'Zaten FoxOS yönetiminde', color: '#38bdf8' },
-  protected: { label: 'Korunan sistem kaynağı', color: '#c4b5fd' }
+  ready: 'İncelemeye uygun',
+  blocked: 'Eksik bilgi',
+  unsupported: 'Bu sürümde desteklenmiyor',
+  managed: 'FoxOS yönetiminde',
+  protected: 'Korunan sistem kaynağı'
 };
 
 const STRATEGY_LABELS = {
@@ -135,6 +161,16 @@ function DetailLine({ label, children, mono = false }) {
         {children ?? '—'}
       </div>
     </>
+  );
+}
+
+function DetailSection({ title, description, children, last = false }) {
+  return (
+    <section style={{ padding: last ? '26px 0 0 0' : '26px 0', borderBottom: last ? 'none' : '1px solid rgba(255,255,255,0.08)' }}>
+      <h2 style={{ margin: description ? '0 0 6px 0' : '0 0 14px 0', fontSize: '16px' }}>{title}</h2>
+      {description && <div style={{ marginBottom: '14px', color: '#888', fontSize: '13px' }}>{description}</div>}
+      {children}
+    </section>
   );
 }
 
@@ -295,8 +331,8 @@ const MigrationSettings = () => {
 
   if (loading) {
     return (
-      <div ref={rootRef} style={{ ...CARD_STYLE, padding: '24px', color: '#aaa', display: 'flex', alignItems: 'center', gap: '9px' }}>
-        <Loader2 size={17} className="spin" /> Sunucu envanteri okunuyor…
+      <div ref={rootRef} style={{ color: '#888', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <Loader2 size={15} className="spin" /> Sunucu envanteri okunuyor…
       </div>
     );
   }
@@ -306,43 +342,41 @@ const MigrationSettings = () => {
     const observed = snapshotResources.get(detailResource.resourceId) || {};
     const classification = detailResource.classification || {};
     const state = reviewState(detailResource);
-    const stateInfo = REVIEW_STATES[state];
     const blockers = allBlockers(detailResource);
     const routes = observed.routes || [];
     const mounts = observed.mounts || [];
     const dependencies = detailResource.dependencies || [];
+    const isReady = state === 'ready';
 
     return (
       <div ref={rootRef}>
         <button
           type="button"
           onClick={() => setDetailResourceId(null)}
-          style={{ background: 'transparent', color: '#aaa', border: 'none', padding: '0', marginBottom: '20px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}
+          style={{ background: 'transparent', color: '#aaa', border: 'none', padding: '0', marginBottom: '24px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}
         >
-          <ArrowLeft size={16} /> Tarama sonuçlarına dön
+          <ArrowLeft size={16} /> Tarama Sonuçlarına Dön
         </button>
 
-        <div style={{ ...CARD_STYLE, padding: '20px', marginBottom: '16px' }}>
-          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '16px', flexWrap: 'wrap' }}>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: '19px', fontWeight: 'bold', overflowWrap: 'anywhere' }}>{detailResource.name}</div>
-              <div title={detailResource.resourceId} style={{ marginTop: '5px', color: '#888', fontSize: '12px', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
-                {detailResource.resourceId}
-              </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '18px', paddingBottom: '24px', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+          <Server size={24} color="#38bdf8" style={{ flex: '0 0 auto' }} />
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <h1 style={{ margin: '0 0 6px 0', fontSize: '28px', fontWeight: 'bold', overflowWrap: 'anywhere' }}>{detailResource.name}</h1>
+            <div title={detailResource.resourceId} style={{ color: '#888', fontSize: '12px', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', overflowWrap: 'anywhere' }}>
+              {detailResource.resourceId}
             </div>
-            <div style={{ color: stateInfo.color, fontSize: '12px', display: 'flex', alignItems: 'center', gap: '7px' }}>
-              <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: stateInfo.color }} />
-              {stateInfo.label}
-            </div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: isReady ? '#27c93f' : '#8b93a1', fontSize: '13px' }}>
+            <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'currentColor' }} />
+            {REVIEW_STATES[state]}
           </div>
         </div>
 
-        <div style={{ ...CARD_STYLE, padding: '20px', marginBottom: '16px' }}>
-          <h3 style={{ fontSize: '14px', margin: '0 0 16px', color: '#ccc' }}>Kaynak bilgileri</h3>
-          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 160px) minmax(0, 1fr)', gap: '11px 18px', fontSize: '13px', lineHeight: 1.5 }}>
+        <DetailSection title="Kaynak Bilgileri">
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 160px) minmax(0, 1fr)', rowGap: '10px', columnGap: '16px', fontSize: '13px', wordBreak: 'break-word' }}>
             <DetailLine label="Sağlık">{observed.runtime?.health?.status || observed.runtime?.state}</DetailLine>
             <DetailLine label="Mevcut kaynak">{detailResource.observedProvider || 'docker'}</DetailLine>
-            <DetailLine label="Yönetim otoritesi">{CLASS_LABELS[classification.authorityClass] || classification.authorityClass}</DetailLine>
+            <DetailLine label="Yönetim">{CLASS_LABELS[classification.authorityClass] || classification.authorityClass}</DetailLine>
             <DetailLine label="Kaynak sınıfı">{CLASS_LABELS[classification.workloadRole] || classification.workloadRole} · {CLASS_LABELS[classification.stateClass] || classification.stateClass}</DetailLine>
             <DetailLine label="İnceleme stratejisi">{STRATEGY_LABELS[detailResource.strategy] || detailResource.strategy}</DetailLine>
             <DetailLine label="Erişilebilirlik">{AVAILABILITY_LABELS[detailResource.availability?.currentMode] || detailResource.availability?.currentMode}</DetailLine>
@@ -351,29 +385,26 @@ const MigrationSettings = () => {
             <DetailLine label="Ortam değişkeni">{detailResource.evidence?.environmentVariableCount ?? '—'}</DetailLine>
             <DetailLine label="Manifest sürümü" mono>{shortId(detailResource.evidence?.manifestRevisionId)}</DetailLine>
           </div>
-        </div>
+        </DetailSection>
 
-        <div style={{ ...CARD_STYLE, padding: '20px', marginBottom: '16px' }}>
-          <h3 style={{ fontSize: '14px', margin: '0 0 14px', color: '#ccc' }}>Alan adları ve rotalar</h3>
+        <DetailSection title="Alan Adları ve Rotalar" description="Kaynak üzerinde gözlenen yayın adresleri.">
           {routes.length ? routes.map((route, index) => (
             <div key={`${route.domain}-${route.path}-${index}`} style={{ fontSize: '13px', marginTop: index ? '8px' : 0, overflowWrap: 'anywhere' }}>
               {route.tls ? 'https' : 'http'}://{route.domain}{route.path || '/'}
             </div>
           )) : <div style={{ color: '#888', fontSize: '13px' }}>Yayınlanmış rota bulunamadı.</div>}
-        </div>
+        </DetailSection>
 
-        <div style={{ ...CARD_STYLE, padding: '20px', marginBottom: '16px' }}>
-          <h3 style={{ fontSize: '14px', margin: '0 0 14px', color: '#ccc' }}>Depolama</h3>
+        <DetailSection title="Depolama" description="Container ile bağlı kalıcı veya geçici depolama yolları.">
           {mounts.length ? mounts.map((mount, index) => (
             <div key={`${mount.destination}-${index}`} style={{ fontSize: '13px', marginTop: index ? '10px' : 0, overflowWrap: 'anywhere' }}>
               <div>{mount.name || mount.source || mount.type} → {mount.destination}</div>
               <div style={{ color: '#888', fontSize: '12px', marginTop: '2px' }}>{mount.readOnly ? 'Salt okunur' : 'Yazılabilir'} · {mount.type}</div>
             </div>
           )) : <div style={{ color: '#888', fontSize: '13px' }}>Kalıcı depolama bağı gözlenmedi.</div>}
-        </div>
+        </DetailSection>
 
-        <div style={{ ...CARD_STYLE, padding: '20px', marginBottom: '16px' }}>
-          <h3 style={{ fontSize: '14px', margin: '0 0 14px', color: '#ccc' }}>İlişkiler ve doğrulanmış bağımlılıklar</h3>
+        <DetailSection title="İlişkiler ve Doğrulanmış Bağımlılıklar">
           {dependencies.length ? dependencies.map((dependency, index) => (
             <div key={dependency.relationshipId || index} style={{ fontSize: '13px', marginTop: index ? '10px' : 0 }}>
               <div>{dependency.type || 'İlişki'} · {dependency.required ? 'gerekli bağımlılık' : 'gözlenen ilişki'}</div>
@@ -382,172 +413,146 @@ const MigrationSettings = () => {
               </div>
             </div>
           )) : <div style={{ color: '#888', fontSize: '13px' }}>Doğrulanmış bir kaynak bağımlılığı bulunamadı.</div>}
-        </div>
+        </DetailSection>
 
-        <div style={{ ...CARD_STYLE, padding: '20px' }}>
-          <h3 style={{ fontSize: '14px', margin: '0 0 14px', color: '#ccc' }}>Engeller ve sonraki gereksinimler</h3>
+        <DetailSection title="Engeller ve Sonraki Gereksinimler" last>
           {blockers.length ? blockers.map((blocker, index) => (
-            <div key={`${blocker.group}-${blocker.code}-${index}`} style={{ display: 'flex', alignItems: 'flex-start', gap: '9px', marginTop: index ? '12px' : 0 }}>
-              <AlertTriangle size={15} color="#f59e0b" style={{ flex: '0 0 auto', marginTop: '2px' }} />
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: '13px', lineHeight: 1.45 }}>{BLOCKER_LABELS[blocker.code] || blocker.message || blocker.code}</div>
-                <div style={{ color: '#777', fontSize: '11px', marginTop: '3px', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', overflowWrap: 'anywhere' }}>{blocker.code}</div>
-              </div>
+            <div key={`${blocker.group}-${blocker.code}-${index}`} style={{ padding: index ? '12px 0 0' : 0, marginTop: index ? '12px' : 0, borderTop: index ? '1px solid rgba(255,255,255,0.08)' : 'none' }}>
+              <div style={{ fontSize: '13px', lineHeight: 1.45 }}>{BLOCKER_LABELS[blocker.code] || blocker.message || blocker.code}</div>
+              <div style={{ color: '#888', fontSize: '11px', marginTop: '3px', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', overflowWrap: 'anywhere' }}>{blocker.code}</div>
             </div>
-          )) : (
-            <div style={{ color: '#4ade80', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <CheckCircle2 size={15} /> İnceleme planını engelleyen eksik kanıt bulunmadı.
-            </div>
-          )}
-        </div>
+          )) : <div style={{ color: '#888', fontSize: '13px' }}>İnceleme planını engelleyen eksik kanıt bulunmadı.</div>}
+        </DetailSection>
       </div>
     );
   }
 
+  const countSummary = Object.entries(REVIEW_STATES)
+    .filter(([state]) => counts[state] > 0)
+    .map(([state, label]) => `${counts[state]} ${label.toLocaleLowerCase('tr-TR')}`)
+    .join(' · ');
+
   return (
     <div ref={rootRef}>
-      <div style={{ ...CARD_STYLE, padding: '18px', marginBottom: '16px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '18px', flexWrap: 'wrap' }}>
-          <div style={{ flex: '1 1 320px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '9px', fontSize: '14px', fontWeight: 'bold' }}>
-              <Server size={18} /> Sunucuyu Tara
-            </div>
-            <p style={{ margin: '8px 0 0', color: '#999', fontSize: '13px', lineHeight: 1.5 }}>
-              Docker kaynaklarını salt okunur inceler. Tarama, seçim ve inceleme planı hiçbir uygulamayı durdurmaz veya geçiş başlatmaz.
-            </p>
-          </div>
+      <section style={{ padding: '0 0 26px 0', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+        <h2 style={{ margin: '0 0 6px 0', fontSize: '16px' }}>Sunucu Taraması</h2>
+        <div style={{ marginBottom: '14px', color: '#888', fontSize: '13px', lineHeight: 1.5 }}>
+          Docker kaynaklarını salt okunur inceler. Tarama hiçbir uygulamayı durdurmaz ve geçiş başlatmaz.
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px' }}>
           <button
             type="button"
             onClick={scanServer}
             disabled={scanning}
-            style={{ ...BUTTON_STYLE, background: 'rgba(255,255,255,0.1)', cursor: scanning ? 'wait' : 'pointer', opacity: scanning ? 0.65 : 1 }}
+            style={{ ...SECONDARY_BUTTON_STYLE, cursor: scanning ? 'wait' : 'pointer', opacity: scanning ? 0.6 : 1 }}
           >
-            {scanning ? <Loader2 size={16} className="spin" /> : <RefreshCw size={16} />}
+            {scanning ? <Loader2 size={15} className="spin" /> : <RefreshCw size={15} />}
             {scanning ? 'Taranıyor…' : 'Sunucuyu Tara'}
           </button>
+          {snapshot && (
+            <div style={{ color: '#888', fontSize: '12px' }}>
+              Son tarama: {formatDate(snapshot.generatedAt)} · {snapshot.summary?.resources ?? resources.length} kaynak
+            </div>
+          )}
         </div>
-        {snapshot && (
-          <div style={{ marginTop: '13px', color: '#777', fontSize: '11px' }}>
-            Son tarama: {formatDate(snapshot.generatedAt)} · {snapshot.summary?.resources ?? resources.length} kaynak · {shortId(snapshot.snapshotId)}
-          </div>
-        )}
-      </div>
+      </section>
 
       {message && (
-        <div style={{ marginBottom: '16px', padding: '11px 13px', borderRadius: '9px', fontSize: '13px', lineHeight: 1.45, background: message.type === 'error' ? 'rgba(255,95,86,0.12)' : 'rgba(74,222,128,0.1)', border: `1px solid ${message.type === 'error' ? 'rgba(255,95,86,0.35)' : 'rgba(74,222,128,0.25)'}`, color: message.type === 'error' ? '#ffaaa5' : '#a7f3d0' }}>
+        <div style={{ marginTop: '20px', padding: '10px 12px', borderRadius: '8px', background: message.type === 'error' ? 'rgba(255,95,86,0.12)' : 'rgba(39,201,63,0.12)', border: `1px solid ${message.type === 'error' ? 'rgba(255,95,86,0.35)' : 'rgba(39,201,63,0.35)'}`, color: message.type === 'error' ? '#ff8a84' : '#75da85', fontSize: '13px' }}>
           {message.text}
         </div>
       )}
 
       {selectionStatus?.stale && (
-        <div style={{ marginBottom: '16px', padding: '11px 13px', borderRadius: '9px', fontSize: '13px', lineHeight: 1.45, background: 'rgba(245,158,11,0.11)', border: '1px solid rgba(245,158,11,0.3)', color: '#fcd34d', display: 'flex', gap: '9px', alignItems: 'flex-start' }}>
-          <AlertTriangle size={16} style={{ flex: '0 0 auto', marginTop: '1px' }} />
+        <div style={{ marginTop: '20px', padding: '10px 12px', borderRadius: '8px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: '#ccc', fontSize: '13px', lineHeight: 1.45 }}>
           Sunucu envanteri değiştiği için önceki seçim geçersiz. Yeni sonuçlara göre tekrar seçim yapmalısın.
         </div>
       )}
 
       {!plan ? (
-        <div style={{ ...CARD_STYLE, padding: '30px', textAlign: 'center' }}>
-          <ShieldCheck size={24} color="#888" />
-          <div style={{ marginTop: '11px', fontSize: '14px' }}>Güncel bir tarama sonucu yok.</div>
-          <div style={{ marginTop: '6px', color: '#888', fontSize: '13px' }}>Sunucudaki kaynakları sınıflandırmak için “Sunucuyu Tara” düğmesini kullan.</div>
-        </div>
+        <section style={{ padding: '26px 0 0 0' }}>
+          <div style={{ ...RESOURCE_CARD_STYLE, color: '#8b93a1', textAlign: 'center', fontSize: '13px' }}>
+            Güncel bir tarama sonucu yok. Kaynakları sınıflandırmak için “Sunucuyu Tara” düğmesini kullan.
+          </div>
+        </section>
       ) : (
         <>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '8px', marginBottom: '16px' }}>
-            {Object.entries(REVIEW_STATES).map(([state, info]) => (
-              <div key={state} style={{ ...CARD_STYLE, padding: '12px 13px' }}>
-                <div style={{ fontSize: '18px', fontWeight: 'bold' }}>{counts[state]}</div>
-                <div style={{ color: info.color, fontSize: '11px', lineHeight: 1.35, marginTop: '3px' }}>{info.label}</div>
-              </div>
-            ))}
-          </div>
+          <section style={{ padding: '26px 0', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+            <h2 style={{ margin: '0 0 6px 0', fontSize: '16px' }}>Kaynaklar</h2>
+            <div style={{ marginBottom: '14px', color: '#888', fontSize: '12px' }}>{countSummary}</div>
 
-          <div style={{ ...CARD_STYLE, overflow: 'hidden' }}>
-            <div style={{ minHeight: '43px', padding: '10px 14px', borderBottom: '1px solid rgba(255,255,255,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '14px', flexWrap: 'wrap' }}>
-              <label style={{ display: 'inline-flex', alignItems: 'center', gap: '9px', fontSize: '13px', cursor: selectableIds.length ? 'pointer' : 'default', color: selectableIds.length ? '#fff' : '#777' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '14px', marginBottom: '12px' }}>
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: '9px', color: selectableIds.length ? '#fff' : '#888', fontSize: '13px', cursor: selectableIds.length ? 'pointer' : 'default' }}>
                 <input
                   type="checkbox"
                   checked={selectableIds.length > 0 && selectableIds.every((resourceId) => selectedSet.has(resourceId))}
                   onChange={toggleAll}
                   disabled={!selectableIds.length}
-                  style={{ accentColor: '#0ea5e9' }}
                 />
-                Tüm uygun kaynakları seç ({selectableIds.length})
+                Tüm uygun kaynakları seç
               </label>
-              <span style={{ color: '#888', fontSize: '12px' }}>{selectedIds.length} seçili</span>
+              <span style={{ color: '#8b93a1', fontSize: '12px' }}>{selectedIds.length} seçili</span>
             </div>
 
-            {resources.map((resource, index) => {
-              const state = reviewState(resource);
-              const info = REVIEW_STATES[state];
-              const selectable = state === 'ready';
-              const observed = snapshotResources.get(resource.resourceId) || {};
-              const routeDomains = (observed.routes || []).map((route) => route.domain).filter(Boolean);
-              const classification = resource.classification || {};
-              return (
-                <div
-                  key={resource.resourceId}
-                  style={{ padding: '14px', borderTop: index ? '1px solid rgba(255,255,255,0.07)' : 'none', display: 'grid', gridTemplateColumns: '22px minmax(180px, 1.4fr) minmax(150px, 1fr) minmax(160px, 1.1fr) 24px', gap: '12px', alignItems: 'center' }}
-                >
-                  <input
-                    type="checkbox"
-                    aria-label={`${resource.name} kaynağını seç`}
-                    checked={selectedSet.has(resource.resourceId)}
-                    onChange={() => toggleResource(resource.resourceId)}
-                    disabled={!selectable}
-                    style={{ accentColor: '#0ea5e9' }}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setDetailResourceId(resource.resourceId)}
-                    style={{ minWidth: 0, border: 'none', padding: 0, background: 'transparent', color: '#fff', textAlign: 'left', cursor: 'pointer' }}
-                  >
-                    <div style={{ fontSize: '13px', fontWeight: 'bold', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{resource.name}</div>
-                    <div title={resource.resourceId} style={{ color: '#777', fontSize: '11px', marginTop: '4px', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {resource.resourceId}
-                    </div>
-                  </button>
-                  <div style={{ minWidth: 0, fontSize: '12px' }}>
-                    <div>{CLASS_LABELS[classification.workloadRole] || classification.workloadRole || 'Belirsiz'} · {CLASS_LABELS[classification.stateClass] || classification.stateClass || 'Belirsiz'}</div>
-                    <div style={{ color: '#777', marginTop: '4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{resource.observedProvider || 'docker'} · {observed.runtime?.health?.status || observed.runtime?.state || 'bilinmiyor'}</div>
-                  </div>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ color: info.color, fontSize: '11px', display: 'flex', alignItems: 'center', gap: '7px' }}>
-                      <span style={{ width: '6px', height: '6px', flex: '0 0 6px', borderRadius: '50%', background: info.color }} />
-                      {info.label}
-                    </div>
-                    <div title={routeDomains.join(', ')} style={{ color: '#777', fontSize: '11px', marginTop: '4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {routeDomains.length ? routeDomains.join(', ') : `${(observed.mounts || []).length} depolama bağı`}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    aria-label={`${resource.name} ayrıntılarını aç`}
-                    onClick={() => setDetailResourceId(resource.resourceId)}
-                    style={{ border: 'none', padding: '4px', background: 'transparent', color: '#888', cursor: 'pointer', display: 'flex' }}
-                  >
-                    <ChevronRight size={17} />
-                  </button>
-                </div>
-              );
-            })}
-          </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '9px' }}>
+              {resources.map((resource) => {
+                const state = reviewState(resource);
+                const selectable = state === 'ready';
+                const observed = snapshotResources.get(resource.resourceId) || {};
+                const routeDomains = (observed.routes || []).map((route) => route.domain).filter(Boolean);
+                const classification = resource.classification || {};
+                const isReady = state === 'ready';
 
-          <div style={{ marginTop: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
-            <div style={{ color: '#888', fontSize: '12px', lineHeight: 1.45, flex: '1 1 300px' }}>
-              Seçim sunucuda bu tarama sonucuna bağlı saklanır. Bu işlem yalnızca sonraki inceleme adımını hazırlar.
+                return (
+                  <div key={resource.resourceId} style={{ ...RESOURCE_CARD_STYLE, display: 'flex', alignItems: 'center', gap: '14px' }}>
+                    <input
+                      type="checkbox"
+                      aria-label={`${resource.name} kaynağını seç`}
+                      checked={selectedSet.has(resource.resourceId)}
+                      onChange={() => toggleResource(resource.resourceId)}
+                      disabled={!selectable}
+                      style={{ opacity: selectable ? 1 : 0.5 }}
+                    />
+                    <div style={{ width: '10px', height: '10px', borderRadius: '50%', flex: '0 0 auto', background: isReady ? '#27c93f' : '#6b7280', boxShadow: isReady ? '0 0 12px rgba(39,201,63,0.45)' : 'none' }} />
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <strong style={{ fontSize: '14px', overflow: 'hidden', textOverflow: 'ellipsis' }}>{resource.name}</strong>
+                        {resource.protected && <ShieldCheck size={14} color="#38bdf8" />}
+                      </div>
+                      <div style={{ color: '#8b93a1', fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: '3px' }}>
+                        {resource.observedProvider || 'docker'} · {CLASS_LABELS[classification.workloadRole] || classification.workloadRole || 'Belirsiz'} · {observed.runtime?.health?.status || observed.runtime?.state || 'bilinmiyor'}
+                        {routeDomains.length ? ` · ${routeDomains.join(', ')}` : ` · ${(observed.mounts || []).length} depolama bağı`}
+                      </div>
+                    </div>
+                    <div style={{ color: '#8b93a1', fontSize: '12px', whiteSpace: 'nowrap' }}>{REVIEW_STATES[state]}</div>
+                    <button
+                      type="button"
+                      onClick={() => setDetailResourceId(resource.resourceId)}
+                      style={ACTION_BUTTON_STYLE}
+                    >
+                      Ayrıntılar <ChevronRight size={13} />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+
+          <section style={{ padding: '26px 0 0 0' }}>
+            <h2 style={{ margin: '0 0 6px 0', fontSize: '16px' }}>İnceleme Seçimi</h2>
+            <div style={{ marginBottom: '14px', color: '#888', fontSize: '13px', lineHeight: 1.5 }}>
+              Seçim bu tarama sonucuna bağlı olarak sunucuda saklanır. Kaydetmek geçişi başlatmaz.
             </div>
             <button
               type="button"
               onClick={saveSelection}
               disabled={saving || !selectionChanged}
-              style={{ ...BUTTON_STYLE, background: '#0ea5e9', borderColor: '#0ea5e9', cursor: saving || !selectionChanged ? 'not-allowed' : 'pointer', opacity: saving || !selectionChanged ? 0.5 : 1 }}
+              style={{ ...PRIMARY_BUTTON_STYLE, cursor: saving || !selectionChanged ? 'not-allowed' : 'pointer', opacity: saving || !selectionChanged ? 0.5 : 1 }}
             >
-              {saving ? <Loader2 size={16} className="spin" /> : <CheckCircle2 size={16} />}
-              {selectedIds.length ? 'Seçilenleri inceleme planına ekle' : 'Kaydedilmiş seçimi temizle'}
+              {saving ? <Loader2 size={15} className="spin" /> : <CheckCircle2 size={15} />}
+              {selectedIds.length ? 'Seçilenleri Kaydet' : 'Kaydedilmiş Seçimi Temizle'}
             </button>
-          </div>
+          </section>
         </>
       )}
     </div>
