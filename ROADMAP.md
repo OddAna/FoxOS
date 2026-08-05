@@ -233,6 +233,11 @@ target blocks only adoption/migration operations that require restore proof.
   operation-scoped dependency bridges, FoxOS routing plus egress networks,
   browser-trusted certificate import, Caddy route staging, HAProxy domain
   switching, reversible host ingress, public identity probes and rollback.
+- [x] Reconstruct candidate startup from a verified live executable and working
+  directory instead of trusting mutable PID1 process titles. Support the
+  provider-neutral Next standalone runtime directly, fail closed on unsupported
+  titles before traffic mutation, and preserve bounded adapter failure codes in
+  the run record without secrets.
 - [ ] Complete the first fresh UI-authorized production stateless migration and
   record source continuity, zero unavailable samples, rollback availability and
   unchanged non-selected workloads before calling the live boundary complete.

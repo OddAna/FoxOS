@@ -9,6 +9,7 @@ const RESOURCE_ID_PATTERN = /^res_[a-f0-9]{32}$/;
 const CONTAINER_ID_PATTERN = /^[a-f0-9]{12,64}$/;
 const IMAGE_ID_PATTERN = /^sha256:[a-f0-9]{64}$/;
 const HOSTNAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,252}$/;
+const EXECUTABLE_PATTERN = /^(?:\/[a-zA-Z0-9._+/@-]+|[a-zA-Z0-9._+-]+)$/;
 const SUPPORTED_DEPENDENCY_PROTOCOLS = new Map([
   ['postgres:', 5432],
   ['postgresql:', 5432],
@@ -74,6 +75,60 @@ function rewriteEnvironmentDependencies(entries, dependencies) {
     parsed.hostname = alias;
     return entry.slice(0, separator + 1) + parsed.toString();
   });
+}
+
+function safeContainerPath(value) {
+  const candidate = String(value || '');
+  return candidate.startsWith('/') && candidate.length <= 4096 &&
+    !candidate.includes('\0') && !/[\r\n]/.test(candidate) &&
+    !candidate.split('/').includes('..');
+}
+
+function startupContractFromObservation({
+  argv,
+  argvExecutable = false,
+  executablePath,
+  workingDirectory,
+  nextStandaloneServer = false
+} = {}) {
+  const normalizedArgv = Array.isArray(argv) ? argv.map(String) : [];
+  if (
+    argvExecutable === true && normalizedArgv.length >= 1 && normalizedArgv.length <= 32 &&
+    EXECUTABLE_PATTERN.test(normalizedArgv[0]) &&
+    normalizedArgv.every((entry) => entry && entry.length <= 4096 && !/[\r\n\0]/.test(entry)) &&
+    safeContainerPath(workingDirectory)
+  ) {
+    return {
+      kind: 'observed-process-argv',
+      entrypoint: normalizedArgv,
+      cmd: [],
+      workingDirectory
+    };
+  }
+  if (
+    normalizedArgv.length === 1 && /^next-server \(v[^)]+\)$/.test(normalizedArgv[0]) &&
+    nextStandaloneServer === true && safeContainerPath(executablePath) &&
+    safeContainerPath(workingDirectory)
+  ) {
+    return {
+      kind: 'next-standalone-runtime',
+      entrypoint: [executablePath, 'server.js'],
+      cmd: [],
+      workingDirectory
+    };
+  }
+  return null;
+}
+
+function environmentForStartup(entries, startup) {
+  const environment = [...(entries || [])];
+  if (startup && startup.kind === 'next-standalone-runtime') {
+    return [
+      ...environment.filter((entry) => !String(entry).startsWith('HOSTNAME=')),
+      'HOSTNAME=0.0.0.0'
+    ];
+  }
+  return environment;
 }
 
 function createProductionStatelessMigrationAdapter({
@@ -364,19 +419,32 @@ function createProductionStatelessMigrationAdapter({
     return { containerId: created.Id, bridgeAlias };
   }
 
-  async function observedProcessArgv(containerId) {
+  async function observedProcessContract(containerId) {
     try {
-      const result = await dockerExec(containerId, ['cat', '/proc/1/cmdline'], {
-        timeoutMs: 5000,
-        maxResponseBytes: 128 * 1024
+      const options = { timeoutMs: 5000, maxResponseBytes: 128 * 1024 };
+      const [cmdline, executable, workingDirectory, nextStandalone] = await Promise.all([
+        dockerExec(containerId, ['cat', '/proc/1/cmdline'], options),
+        dockerExec(containerId, ['readlink', '/proc/1/exe'], options),
+        dockerExec(containerId, ['readlink', '/proc/1/cwd'], options),
+        dockerExec(containerId, ['test', '-f', '/proc/1/cwd/server.js'], options)
+      ]);
+      if (cmdline.exitCode !== 0 || executable.exitCode !== 0 || workingDirectory.exitCode !== 0) return null;
+      const argv = String(cmdline.output || '').split('\0').filter(Boolean);
+      let argvExecutable = false;
+      if (argv.length && EXECUTABLE_PATTERN.test(argv[0])) {
+        const executableProbe = await dockerExec(containerId, [
+          'sh', '-c', 'command -v "$1" >/dev/null 2>&1 || [ -x "$1" ]',
+          'foxos-startup-probe', argv[0]
+        ], options);
+        argvExecutable = executableProbe.exitCode === 0;
+      }
+      return startupContractFromObservation({
+        argv,
+        argvExecutable,
+        executablePath: String(executable.output || '').trim(),
+        workingDirectory: String(workingDirectory.output || '').trim(),
+        nextStandaloneServer: nextStandalone.exitCode === 0
       });
-      if (result.exitCode !== 0) return null;
-      const argv = String(result.output || '').split('\0').filter(Boolean);
-      if (
-        argv.length < 1 || argv.length > 32 ||
-        argv.some((entry) => !entry || entry.length > 4096 || /[\r\n]/.test(entry))
-      ) return null;
-      return argv;
     } catch {
       return null;
     }
@@ -408,14 +476,26 @@ function createProductionStatelessMigrationAdapter({
           encodeURIComponent(localTag) + '&tag=' + resource.runtime.imageId.slice(7, 19)
       );
       const contract = plan.executionContract.candidate;
-      const runningArgv = await observedProcessArgv(resource.runtime.containerId);
+      const startup = await observedProcessContract(resource.runtime.containerId);
+      if (!startup) {
+        throw new ProductionStatelessMigrationError(
+          'A safe provider-neutral candidate startup contract could not be reconstructed',
+          409,
+          'candidate-startup-contract-unsupported'
+        );
+      }
       const alias = 'foxos-sm-' + operationId.slice(-24);
       const name = 'foxos-stateless-' + operationId.slice(-20);
       const exposedPorts = Object.fromEntries(contract.ingressPorts.map((port) => [port + '/tcp', {}]));
-      const candidateEnvironment = rewriteEnvironmentDependencies(environment.resolved, adapterState.dependencies);
+      const candidateEnvironment = environmentForStartup(
+        rewriteEnvironmentDependencies(environment.resolved, adapterState.dependencies),
+        startup
+      );
       const created = await dockerRequest('POST', '/containers/create?name=' + encodeURIComponent(name), {
         Image: resource.runtime.imageId,
-        ...(runningArgv ? { Entrypoint: runningArgv, Cmd: [] } : {}),
+        Entrypoint: startup.entrypoint,
+        Cmd: startup.cmd,
+        WorkingDir: startup.workingDirectory,
         ...(contract.runtime.user ? { User: contract.runtime.user } : {}),
         Env: candidateEnvironment,
         Labels: {
@@ -449,13 +529,25 @@ function createProductionStatelessMigrationAdapter({
       await dockerRequest('POST', '/containers/' + created.Id + '/start');
       const candidate = await dockerRequest('GET', '/containers/' + created.Id + '/json');
       if (!candidate.State || candidate.State.Running !== true || candidate.Image !== resource.runtime.imageId) {
-        throw new ProductionStatelessMigrationError('Candidate runtime identity proof failed', 503, 'candidate-runtime-proof-failed');
+        adapterState.candidateAttempt = {
+          startupKind: startup.kind,
+          exitCode: candidate.State && Number.isInteger(candidate.State.ExitCode) ? candidate.State.ExitCode : null,
+          oomKilled: Boolean(candidate.State && candidate.State.OOMKilled),
+          running: Boolean(candidate.State && candidate.State.Running)
+        };
+        persist(adapterState);
+        throw new ProductionStatelessMigrationError(
+          'Candidate process exited before runtime identity proof completed',
+          503,
+          'candidate-runtime-proof-failed'
+        );
       }
       adapterState.candidate = {
         containerId: candidate.Id,
         alias,
         imageId: candidate.Image,
         privatePort: contract.health.privatePort,
+        startupKind: startup.kind,
         createdAt: now()
       };
       persist(adapterState);
@@ -473,13 +565,27 @@ function createProductionStatelessMigrationAdapter({
         sourceTouched: false
       };
     } catch (error) {
+      const failure = error instanceof ProductionStatelessMigrationError
+        ? error
+        : new ProductionStatelessMigrationError(
+            'Docker rejected the FoxOS candidate startup transaction',
+            503,
+            'candidate-docker-start-failed'
+          );
+      adapterState.failure = {
+        phase: 'candidate-create',
+        code: failure.code,
+        message: failure.message,
+        recordedAt: now()
+      };
+      try { persist(adapterState); } catch { /* preserve the original bounded failure */ }
       if (candidateId) {
         try { await removeOwnedContainer(candidateId, operationId, 'stateless-migration-candidate'); } catch { /* retain original error */ }
       }
       for (const bridgeId of createdBridges.reverse()) {
         try { await removeOwnedContainer(bridgeId, operationId, 'stateless-dependency-bridge'); } catch { /* retain original error */ }
       }
-      throw error;
+      throw failure;
     }
   }
 
@@ -705,5 +811,7 @@ module.exports = {
   ProductionStatelessMigrationError,
   createProductionStatelessMigrationAdapter,
   dependencyFromValue,
+  environmentForStartup,
+  startupContractFromObservation,
   rewriteEnvironmentDependencies
 };

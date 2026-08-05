@@ -109,23 +109,19 @@
   imported containers, arbitrary registries, credentials, persistence, secrets,
   routes or real workloads without Burak's explicit approval and the missing
   safety gates in `ROADMAP.md`.
-- The real stateless migration adapter is an execution proof only for the exact
-  disposable lab contract. Preserve the reviewed image digest, `slab_*` run
-  identity, `.foxos.invalid` hostname, operation-scoped path, loopback-only
-  ports, source container/start-time/restart-count continuity, constrained
-  candidate and gateway, certificate/hostname pin, continuous zero-unavailable
-  probe, injected-fault rollback and exact run-labeled cleanup. Never inject
-  this adapter or its UI-approval emulator into `server.js`, accept a real
-  domain, expose a run/approve API, migrate an existing container or infer
-  provider-detach permission from the lab proof.
-- The generic stateless manifest compiler is review-only. Preserve exact
-  registry/manifest drift binding, immutable OCI-to-image binding, value-free
-  environment references, all observed domain/path routes with exact private
-  ports, no writable mounts or host ports, explicit candidate limits and
-  replaceable browser-trusted certificate/DNS adapter selection. Production may
-  receive this compiler while remaining sealed, but do not inject a runtime or
-  route adapter, add run/approve endpoints, select a provider, or start a real
-  transition before the reviewed interface and Burak's explicit authorization.
+- Keep the disposable stateless lab separate from production. Preserve its
+  reviewed image digest, `slab_*` identity, `.foxos.invalid` hostname,
+  loopback-only ports, injected-fault rollback and exact run-labeled cleanup;
+  it must never accept a real domain or emulate production approval.
+- The production stateless adapter is authorized only through the authenticated
+  one-click run coordinator and the exact reviewed manifest contract. Preserve
+  registry/manifest/image drift binding, encrypted environment resolution,
+  constrained no-host-port candidates, operation-scoped dependency bridges,
+  FoxOS-owned TLS/route authority, zero-unavailable probes, source continuity
+  and automatic rollback. Candidate startup must be reconstructed from a
+  verified running executable contract; a process title or provider startup
+  wrapper must never be executed blindly. Keep source-stop, source-recreation,
+  provider-detach, destructive cleanup and separate approve endpoints absent.
 - Read `ARCHITECTURE.md` before changing discovery, deployment, domains,
   secrets, persistence, backup or migration behavior.
 

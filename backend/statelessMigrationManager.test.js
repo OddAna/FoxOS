@@ -413,6 +413,33 @@ test('candidate health failure occurs before switch and cleans exact temporary s
   fs.rmSync(root, { recursive: true, force: true });
 });
 
+test('bounded production adapter failures remain actionable in the operation record', async () => {
+  const productionFailure = new Error('A safe provider-neutral candidate startup contract could not be reconstructed');
+  productionFailure.name = 'ProductionStatelessMigrationError';
+  productionFailure.statusCode = 409;
+  productionFailure.code = 'candidate-startup-contract-unsupported';
+  const adapter = readyAdapter({
+    createCandidate: async () => { throw productionFailure; }
+  });
+  const { manager, root } = harness({ adapter });
+  const plan = prepare(manager);
+  await assert.rejects(
+    manager.execute(plan.planId, 'approval-secret-value'),
+    (error) => (
+      error.code === 'candidate-startup-contract-unsupported' &&
+      error.message === productionFailure.message
+    )
+  );
+  const operation = manager.status().operations[0];
+  assert.equal(operation.status, 'failed-before-switch-cleaned');
+  assert.deepEqual(operation.error, {
+    code: 'candidate-startup-contract-unsupported',
+    message: productionFailure.message
+  });
+  assert.deepEqual(adapter.events, ['preflight', 'createCandidate']);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
 test('any unavailable traffic sample triggers verified automatic rollback and cleanup', async () => {
   const adapter = readyAdapter({
     verifyTraffic: async () => ({
