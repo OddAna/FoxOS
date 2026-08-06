@@ -67,12 +67,36 @@ function normalizeStatus(value) {
   return safeText(value, 96) || 'unknown';
 }
 
+function repositoryName(value) {
+  const repository = String(value || '').trim().replace(/\.git$/i, '');
+  if (!repository) return null;
+  const normalized = repository.replace(/^git@[^:]+:/, '').replace(/^https?:\/\/[^/]+\//, '');
+  return safeText(normalized.split('/').filter(Boolean).pop(), 256);
+}
+
+function generatedProviderName(value) {
+  return /:[A-Za-z0-9._-]+-[a-z0-9]{20,}$/i.test(String(value || '')) ||
+    /-[a-z0-9]{20,}$/i.test(String(value || ''));
+}
+
+function applicationName(row) {
+  const name = safeText(row.name);
+  if (name && !generatedProviderName(name)) return name;
+  return repositoryName(row.git_repository) || 'Unnamed application';
+}
+
+function serviceName(row) {
+  const name = safeText(row.name);
+  if (name && !generatedProviderName(name)) return name;
+  return safeText(row.service_type, 128) || 'Unnamed service';
+}
+
 function projectApplication(row) {
   return {
     sourceKind: 'provider-definition',
     provider: PROVIDER,
     externalId: safeText(row.uuid, 128),
-    name: safeText(row.name) || safeText(row.git_repository) || 'Coolify application',
+    name: applicationName(row),
     providerKind: 'application',
     status: normalizeStatus(row.status),
     serviceType: safeText(row.build_pack, 96),
@@ -95,7 +119,7 @@ function projectService(row) {
     sourceKind: 'provider-definition',
     provider: PROVIDER,
     externalId: safeText(row.uuid, 128),
-    name: safeText(row.name) || safeText(row.service_type) || 'Coolify service',
+    name: serviceName(row),
     providerKind: 'service',
     status: normalizeStatus(row.status),
     serviceType: safeText(row.service_type, 128),
@@ -287,8 +311,12 @@ module.exports = {
   COOLIFY_READER_SCHEMA_VERSION,
   CoolifyMigrationReaderError,
   createCoolifyMigrationReader,
+  applicationName,
+  generatedProviderName,
   normalizeBaseUrl,
   projectApplication,
   projectDatabase,
-  projectService
+  projectService,
+  repositoryName,
+  serviceName
 };

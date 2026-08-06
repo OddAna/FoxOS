@@ -16,7 +16,7 @@ test('optional Coolify reader encrypts its token and persists only projected mig
       calls.push({ baseUrl, actualToken, endpoint });
       if (endpoint === 'applications') return [{
         uuid: 'app-uuid',
-        name: 'Stopped site',
+        name: 'example/stopped-site:main-abcdefghijklmnopqrstuv',
         status: 'exited:unhealthy',
         fqdn: 'https://stopped.example.test',
         git_repository: 'example/stopped-site',
@@ -75,7 +75,9 @@ test('optional Coolify reader encrypts its token and persists only projected mig
       'application', 'database', 'service'
     ]);
     assert.equal(scan.resources.find((resource) => resource.externalId === 'app-uuid').status, 'exited:unhealthy');
+    assert.equal(scan.resources.find((resource) => resource.externalId === 'app-uuid').name, 'stopped-site');
     assert.equal(scan.resources.find((resource) => resource.externalId === 'service-uuid').serviceType, 'wireguard-easy');
+    assert.equal(scan.resources.find((resource) => resource.externalId === 'service-uuid').name, 'WireGuard Easy');
 
     const persisted = [reader.paths.configFile, reader.paths.tokenFile]
       .map((file) => fs.readFileSync(file).toString('utf8')).join('\n');
