@@ -159,6 +159,7 @@ function createProductionStatelessMigrationAdapter({
     !secretManager || typeof secretManager.resolveEnvironment !== 'function' ||
     !certificateImporter || typeof certificateImporter.importDomain !== 'function' ||
     !ingressAuthority || typeof ingressAuthority.stageRoutes !== 'function' ||
+    typeof ingressAuthority.hostIngressAddress !== 'function' ||
     typeof ingressAuthority.verifyLegacyDomain !== 'function'
   ) {
     throw new Error('Production stateless adapter requires Docker, registry, secrets, certificate and ingress adapters');
@@ -809,11 +810,13 @@ function createProductionStatelessMigrationAdapter({
   async function verifyTraffic({ operationId }) {
     const adapterState = getState(operationId);
     const primary = adapterState.routes[0];
+    const connectHost = await ingressAuthority.hostIngressAddress();
     const probes = [];
     for (let index = 0; index < 8; index += 1) {
       try {
         probes.push(await ingressAuthority.httpsProbe({
           hostname: primary.domain,
+          connectHost,
           requestPath: primary.path,
           expectedRouteId: primary.routeId
         }));
@@ -851,10 +854,15 @@ function createProductionStatelessMigrationAdapter({
   async function verifyRollback({ operationId }) {
     const adapterState = getState(operationId);
     const primary = adapterState.routes[0];
+    const connectHost = await ingressAuthority.hostIngressAddress();
     const probes = [];
     for (let index = 0; index < 5; index += 1) {
       try {
-        probes.push(await ingressAuthority.httpsProbe({ hostname: primary.domain, requestPath: primary.path }));
+        probes.push(await ingressAuthority.httpsProbe({
+          hostname: primary.domain,
+          connectHost,
+          requestPath: primary.path
+        }));
       } catch (error) {
         probes.push({ error: error.code || 'probe-failed', tlsValid: false, statusCode: 0 });
       }

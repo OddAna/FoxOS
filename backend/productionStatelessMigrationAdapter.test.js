@@ -143,6 +143,7 @@ test('candidate creation applies the reconstructed Next standalone contract', as
     },
     certificateImporter: { importDomain: async () => ({}) },
     ingressAuthority: {
+      hostIngressAddress: async () => '10.0.3.1',
       stageRoutes: async () => [],
       verifyLegacyDomain: async () => ({ legacyReady: true })
     }
@@ -217,6 +218,7 @@ test('candidate health waits through the initial connection race and accepts pla
     },
     certificateImporter: { importDomain: async () => ({}) },
     ingressAuthority: {
+      hostIngressAddress: async () => '10.0.3.1',
       inspectOwnedInfrastructure: async () => ({ gateway: { Id: gatewayId } }),
       stageRoutes: async () => [],
       verifyLegacyDomain: async () => ({ legacyReady: true })
@@ -288,6 +290,7 @@ test('candidate health exhaustion persists bounded diagnostics before cleanup', 
     },
     certificateImporter: { importDomain: async () => ({}) },
     ingressAuthority: {
+      hostIngressAddress: async () => '10.0.3.1',
       inspectOwnedInfrastructure: async () => ({ gateway: { Id: gatewayId } }),
       stageRoutes: async () => [],
       verifyLegacyDomain: async () => ({ legacyReady: true })
@@ -355,6 +358,7 @@ test('candidate health polling stops at its bounded readiness deadline', async (
     },
     certificateImporter: { importDomain: async () => ({}) },
     ingressAuthority: {
+      hostIngressAddress: async () => '10.0.3.1',
       inspectOwnedInfrastructure: async () => ({ gateway: { Id: gatewayId } }),
       stageRoutes: async () => [],
       verifyLegacyDomain: async () => ({ legacyReady: true })
@@ -399,6 +403,56 @@ test('candidate health polling stops at its bounded readiness deadline', async (
   fs.rmSync(dataRoot, { recursive: true, force: true });
 });
 
+test('traffic proof bypasses public DNS and verifies the direct host ingress path', async () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-production-direct-ingress-'));
+  const operationId = 'smop_' + '5'.repeat(32);
+  const sourceId = '6'.repeat(64);
+  const routeId = 'smroute_' + '7'.repeat(24);
+  const probeOptions = [];
+  const adapter = createProductionStatelessMigrationAdapter({
+    dataRoot,
+    dockerRequest: async (method, requestPath) => {
+      assert.equal(method, 'GET');
+      assert.equal(requestPath, '/containers/' + sourceId + '/json');
+      return { Id: sourceId, State: { Running: true } };
+    },
+    dockerExec: async () => ({ exitCode: 0 }),
+    resourceRegistry: { getLatest: () => null },
+    secretManager: {
+      getEnvironmentRevision: () => null,
+      resolveEnvironment: () => []
+    },
+    certificateImporter: { importDomain: async () => ({}) },
+    ingressAuthority: {
+      hostIngressAddress: async () => '10.0.3.1',
+      httpsProbe: async (options) => {
+        probeOptions.push(options);
+        return {
+          statusCode: 307,
+          tlsValid: true,
+          expectedRoute: true,
+          candidateIdentity: operationId
+        };
+      },
+      stageRoutes: async () => [],
+      verifyLegacyDomain: async () => ({ legacyReady: true })
+    }
+  });
+  fs.writeFileSync(path.join(adapter.paths.operationsRoot, operationId + '.json'), JSON.stringify({
+    schemaVersion: 1,
+    operationId,
+    source: { containerId: sourceId },
+    routes: [{ routeId, domain: 'app.example.com', path: '/' }]
+  }));
+
+  const proof = await adapter.verifyTraffic({ operationId });
+  assert.equal(proof.healthy, true);
+  assert.equal(probeOptions.length, 8);
+  assert.equal(probeOptions.every((options) => options.connectHost === '10.0.3.1'), true);
+  assert.equal(probeOptions.every((options) => options.hostname === 'app.example.com'), true);
+  fs.rmSync(dataRoot, { recursive: true, force: true });
+});
+
 test('production adapter exposes every safe transaction capability and no destructive methods', () => {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-production-adapter-'));
   const adapter = createProductionStatelessMigrationAdapter({
@@ -412,6 +466,7 @@ test('production adapter exposes every safe transaction capability and no destru
     },
     certificateImporter: { importDomain: async () => ({}) },
     ingressAuthority: {
+      hostIngressAddress: async () => '10.0.3.1',
       inspectOwnedInfrastructure: async () => ({ gateway: { Id: 'f'.repeat(64) } }),
       stageRoutes: async () => [],
       verifyLegacyDomain: async () => ({ legacyReady: true })
@@ -440,6 +495,7 @@ test('candidate health fails closed before exec when gateway identity is not exa
     },
     certificateImporter: { importDomain: async () => ({}) },
     ingressAuthority: {
+      hostIngressAddress: async () => '10.0.3.1',
       inspectOwnedInfrastructure: async () => ({ gateway: { Id: 'foxos-gateway' } }),
       stageRoutes: async () => [],
       verifyLegacyDomain: async () => ({ legacyReady: true })
