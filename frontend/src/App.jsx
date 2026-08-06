@@ -894,14 +894,18 @@ const Desktop = () => {
             <>
               <div className="context-item" onClick={() => handleOpenApplication(desktopMenu.item.application)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>Aç</div>
               <div className="context-item" onClick={() => openApplicationSettings(desktopMenu.item.application)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><SettingsIcon size={14} /> Ayarlar'a Git</div>
-              <div className="context-item" onClick={() => checkApplicationUpdate(desktopMenu.item.application)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><RotateCw size={14} /> Güncellemeleri Denetle</div>
+              {desktopMenu.item.application.capabilities.checkUpdates && (
+                <div className="context-item" onClick={() => checkApplicationUpdate(desktopMenu.item.application)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><RotateCw size={14} /> Güncellemeleri Denetle</div>
+              )}
               <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '4px 0' }}></div>
               {desktopMenu.item.application.capabilities.stop ? (
                 <div className="context-item" onClick={() => runApplicationAction(desktopMenu.item.application, 'stop')} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><Square size={14} /> Durdur</div>
-              ) : (
+              ) : desktopMenu.item.application.capabilities.start ? (
                 <div className="context-item" onClick={() => runApplicationAction(desktopMenu.item.application, 'start')} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><Play size={14} /> Başlat</div>
+              ) : null}
+              {desktopMenu.item.application.capabilities.restart && (
+                <div className="context-item" onClick={() => runApplicationAction(desktopMenu.item.application, 'restart')} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><RotateCw size={14} /> Yeniden Başlat</div>
               )}
-              <div className="context-item" onClick={() => runApplicationAction(desktopMenu.item.application, 'restart')} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><RotateCw size={14} /> Yeniden Başlat</div>
               <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '4px 0' }}></div>
               <div className="context-item" onClick={() => removeDesktopShortcut(desktopMenu.item.application)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', color: '#ff8a84', display: 'flex', alignItems: 'center', gap: '6px' }}><X size={14} /> Masaüstünden Kaldır</div>
             </>

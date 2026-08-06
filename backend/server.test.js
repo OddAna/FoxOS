@@ -570,7 +570,7 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   });
   assert.equal(initialApplicationInventoryResponse.status, 200);
   const initialApplicationInventory = await initialApplicationInventoryResponse.json();
-  assert.equal(initialApplicationInventory.schemaVersion, 1);
+  assert.equal(initialApplicationInventory.schemaVersion, 2);
   assert.deepEqual(initialApplicationInventory.applications, []);
 
   const installResponse = await fetch(baseUrl() + '/api/apps/it-tools/install', {

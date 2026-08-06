@@ -115,10 +115,14 @@ const ApplicationManager = ({ target }) => {
   const canEditSelectedDomain = Boolean(
     selectedApplication && (selectedApplication.capabilities.editAccessLink || selectedApplication.capabilities.editDomain)
   );
+  const canEditSelectedCompose = Boolean(
+    selectedApplication && selectedApplication.capabilities.editCompose
+  );
 
   useEffect(() => {
     if (!selectedContainerId) {
       setContainerSettings(null);
+      setSettingsLoading(false);
       return undefined;
     }
 
@@ -183,6 +187,20 @@ const ApplicationManager = ({ target }) => {
       return undefined;
     }
 
+    if (!canEditSelectedCompose) {
+      setComposeLoading(false);
+      setComposeError(null);
+      setComposeMessage(null);
+      setSelectedComposeFileId(null);
+      setComposeContent('');
+      setComposeState({
+        editable: false,
+        files: [],
+        reason: 'Bu deaktif kurulumun çalışan container metadata’sı olmadığı için bağlı Compose kaynağı henüz doğrulanamıyor.'
+      });
+      return undefined;
+    }
+
     let active = true;
     setComposeLoading(true);
     setComposeState(null);
@@ -210,13 +228,13 @@ const ApplicationManager = ({ target }) => {
       });
 
     return () => { active = false; };
-  }, [selectedApplicationId]);
+  }, [selectedApplicationId, canEditSelectedCompose]);
 
   const displayedApplications = useMemo(() => {
     const query = searchQuery.trim().toLocaleLowerCase('tr-TR');
     if (!query) return applications;
     return applications.filter((application) => (
-      `${application.name} ${application.instanceName || ''} ${application.externalUrl || ''}`
+      `${application.name} ${application.instanceName || ''} ${application.externalUrl || ''} ${(application.declaredUrls || []).join(' ')} ${application.category || ''}`
         .toLocaleLowerCase('tr-TR')
         .includes(query)
     ));
@@ -559,7 +577,7 @@ const ApplicationManager = ({ target }) => {
             <button type="button" onClick={() => runAction(selectedApplication, 'restart')} disabled={Boolean(pendingAction) || !canRestart} style={{ background: 'rgba(255,255,255,0.08)', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 14px', borderRadius: '8px', cursor: pendingAction || !canRestart ? 'not-allowed' : 'pointer', opacity: canRestart ? 1 : 0.5, display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px' }}>
               {pendingAction === 'restart' ? <Loader2 size={15} className="spin" /> : <RotateCw size={15} />} Yeniden Başlat
             </button>
-            <button type="button" onClick={checkForUpdates} disabled={updateChecking} style={{ background: 'rgba(255,255,255,0.08)', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 14px', borderRadius: '8px', cursor: updateChecking ? 'wait' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px' }}>
+            <button type="button" onClick={checkForUpdates} disabled={updateChecking || !selectedApplication.capabilities.checkUpdates} style={{ background: 'rgba(255,255,255,0.08)', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 14px', borderRadius: '8px', cursor: updateChecking ? 'wait' : selectedApplication.capabilities.checkUpdates ? 'pointer' : 'not-allowed', opacity: selectedApplication.capabilities.checkUpdates ? 1 : 0.5, display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px' }}>
               {updateChecking ? <Loader2 size={15} className="spin" /> : <RotateCw size={15} />} Güncellemeleri Denetle
             </button>
             <button type="button" onClick={changeDesktopShortcut} disabled={shortcutSaving} style={{ background: 'rgba(255,255,255,0.08)', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 14px', borderRadius: '8px', cursor: shortcutSaving ? 'wait' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px' }}>
@@ -613,7 +631,17 @@ const ApplicationManager = ({ target }) => {
               })}
             </div>
           ) : (
-            <div style={{ color: '#888', fontSize: '13px' }}>Bu uygulama için yayınlanmış bir web adresi bulunamadı.</div>
+            selectedApplication.declaredUrls && selectedApplication.declaredUrls.length ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {selectedApplication.declaredUrls.map((url) => (
+                  <div key={url} style={{ padding: '9px 12px', borderRadius: '8px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: '#888', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {url} · tanımda kayıtlı, şu anda çalışmıyor
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ color: '#888', fontSize: '13px' }}>Bu uygulama için yayınlanmış bir web adresi bulunamadı.</div>
+            )
           )}
 
           <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
@@ -670,7 +698,9 @@ const ApplicationManager = ({ target }) => {
         <section style={{ padding: '26px 0', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
           <h3 style={{ margin: '0 0 6px 0', fontSize: '16px' }}>Otomatik Başlatma</h3>
           <div style={{ marginBottom: '14px', color: '#888', fontSize: '13px' }}>Sunucu veya Docker yeniden başladığında containerın davranışı.</div>
-          {settingsLoading ? (
+          {!selectedContainerId ? (
+            <div style={{ color: '#888', fontSize: '13px', lineHeight: 1.5 }}>Çalışan container bulunmadığı için otomatik başlatma ayarı henüz kullanılamıyor.</div>
+          ) : settingsLoading ? (
             <div style={{ color: '#888', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}><Loader2 size={15} className="spin" /> Ayarlar okunuyor...</div>
           ) : (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center' }}>
@@ -744,9 +774,9 @@ const ApplicationManager = ({ target }) => {
         <section style={{ padding: '26px 0 0 0' }}>
           <h3 style={{ margin: '0 0 14px 0', fontSize: '16px' }}>Uygulama</h3>
           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 160px) minmax(0, 1fr)', rowGap: '10px', columnGap: '16px', fontSize: '13px', wordBreak: 'break-word' }}>
-            <div style={{ color: '#888' }}>Instance</div><div>{selectedApplication.instanceName || selectedApplication.runtime.containerName}</div>
-            <div style={{ color: '#888' }}>Container</div><div>{selectedApplication.runtime.containerName}</div>
-            <div style={{ color: '#888' }}>Yönetim</div><div>{selectedApplication.managedByServer ? 'Sunucu tarafından yönetiliyor' : `${selectedApplication.provenance.source === 'coolify' ? 'Coolify' : 'Mevcut'} kurulumundan çalışıyor · geçiş tamamlanmadı`}</div>
+            <div style={{ color: '#888' }}>Instance</div><div>{selectedApplication.instanceName || selectedApplication.runtime.containerName || 'Deaktif kurulum'}</div>
+            <div style={{ color: '#888' }}>Container</div><div>{selectedApplication.runtime.containerName || 'Çalışan container yok'}</div>
+            <div style={{ color: '#888' }}>Yönetim</div><div>{selectedApplication.installation && selectedApplication.installation.state === 'inactive-definition' ? 'Kurulum tanımı bulundu · şu anda çalışmıyor' : selectedApplication.managedByServer ? 'Sunucu tarafından yönetiliyor' : `${selectedApplication.provenance.source === 'coolify' ? 'Coolify' : 'Mevcut'} kurulumundan çalışıyor · geçiş tamamlanmadı`}</div>
             <div style={{ color: '#888' }}>Durum</div><div>{selectedApplication.runtime.status || selectedApplication.runtime.state}</div>
             {containerSettings && containerSettings.ports.length > 0 && (
               <><div style={{ color: '#888' }}>Portlar</div><div>{containerSettings.ports.map((port) => `${port.hostIp}:${port.hostPort} → ${port.privatePort}`).join(', ')}</div></>
@@ -764,7 +794,7 @@ const ApplicationManager = ({ target }) => {
     <div data-application-manager>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '16px', marginBottom: '20px' }}>
         <div style={{ color: '#888', fontSize: '13px', lineHeight: 1.5 }}>
-          Sunucuda keşfedilen kullanıcı uygulamaları. Her instance ayrı görünür.
+          Sunucuda keşfedilen kurulu uygulamalar. Çalışan ve deaktif her instance ayrı görünür.
         </div>
         <button type="button" onClick={() => refreshApplications().catch(() => {})} disabled={loading} style={{ background: 'rgba(255,255,255,0.1)', color: '#fff', border: '1px solid rgba(255,255,255,0.2)', padding: '8px 12px', borderRadius: '8px', cursor: loading ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 'bold' }}>
           <RotateCw size={14} className={loading ? 'spin' : ''} /> Yenile
@@ -804,11 +834,11 @@ const ApplicationManager = ({ target }) => {
                 </div>
                 <div style={{ minWidth: 0 }}>
                   <h3 style={{ margin: '0 0 4px 0', fontSize: '16px', fontWeight: 'bold', overflow: 'hidden', textOverflow: 'ellipsis' }}>{application.name}</h3>
-                  <div style={{ fontSize: '12px', color: '#888', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{application.instanceName || application.runtime.containerName}</div>
+                  <div style={{ fontSize: '12px', color: '#888', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{application.instanceName || application.runtime.containerName || 'Deaktif kurulum'}</div>
                 </div>
               </div>
               <div style={{ margin: '0 0 20px 0', fontSize: '12px', color: '#888', lineHeight: '1.5', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {application.externalUrl || application.runtime.containerName}
+                {application.externalUrl || application.runtime.containerName || application.summary}
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '16px' }}>
                 <ApplicationStatus application={application} pendingAction={actions[application.id]} compact />

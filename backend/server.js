@@ -1090,7 +1090,6 @@ async function getApplicationInventory() {
     snapshot = await resourceRegistry.scan();
   }
 
-  const hiddenApplicationIds = new Set(desktopShortcutManager.state().hiddenApplicationIds);
   return {
     schemaVersion: APPLICATION_INVENTORY_SCHEMA_VERSION,
     snapshotId: snapshot && snapshot.snapshotId || null,
@@ -1102,7 +1101,10 @@ async function getApplicationInventory() {
       domainPreferences: applicationDomainManager.primaryDomains()
     }).map((application) => ({
       ...application,
-      desktopShortcutVisible: !hiddenApplicationIds.has(application.id)
+      desktopShortcutVisible: desktopShortcutManager.isVisible(
+        application.id,
+        application.desktopShortcutDefaultVisible !== false
+      )
     }))
   };
 }

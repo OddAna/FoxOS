@@ -403,6 +403,15 @@ target blocks only adoption/migration operations that require restore proof.
   do not create a popup or a second window. Desktop and Settings share the same
   canonical inventory, pending lifecycle state and Docker action path; desktop
   and Store settings links target the exact application/container record.
+- [x] Include inactive provider application, service and database definitions
+  that have no current Docker container in the same canonical Application
+  Manager inventory. They appear as stopped installation records with their
+  declared type/address metadata and stable resource ID. Runtime-only actions,
+  update checks and Compose editing remain disabled until a real container is
+  safely reconstructed. They stay off the desktop by default but can receive an
+  explicit persistent shortcut; schema-v1 shortcut choices migrate without
+  loss. Duplicate unnamed definitions receive deterministic visible ordinals
+  instead of exposing provider UUIDs.
 - [x] Make the first editable setting the application **Erişim Linki**. The
   owner-only transaction works for both server-managed applications and
   discovered running web containers with one unambiguous private HTTP port; it

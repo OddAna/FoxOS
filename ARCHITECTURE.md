@@ -361,6 +361,16 @@ shortcut preference per stable application ID. Hiding a shortcut changes only
 that projection. It creates or deletes no host file, image, container, volume,
 route or application and remains stable across browsers and agent rebuilds.
 
+The same inventory includes inactive application, service and database
+definitions recovered by an optional migration reader even when they have no
+current Docker container. These are truthful installation records, not invented
+runtimes: they report stopped, expose declared non-secret type/address metadata,
+remain off the desktop by default and have no start/stop/restart, update-check,
+Compose or route capability until reconstruction produces a verifiable runtime.
+An operator may explicitly create a desktop shortcut to the record. Duplicate
+metadata-less definitions use stable resource identity and readable ordinals;
+provider UUIDs never become their primary name.
+
 The application update check is deliberately separate from the disposable
 image-update apply transaction. It performs Docker and registry reads only. A
 direct tagged image is compared by repository digest. For a Compose-built

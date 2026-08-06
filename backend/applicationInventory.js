@@ -1,6 +1,6 @@
 const crypto = require('node:crypto');
 
-const APPLICATION_INVENTORY_SCHEMA_VERSION = 1;
+const APPLICATION_INVENTORY_SCHEMA_VERSION = 2;
 
 function exitCodeFromStatus(status) {
   const match = String(status || '').match(/Exited \((-?\d+)\)/i);
@@ -135,6 +135,7 @@ function applicationProjection({
         : null
     },
     runtime: {
+      present: Boolean(containerId),
       containerId,
       containerName: container && container.Names && container.Names[0]
         ? String(container.Names[0]).replace(/^\//, '')
@@ -151,14 +152,94 @@ function applicationProjection({
       stop: canManage && ['running', 'restarting'].includes(String(state).toLowerCase()),
       restart: canManage,
       settings: canManage,
+      checkUpdates: canManage,
+      editCompose: canManage,
       editAccessLink: canEditAccessLink,
       editDomain: canEditAccessLink
+    },
+    desktopShortcutDefaultVisible: true,
+    installation: {
+      state: 'runtime-present',
+      definitionType: 'application',
+      sourceType: app.installationSource || 'docker'
     },
     management: management ? {
       state: management.state || 'attention-required',
       lifecycle: management.lifecycle || null,
       routeAuthorityActive: management.authorityActive === true
     } : null
+  };
+}
+
+function definitionRoutes(resource) {
+  const definition = resource && resource.provenance && resource.provenance.externalDefinition || {};
+  return (definition.declaredRoutes || resource.declaredRoutes || []).map((route) => {
+    if (!route || !route.domain || !['http', 'https'].includes(route.scheme)) return null;
+    const path = route.path && route.path !== '/' ? route.path : '';
+    return `${route.scheme}://${route.domain}${path}`;
+  }).filter(Boolean);
+}
+
+function definitionApplicationProjection(resource) {
+  const definition = resource.provenance && resource.provenance.externalDefinition || {};
+  const definitionType = definition.providerKind || resource.role || 'application';
+  const category = {
+    application: 'Web Apps',
+    database: 'Databases',
+    service: 'Services'
+  }[definitionType] || 'Services';
+  const status = resource.runtime && resource.runtime.status || 'Kurulu · çalışmıyor';
+
+  return {
+    schemaVersion: APPLICATION_INVENTORY_SCHEMA_VERSION,
+    id: resource.id,
+    resourceId: resource.id,
+    name: resource.name || 'İsimsiz kurulum',
+    instanceName: definition.serviceType || (definitionType === 'database' ? 'Veritabanı' : 'Deaktif kurulum'),
+    publisher: 'Kurulum Kaydı',
+    category,
+    summary: 'Kurulu tanımı bulundu; çalışan örneği yok.',
+    description: null,
+    image: resource.runtime && resource.runtime.image || null,
+    logoUrl: null,
+    externalUrl: null,
+    declaredUrls: definitionRoutes(resource),
+    hostPort: null,
+    bindAddress: null,
+    authority: 'observed',
+    managedByServer: false,
+    provenance: {
+      source: resource.provider || 'provider-definition',
+      importedFrom: null
+    },
+    runtime: {
+      present: false,
+      containerId: null,
+      containerName: null,
+      state: 'stopped',
+      status,
+      healthStatus: null,
+      exitCode: null,
+      operationalState: 'stopped'
+    },
+    capabilities: {
+      open: false,
+      start: false,
+      stop: false,
+      restart: false,
+      settings: true,
+      checkUpdates: false,
+      editCompose: false,
+      editAccessLink: false,
+      editDomain: false
+    },
+    desktopShortcutDefaultVisible: false,
+    installation: {
+      state: 'inactive-definition',
+      definitionType,
+      sourceType: definition.source && definition.source.type || 'provider-definition'
+    },
+    management: null
   };
 }
 
@@ -169,12 +250,31 @@ function disambiguateDuplicateNames(applications) {
     return counts;
   }, new Map());
 
+  const proposedSuffixCounts = applications.reduce((counts, application) => {
+    const key = String(application.name || '').trim().toLocaleLowerCase('tr');
+    if ((nameCounts.get(key) || 0) < 2) return counts;
+    const suffix = application.instanceName || application.runtime.containerName;
+    const proposed = suffix && !application.name.includes(suffix)
+      ? `${application.name} · ${suffix}`
+      : null;
+    if (proposed) counts.set(proposed, (counts.get(proposed) || 0) + 1);
+    return counts;
+  }, new Map());
+  const ordinals = new Map();
+
   return applications.map((application) => {
     const key = String(application.name || '').trim().toLocaleLowerCase('tr');
     if ((nameCounts.get(key) || 0) < 2) return application;
     const suffix = application.instanceName || application.runtime.containerName;
-    if (!suffix || application.name.includes(suffix)) return application;
-    return { ...application, name: application.name + ' · ' + suffix };
+    const proposed = suffix && !application.name.includes(suffix)
+      ? application.name + ' · ' + suffix
+      : null;
+    if (proposed && proposedSuffixCounts.get(proposed) === 1) {
+      return { ...application, name: proposed };
+    }
+    const ordinal = (ordinals.get(key) || 0) + 1;
+    ordinals.set(key, ordinal);
+    return { ...application, name: `${application.name} · ${ordinal}` };
   });
 }
 
@@ -238,6 +338,12 @@ function buildApplicationInventory({ appStates = [], containers = [], resources 
     }));
   }
 
+  for (const resource of resources
+    .filter((candidate) => candidate && candidate.kind === 'provider-definition')
+    .sort((left, right) => left.id.localeCompare(right.id))) {
+    applications.push(definitionApplicationProjection(resource));
+  }
+
   const uniqueApplications = Array.from(
     new Map(applications.map((application) => [application.id, application])).values()
   );
@@ -249,6 +355,7 @@ module.exports = {
   APPLICATION_INVENTORY_SCHEMA_VERSION,
   buildApplicationInventory,
   canonicalApplicationName,
+  definitionApplicationProjection,
   disambiguateDuplicateNames,
   exitCodeFromStatus,
   healthStatusFromRuntime,

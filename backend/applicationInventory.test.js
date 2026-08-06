@@ -204,3 +204,70 @@ test('multiple instances retain separate stable resource identities', () => {
     ['running', 'stopped']
   );
 });
+
+test('inactive provider definitions remain visible as non-running installed applications', () => {
+  const applications = buildApplicationInventory({
+    resources: [
+      {
+        id: 'res_' + '7'.repeat(32),
+        kind: 'provider-definition',
+        name: 'Directus',
+        role: 'application',
+        ownership: 'observed',
+        provider: 'coolify',
+        provenance: {
+          externalDefinition: {
+            providerKind: 'application',
+            serviceType: 'dockerfile',
+            source: { type: 'git' },
+            declaredRoutes: [{ domain: 'directus.example.com', scheme: 'https', path: '/', tls: true }],
+            runtimePresent: false
+          }
+        },
+        runtime: { containerId: null, image: null, state: 'stopped', status: 'exited:unknown' }
+      },
+      ...['8', '9'].map((digit) => ({
+        id: 'res_' + digit.repeat(32),
+        kind: 'provider-definition',
+        name: 'Unnamed service',
+        role: 'service',
+        ownership: 'observed',
+        provider: 'coolify',
+        provenance: {
+          externalDefinition: {
+            providerKind: 'service',
+            serviceType: 'compose',
+            source: { type: 'compose-service' },
+            declaredRoutes: [],
+            runtimePresent: false
+          }
+        },
+        runtime: { containerId: null, image: null, state: 'defined', status: 'unknown' }
+      }))
+    ]
+  });
+
+  assert.equal(applications.length, 3);
+  const directus = applications.find((application) => application.name === 'Directus');
+  assert.equal(directus.runtime.present, false);
+  assert.equal(directus.runtime.containerId, null);
+  assert.equal(directus.runtime.operationalState, 'stopped');
+  assert.equal(directus.installation.state, 'inactive-definition');
+  assert.equal(directus.desktopShortcutDefaultVisible, false);
+  assert.deepEqual(directus.declaredUrls, ['https://directus.example.com']);
+  assert.deepEqual(directus.capabilities, {
+    open: false,
+    start: false,
+    stop: false,
+    restart: false,
+    settings: true,
+    checkUpdates: false,
+    editCompose: false,
+    editAccessLink: false,
+    editDomain: false
+  });
+  assert.deepEqual(
+    applications.filter((application) => application.name.startsWith('Unnamed service')).map((application) => application.name),
+    ['Unnamed service · 1', 'Unnamed service · 2']
+  );
+});

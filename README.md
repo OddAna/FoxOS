@@ -28,11 +28,13 @@ not use the host package manager for its own runtime.
 - **Real Docker control** — list containers and start, stop, or restart them
 - **Real App Store** — install a reviewed catalog of Docker applications on the
   server and discover usable applications that already exist on that server
-- **Desktop applications and Settings manager** — project each usable server
-  application once with a stable local identity, live status and existing FoxOS
-  icon language; create or remove its persistent desktop shortcut, open it from
-  the desktop or manage lifecycle, access address, restart policy, ports and
-  storage inside Settings > Uygulama Yöneticisi
+- **Desktop applications and Settings manager** — project every discovered
+  installed application definition once with a stable local identity and the
+  existing FoxOS icon/status language. Running and stopped containers expose
+  only their real capabilities; inactive provider definitions remain visible in
+  Settings > Uygulama Yöneticisi without pretending that a container exists.
+  Create or remove each persistent desktop shortcut and manage available
+  lifecycle, access address, restart policy, ports and storage controls
 - **Application update checks** — compare a direct tagged image with its remote
   registry digest without pulling it; Compose-built applications also follow the
   final Dockerfile base and compare public Docker Hub version metadata when the
@@ -335,7 +337,7 @@ The authenticated API exposes:
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /api/applications` | Read the canonical user-facing application inventory with stable resource identity, live state, access address and lifecycle capabilities |
+| `GET /api/applications` | Read the canonical user-facing application inventory, including inactive installed definitions, with stable resource identity, truthful runtime state, access address and capability gates |
 | `POST /api/resources/scan` | Run a read-only inventory and atomically store a new snapshot |
 | `GET /api/resources` | Read the latest stored snapshot, ownership status, relationships, conflicts and adoption blockers |
 | `GET /api/resources/export` | Download a redacted provider-neutral migration plan |

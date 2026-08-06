@@ -132,6 +132,13 @@
   must not run Compose, pull/build an image, recreate/restart a service, detach a
   provider or claim server ownership; warn that an external provider can
   overwrite its file until migration completes.
+- The canonical Application Manager inventory includes inactive provider
+  application/service/database definitions even when no Docker container is
+  present. Keep them truthful: stopped, stable-ID based, off the desktop by
+  default and without lifecycle, update, Compose or access-link capabilities
+  until a verifiable runtime exists. An explicit shortcut override may expose
+  the record on the desktop but must not create or imply a runtime. Never use a
+  provider UUID as its visible primary name.
 - Keep the disposable stateless lab separate from production. Preserve its
   reviewed image digest, `slab_*` identity, `.foxos.invalid` hostname,
   loopback-only ports, injected-fault rollback and exact run-labeled cleanup;

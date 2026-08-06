@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { atomicWriteJson } = require('./resourceRegistry');
 
-const DESKTOP_SHORTCUT_SCHEMA_VERSION = 1;
+const DESKTOP_SHORTCUT_SCHEMA_VERSION = 2;
 const APPLICATION_ID_PATTERN = /^(?:app|res)_[a-f0-9]{24,64}$/;
 
 class DesktopShortcutError extends Error {
@@ -27,7 +27,8 @@ function createDesktopShortcutManager({ dataRoot, clock = () => new Date() }) {
     return {
       schemaVersion: DESKTOP_SHORTCUT_SCHEMA_VERSION,
       updatedAt: null,
-      hiddenApplicationIds: []
+      hiddenApplicationIds: [],
+      visibleApplicationIds: []
     };
   }
 
@@ -39,10 +40,14 @@ function createDesktopShortcutManager({ dataRoot, clock = () => new Date() }) {
       if (error.code === 'ENOENT') return emptyState();
       throw error;
     }
+    const legacy = value.schemaVersion === 1;
+    const hiddenApplicationIds = value.hiddenApplicationIds;
+    const visibleApplicationIds = legacy ? [] : value.visibleApplicationIds;
     if (
-      value.schemaVersion !== DESKTOP_SHORTCUT_SCHEMA_VERSION ||
-      !Array.isArray(value.hiddenApplicationIds) ||
-      value.hiddenApplicationIds.some((id) => !APPLICATION_ID_PATTERN.test(String(id)))
+      (!legacy && value.schemaVersion !== DESKTOP_SHORTCUT_SCHEMA_VERSION) ||
+      !Array.isArray(hiddenApplicationIds) || !Array.isArray(visibleApplicationIds) ||
+      [...hiddenApplicationIds, ...visibleApplicationIds]
+        .some((id) => !APPLICATION_ID_PATTERN.test(String(id)))
     ) {
       throw new DesktopShortcutError(
         'Masaüstü kısayol tercihleri okunamadı.',
@@ -50,12 +55,20 @@ function createDesktopShortcutManager({ dataRoot, clock = () => new Date() }) {
         'desktop-shortcut-state-invalid'
       );
     }
-    return value;
+    return {
+      schemaVersion: DESKTOP_SHORTCUT_SCHEMA_VERSION,
+      updatedAt: value.updatedAt || null,
+      hiddenApplicationIds: [...new Set(hiddenApplicationIds)].sort(),
+      visibleApplicationIds: [...new Set(visibleApplicationIds)].sort()
+    };
   }
 
-  function isVisible(applicationId) {
-    if (!APPLICATION_ID_PATTERN.test(String(applicationId || ''))) return true;
-    return !state().hiddenApplicationIds.includes(applicationId);
+  function isVisible(applicationId, defaultVisible = true) {
+    if (!APPLICATION_ID_PATTERN.test(String(applicationId || ''))) return defaultVisible;
+    const current = state();
+    if (current.visibleApplicationIds.includes(applicationId)) return true;
+    if (current.hiddenApplicationIds.includes(applicationId)) return false;
+    return defaultVisible;
   }
 
   function setVisible(applicationId, visible) {
@@ -68,12 +81,19 @@ function createDesktopShortcutManager({ dataRoot, clock = () => new Date() }) {
 
     const current = state();
     const hidden = new Set(current.hiddenApplicationIds);
-    if (visible) hidden.delete(applicationId);
-    else hidden.add(applicationId);
+    const shown = new Set(current.visibleApplicationIds);
+    if (visible) {
+      hidden.delete(applicationId);
+      shown.add(applicationId);
+    } else {
+      shown.delete(applicationId);
+      hidden.add(applicationId);
+    }
     const updated = {
       schemaVersion: DESKTOP_SHORTCUT_SCHEMA_VERSION,
       updatedAt: now(),
-      hiddenApplicationIds: [...hidden].sort()
+      hiddenApplicationIds: [...hidden].sort(),
+      visibleApplicationIds: [...shown].sort()
     };
     atomicWriteJson(stateFile, updated);
     return {
