@@ -2116,6 +2116,18 @@ if (require.main === module) {
     .catch((error) => {
       console.error('Initial stateful shadow recovery failed:', error.message);
     })
+    .then(() => ingressAuthorityManager.reconcilePublicAuthority())
+    .then((result) => {
+      if (result.reconciled) {
+        console.log(
+          'Server ingress authority reconciled on ' +
+          result.backends.ipv4 + ' and ' + result.backends.ipv6
+        );
+      }
+    })
+    .catch((error) => {
+      console.error('Initial server ingress reconciliation failed:', error.message);
+    })
     .finally(() => {
       app.listen(PORT, '0.0.0.0', () => {
         console.log('FoxOS is listening on port ' + PORT);

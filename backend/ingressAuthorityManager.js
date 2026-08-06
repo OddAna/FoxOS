@@ -87,7 +87,6 @@ function createIngressAuthorityManager({
   const routeMapFile = path.join(root, 'routes.map');
   const caddyRuntimeRoot = path.join(dataRoot, 'gateway', 'runtime');
   const caddyRoutesFile = path.join(caddyRuntimeRoot, '50-stateless-routes.caddy');
-  const resolvedFirewallBinaries = new Map();
 
   function now() {
     return new Date(clock()).toISOString();
@@ -379,13 +378,18 @@ function createIngressAuthorityManager({
   }
 
   async function resolveFirewallBinary(binary) {
-    if (resolvedFirewallBinaries.has(binary)) return resolvedFirewallBinaries.get(binary);
     const candidates = [binary, binary + '-legacy', binary + '-nft'];
+    const available = [];
     for (const candidate of candidates) {
-      const available = await firewall(candidate, ['-w', '5', '-t', 'nat', '-L'], true);
-      if (!available) continue;
-      resolvedFirewallBinaries.set(binary, candidate);
+      const compatible = await firewall(candidate, ['-w', '5', '-t', 'nat', '-L'], true);
+      if (!compatible) continue;
+      available.push(candidate);
+      const ownsDockerNat = await firewall(candidate, ['-w', '5', '-t', 'nat', '-S', 'DOCKER'], true);
+      if (!ownsDockerNat) continue;
       return candidate;
+    }
+    if (available.length) {
+      return available[0];
     }
     throw new IngressAuthorityError(
       'No compatible host firewall backend is available for FoxOS ingress',
@@ -414,6 +418,7 @@ function createIngressAuthorityManager({
     if (!exists) {
       await firewall(executable, ['-w', '5', '-t', 'nat', '-I', 'PREROUTING', '1', ...jump.slice(4)]);
     }
+    return executable;
   }
 
   async function removeFirewallFamily(binary) {
@@ -429,9 +434,10 @@ function createIngressAuthorityManager({
 
   async function activatePublicAuthority() {
     await inspectOwnedInfrastructure();
-    await installFirewallFamily('iptables');
+    const ipv4Backend = await installFirewallFamily('iptables');
+    let ipv6Backend;
     try {
-      await installFirewallFamily('ip6tables');
+      ipv6Backend = await installFirewallFamily('ip6tables');
     } catch (error) {
       await removeFirewallFamily('iptables');
       throw error;
@@ -443,10 +449,38 @@ function createIngressAuthorityManager({
       ipv6: true,
       inputPorts: [80, 443],
       localTargetPorts: [ingressHttpPort, ingressHttpsPort],
+      backends: { ipv4: ipv4Backend, ipv6: ipv6Backend },
       reversible: true
     };
     persist(current);
     return current.firewall;
+  }
+
+  async function reconcilePublicAuthority() {
+    const current = state();
+    if (current.publicAuthorityActive !== true) {
+      return { active: false, reconciled: false };
+    }
+    await inspectOwnedInfrastructure();
+    const ipv4Backend = await installFirewallFamily('iptables');
+    let ipv6Backend;
+    try {
+      ipv6Backend = await installFirewallFamily('ip6tables');
+    } catch (error) {
+      await removeFirewallFamily('iptables');
+      throw error;
+    }
+    current.firewall = {
+      ipv4: true,
+      ipv6: true,
+      inputPorts: [80, 443],
+      localTargetPorts: [ingressHttpPort, ingressHttpsPort],
+      backends: { ipv4: ipv4Backend, ipv6: ipv6Backend },
+      reversible: true,
+      reconciledAt: now()
+    };
+    persist(current);
+    return { active: true, reconciled: true, ...current.firewall };
   }
 
   async function deactivatePublicAuthorityIfUnused() {
@@ -634,6 +668,7 @@ function createIngressAuthorityManager({
     inspectOwnedInfrastructure,
     paths: { root, authorityFile, routeMapFile, caddyRoutesFile },
     removeRoutes,
+    reconcilePublicAuthority,
     stageRoutes,
     state,
     switchDomain,

@@ -80,6 +80,13 @@ test('staged routes switch through owned ingress and remove host authority on ro
   assert.equal(manager.state().domains[route.domain], 'foxos');
   assert.deepEqual([...firewallRules].sort(), ['ip6tables:public', 'iptables:public']);
 
+  firewallRules.clear();
+  const reconciliation = await manager.reconcilePublicAuthority();
+  assert.equal(reconciliation.active, true);
+  assert.equal(reconciliation.reconciled, true);
+  assert.deepEqual(reconciliation.backends, { ipv4: 'iptables', ipv6: 'ip6tables' });
+  assert.deepEqual([...firewallRules].sort(), ['ip6tables:public', 'iptables:public']);
+
   await manager.switchDomain(route.domain, 'legacy');
   assert.equal(manager.state().publicAuthorityActive, false);
   assert.equal(manager.state().domains[route.domain], 'legacy');
