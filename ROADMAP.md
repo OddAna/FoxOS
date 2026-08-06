@@ -249,6 +249,11 @@ target blocks only adoption/migration operations that require restore proof.
 - [x] Complete fresh UI-authorized production stateless migrations and
   record source continuity, zero unavailable samples, rollback availability and
   unchanged non-selected workloads before calling the live boundary complete.
+- [x] Remove indefinite duplicate RAM use after successful stateless cutover:
+  keep the source running through all availability proofs, then park only the
+  exact preserved source container as a cold rollback target. Rollback starts
+  and proves the legacy backend before switching traffic; no source record,
+  image, provider network or rollback evidence is deleted.
 - [ ] Expand the implemented disposable dry-run, conflict detection, verified
   cutover and reversible rollback to real application classes one safety gate at
   a time.

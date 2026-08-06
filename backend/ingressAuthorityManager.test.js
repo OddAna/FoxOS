@@ -195,6 +195,7 @@ test('legacy bridge overrides the agent healthcheck with its own listening ports
   const agentId = 'd'.repeat(64);
   const bridgeId = 'e'.repeat(64);
   let createPayload = null;
+  const probeCommands = [];
   const manager = createIngressAuthorityManager({
     dataRoot,
     dockerRequest: async (method, requestPath, payload) => {
@@ -232,7 +233,10 @@ test('legacy bridge overrides the agent healthcheck with its own listening ports
       if (method === 'POST' && requestPath === '/containers/' + bridgeId + '/start') return {};
       throw new Error('Unexpected Docker request: ' + method + ' ' + requestPath);
     },
-    dockerExec: async () => ({ exitCode: 0 }),
+    dockerExec: async (containerId, command) => {
+      probeCommands.push({ containerId, command });
+      return { exitCode: 0, output: JSON.stringify({ statusCode: 200, tlsValid: true }) };
+    },
     hostCommand: async () => ({ success: true })
   });
   const bridge = await manager.ensureLegacyBridge({ proxyContainerId: proxyId, legacyNetwork: 'legacy' });
@@ -240,5 +244,14 @@ test('legacy bridge overrides the agent healthcheck with its own listening ports
   assert.deepEqual(createPayload.Healthcheck.Test.slice(0, 3), ['CMD', 'node', '-e']);
   assert.match(createPayload.Healthcheck.Test[3], /Promise\.all\(\[80,443\]/);
   assert.equal(createPayload.Healthcheck.Timeout, 3000000000);
+  const legacyProof = await manager.verifyLegacyBackend({
+    hostname: 'app.example.com',
+    requestPath: '/healthz'
+  });
+  assert.equal(legacyProof.legacyReady, true);
+  assert.equal(legacyProof.attempts, 1);
+  assert.equal(probeCommands.at(-1).containerId, bridgeId);
+  assert.deepEqual(probeCommands.at(-1).command.slice(0, 2), ['node', '-e']);
+  assert.deepEqual(probeCommands.at(-1).command.slice(-2), ['app.example.com', '/healthz']);
   fs.rmSync(dataRoot, { recursive: true, force: true });
 });

@@ -288,6 +288,13 @@ function safeRollbackProof(value) {
   ]);
 }
 
+function safeSourceParkingProof(value) {
+  return select(value, [
+    'sourceStopped', 'sourceContainerId', 'candidateServing', 'unavailableSamples',
+    'probes', 'stoppedAt'
+  ]);
+}
+
 function createStatelessMigrationManager({
   dataRoot,
   getServerMigrationPlan,
@@ -702,6 +709,35 @@ function createStatelessMigrationManager({
       operation.trafficProof = safeTrafficProof(trafficProof);
       operation.availability.zeroDowntimeProven = true;
       operation.rollback.available = true;
+      operation.rollback.mode = 'hot-source';
+      if (typeof executionAdapter.parkSourceForRollback === 'function') {
+        setPhase(operation, 'source-parking');
+        try {
+          const parkingProof = await executionAdapter.parkSourceForRollback({
+            plan,
+            operationId,
+            candidate,
+            route
+          });
+          validateProof(
+            parkingProof && parkingProof.sourceStopped === true &&
+            parkingProof.candidateServing === true && parkingProof.unavailableSamples === 0,
+            'Rollback source parking proof failed',
+            'rollback-source-parking-failed'
+          );
+          operation.source.stopped = true;
+          operation.source.retainedForRollback = true;
+          operation.rollback.mode = 'cold-source';
+          operation.rollback.sourceParking = safeSourceParkingProof(parkingProof);
+        } catch (error) {
+          const warning = transactionFailure(error);
+          operation.rollback.mode = 'hot-source';
+          operation.rollback.sourceParking = {
+            sourceStopped: false,
+            code: warning.code
+          };
+        }
+      }
       operation.status = 'traffic-on-foxos-source-preserved';
       operation.phase = 'complete';
       operation.completedAt = now();

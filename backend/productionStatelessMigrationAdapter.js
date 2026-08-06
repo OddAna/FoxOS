@@ -975,12 +975,118 @@ function createProductionStatelessMigrationAdapter({
     };
   }
 
+  async function parkSourceForRollback({ operationId }) {
+    const adapterState = getState(operationId);
+    const primary = routeForHealth(adapterState.routes, adapterState.health);
+    const connectHost = await ingressAuthority.hostIngressAddress();
+    const probes = [];
+    for (let index = 0; index < 3; index += 1) {
+      probes.push(await ingressAuthority.httpsProbe({
+        hostname: primary.domain,
+        connectHost,
+        requestPath: adapterState.health && adapterState.health.path || primary.path,
+        expectedRouteId: primary.routeId
+      }));
+    }
+    if (probes.some((probe) => (
+      probe.tlsValid !== true || probe.expectedRoute !== true ||
+      probe.statusCode < 200 || probe.statusCode >= 400 || probe.candidateIdentity !== operationId
+    ))) {
+      throw new ProductionStatelessMigrationError(
+        'Candidate traffic proof failed before parking the rollback source',
+        503,
+        'candidate-not-ready-for-source-parking'
+      );
+    }
+    const source = await dockerRequest('GET', '/containers/' + adapterState.source.containerId + '/json');
+    if (
+      source.Id !== adapterState.source.containerId || source.Image !== adapterState.source.imageId ||
+      !source.State || source.State.Running !== true
+    ) {
+      throw new ProductionStatelessMigrationError(
+        'Rollback source identity or running state changed before parking',
+        409,
+        'rollback-source-drift'
+      );
+    }
+    await dockerRequest('POST', '/containers/' + source.Id + '/stop?t=10');
+    const stopped = await dockerRequest('GET', '/containers/' + source.Id + '/json');
+    if (!stopped.State || stopped.State.Running === true) {
+      throw new ProductionStatelessMigrationError(
+        'Rollback source did not enter the cold stopped state',
+        503,
+        'rollback-source-stop-failed'
+      );
+    }
+    adapterState.source.continuouslyRunning = false;
+    adapterState.source.stopped = true;
+    adapterState.source.coldRollback = true;
+    adapterState.source.coldStoppedAt = now();
+    persist(adapterState);
+    return {
+      sourceStopped: true,
+      sourceContainerId: source.Id,
+      candidateServing: true,
+      unavailableSamples: 0,
+      probes: probes.length,
+      stoppedAt: adapterState.source.coldStoppedAt
+    };
+  }
+
   async function rollbackTraffic({ operationId }) {
     const adapterState = getState(operationId);
+    if (typeof ingressAuthority.verifyLegacyBackend !== 'function') {
+      throw new ProductionStatelessMigrationError(
+        'Cold rollback backend proof is unavailable',
+        503,
+        'cold-rollback-proof-unavailable'
+      );
+    }
+    let source = await dockerRequest('GET', '/containers/' + adapterState.source.containerId + '/json');
+    if (source.Id !== adapterState.source.containerId || source.Image !== adapterState.source.imageId) {
+      throw new ProductionStatelessMigrationError(
+        'Rollback source identity drifted',
+        409,
+        'rollback-source-drift'
+      );
+    }
+    let sourceStarted = false;
+    if (!source.State || source.State.Running !== true) {
+      await dockerRequest('POST', '/containers/' + source.Id + '/start');
+      sourceStarted = true;
+      source = await dockerRequest('GET', '/containers/' + source.Id + '/json');
+      if (!source.State || source.State.Running !== true) {
+        throw new ProductionStatelessMigrationError(
+          'Cold rollback source did not start',
+          503,
+          'rollback-source-start-failed'
+        );
+      }
+    }
+    const warmProofs = [];
+    for (const domain of new Set(adapterState.routes.map((route) => route.domain))) {
+      warmProofs.push(await ingressAuthority.verifyLegacyBackend({
+        hostname: domain,
+        requestPath: adapterState.health && adapterState.health.path || '/',
+        attempts: 80
+      }));
+    }
     for (const domain of new Set(adapterState.routes.map((route) => route.domain))) {
       await ingressAuthority.switchDomain(domain, 'legacy');
     }
-    return { restored: true, sourceContainerId: adapterState.source.containerId };
+    adapterState.source.continuouslyRunning = false;
+    adapterState.source.stopped = false;
+    adapterState.source.coldRollback = false;
+    adapterState.source.startedForRollback = sourceStarted;
+    adapterState.source.warmedForRollbackAt = now();
+    persist(adapterState);
+    return {
+      restored: true,
+      sourceContainerId: adapterState.source.containerId,
+      sourceStarted,
+      sourceWarmed: warmProofs.every((proof) => proof.legacyReady === true),
+      warmProofs: warmProofs.length
+    };
   }
 
   async function verifyRollback({ operationId }) {
@@ -1046,6 +1152,7 @@ function createProductionStatelessMigrationAdapter({
       atomicTrafficSwitch: true,
       trafficProbe: true,
       rollback: true,
+      sourceColdRollback: true,
       sourcePreserved: true,
       providerDetach: false,
       sourceStop: false,
@@ -1054,6 +1161,7 @@ function createProductionStatelessMigrationAdapter({
     cleanupCandidate,
     cleanupStagedRoute,
     createCandidate,
+    parkSourceForRollback,
     paths: { root, operationsRoot },
     preflight,
     rollbackTraffic,

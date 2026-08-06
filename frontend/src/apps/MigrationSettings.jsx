@@ -577,7 +577,7 @@ const MigrationSettings = () => {
             <DetailLine label="Sağlık">{observed.runtime?.health?.status || observed.runtime?.state}</DetailLine>
             <DetailLine label="Mevcut yönetim">{detailResource.currentProvider || detailResource.observedProvider || 'docker'}</DetailLine>
             {detailResource.management?.sourcePreserved && (
-              <DetailLine label="Korunan eski kaynak">{detailResource.observedProvider || 'docker'} · geri alma için çalışıyor</DetailLine>
+              <DetailLine label="Korunan eski kaynak">{detailResource.observedProvider || 'docker'} · soğuk geri alma için korunuyor</DetailLine>
             )}
             <DetailLine label="Yönetim">{CLASS_LABELS[detailResource.currentAuthorityClass || classification.authorityClass] || detailResource.currentAuthorityClass || classification.authorityClass}</DetailLine>
             <DetailLine label="Kaynak sınıfı">{CLASS_LABELS[classification.workloadRole] || classification.workloadRole} · {CLASS_LABELS[classification.stateClass] || classification.stateClass}</DetailLine>
