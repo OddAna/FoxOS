@@ -123,6 +123,7 @@ function fixture(t, options = {}) {
     panelBaseUrl: 'https://panel.example.com:8443',
     dnsLookup: async (domain) => {
       calls.push({ kind: 'dns', domain });
+      if (options.dnsError) throw options.dnsError;
       return options.dns || [{ address: '93.184.216.34', family: 4 }];
     },
     delay: async () => {},
@@ -355,6 +356,19 @@ test('conflicts, panel hostname and private DNS fail before any ingress mutation
   const privateDns = fixture(t, { dns: [{ address: '127.0.0.1', family: 4 }] });
   await assert.rejects(privateDns.manager.createPlan(RESOURCE_ID, { domain: 'private.example.com' }), { code: 'domain-dns-not-public' });
   assert.equal(privateDns.calls.some((call) => ['stage', 'switch', 'remove'].includes(call.kind)), false);
+});
+
+test('unresolved DNS returns the exact access-link record action', async (t) => {
+  const { manager } = fixture(t, { dnsError: new Error('ENOTFOUND') });
+  await assert.rejects(
+    manager.createPlan(RESOURCE_ID, { domain: 'missing.example.com' }),
+    (error) => (
+      error.code === 'domain-dns-unresolved' &&
+      error.message.includes('"missing.example.com" için DNS kaydı bulunamadı') &&
+      error.message.includes('A kaydını sunucunun public IPv4 adresine yönlendirin') &&
+      error.message.includes("tekrar Kontrol Et'e basın")
+    )
+  );
 });
 
 test('a domain observed on another server resource is rejected even when not active in ingress', async (t) => {
