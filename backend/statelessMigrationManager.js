@@ -163,7 +163,18 @@ function adapterStatus(executionAdapter, approvalVerifier) {
 }
 
 function executionBlockers(resource, adapter, executionContract = null) {
-  const evidence = resource.blockers && resource.blockers.evidence || [];
+  const rawEvidence = resource.blockers && resource.blockers.evidence || [];
+  const exactLocalImageFallback = Boolean(
+    executionContract && executionContract.guarantees &&
+    executionContract.guarantees.exactLocalImageFallback === true
+  );
+  const localImageReplacedEvidence = new Set([
+    'foxos-source-archive-invalid',
+    'source-runtime-binding-missing'
+  ]);
+  const evidence = rawEvidence.filter((entry) => (
+    !(exactLocalImageFallback && localImageReplacedEvidence.has(entry.code))
+  ));
   const conflicts = resource.conflicts || [];
   const implementation = resource.blockers && resource.blockers.implementation || [];
   const blockers = [
@@ -179,7 +190,13 @@ function executionBlockers(resource, adapter, executionContract = null) {
     ...(executionContract && executionContract.readiness && executionContract.readiness.blockers || [])
       .map((entry) => safeBlocker(entry, 'stateless-manifest-compiler'))
   ];
-  if (!resource.readiness || resource.readiness.evidenceComplete !== true) {
+  const evidenceSatisfiedByExactImage = Boolean(
+    exactLocalImageFallback && rawEvidence.length > 0 && evidence.length === 0
+  );
+  if (
+    (!resource.readiness || resource.readiness.evidenceComplete !== true) &&
+    !evidenceSatisfiedByExactImage
+  ) {
     blockers.push({
       code: 'migration-evidence-incomplete',
       section: 'evidence',

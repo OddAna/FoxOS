@@ -268,6 +268,101 @@ test('a provider-neutral manifest contract is fingerprinted into the review plan
   fs.rmSync(root, { recursive: true, force: true });
 });
 
+test('an exact local image contract replaces only stale or unbound archive evidence', () => {
+  const fallbackContract = {
+    contractId: 'smcontract_' + 'b'.repeat(32),
+    readiness: { status: 'backend-contract-ready-ui-configuration-required', blockers: [] },
+    guarantees: {
+      runtimeMutated: false,
+      providerDetached: false,
+      secretValuesIncluded: false,
+      exactLocalImageFallback: true
+    }
+  };
+  const blockedResource = resource({
+    blockers: {
+      ...resource().blockers,
+      evidence: [{
+        code: 'foxos-source-archive-invalid',
+        section: 'source',
+        severity: 'blocking',
+        source: 'application-manifest'
+      }]
+    },
+    readiness: {
+      ...resource().readiness,
+      planningStatus: 'review-eligible-evidence-incomplete',
+      evidenceComplete: false
+    }
+  });
+  const { manager, root } = harness({
+    serverPlan: serverPlan(blockedResource),
+    compiler: () => fallbackContract
+  });
+
+  const plan = prepare(manager);
+
+  assert.equal(plan.readiness.status, 'backend-ready-ui-approval-required');
+  assert.deepEqual(plan.readiness.blockers, []);
+  assert.equal(plan.executionContract.guarantees.exactLocalImageFallback, true);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('an exact local image contract does not hide unrelated incomplete evidence', () => {
+  const fallbackContract = {
+    contractId: 'smcontract_' + 'c'.repeat(32),
+    readiness: { status: 'backend-contract-ready-ui-configuration-required', blockers: [] },
+    guarantees: {
+      runtimeMutated: false,
+      providerDetached: false,
+      secretValuesIncluded: false,
+      exactLocalImageFallback: true
+    }
+  };
+  const blockedResource = resource({
+    blockers: {
+      ...resource().blockers,
+      evidence: [
+        {
+          code: 'foxos-source-archive-invalid',
+          section: 'source',
+          severity: 'blocking',
+          source: 'application-manifest'
+        },
+        {
+          code: 'environment-revision-missing',
+          section: 'environment',
+          severity: 'blocking',
+          source: 'application-manifest'
+        }
+      ]
+    },
+    readiness: {
+      ...resource().readiness,
+      planningStatus: 'review-eligible-evidence-incomplete',
+      evidenceComplete: false
+    }
+  });
+  const { manager, root } = harness({
+    serverPlan: serverPlan(blockedResource),
+    compiler: () => fallbackContract
+  });
+
+  const plan = prepare(manager);
+
+  assert.equal(plan.readiness.status, 'blocked');
+  assert.equal(plan.readiness.blockers.some((entry) => (
+    entry.code === 'environment-revision-missing'
+  )), true);
+  assert.equal(plan.readiness.blockers.some((entry) => (
+    entry.code === 'foxos-source-archive-invalid'
+  )), false);
+  assert.equal(plan.readiness.blockers.some((entry) => (
+    entry.code === 'migration-evidence-incomplete'
+  )), true);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
 test('an unsafe execution contract is rejected before a plan is persisted', () => {
   const { manager, root } = harness({
     compiler: () => ({
