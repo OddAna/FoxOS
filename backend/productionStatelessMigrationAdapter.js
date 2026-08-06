@@ -10,6 +10,9 @@ const CONTAINER_ID_PATTERN = /^[a-f0-9]{12,64}$/;
 const IMAGE_ID_PATTERN = /^sha256:[a-f0-9]{64}$/;
 const HOSTNAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,252}$/;
 const EXECUTABLE_PATTERN = /^(?:\/[a-zA-Z0-9._+/@-]+|[a-zA-Z0-9._+-]+)$/;
+const DEFAULT_CANDIDATE_HEALTH_ATTEMPTS = 60;
+const DEFAULT_CANDIDATE_HEALTH_INTERVAL_MS = 500;
+const DEFAULT_CANDIDATE_HEALTH_TIMEOUT_MS = 30000;
 const SUPPORTED_DEPENDENCY_PROTOCOLS = new Map([
   ['postgres:', 5432],
   ['postgresql:', 5432],
@@ -143,6 +146,11 @@ function createProductionStatelessMigrationAdapter({
   egressNetwork = 'foxos-egress',
   gatewayContainer = 'foxos-gateway',
   agentContainer = 'foxos',
+  candidateHealthAttempts = DEFAULT_CANDIDATE_HEALTH_ATTEMPTS,
+  candidateHealthIntervalMs = DEFAULT_CANDIDATE_HEALTH_INTERVAL_MS,
+  candidateHealthTimeoutMs = DEFAULT_CANDIDATE_HEALTH_TIMEOUT_MS,
+  healthClock = () => Date.now(),
+  wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
   clock = () => new Date()
 }) {
   if (
@@ -592,16 +600,61 @@ function createProductionStatelessMigrationAdapter({
   async function probeCandidate(plan, adapterState) {
     const health = plan.executionContract.candidate.health;
     const url = 'http://' + adapterState.candidate.alias + ':' + health.privatePort + health.path;
-    const result = await dockerExec(gatewayContainer, [
-      'wget', '--quiet', '--server-response', '--output-document=/dev/null', '--timeout=10', url
-    ], { timeoutMs: 15000, maxResponseBytes: 64 * 1024 });
-    const candidate = await dockerRequest('GET', '/containers/' + adapterState.candidate.containerId + '/json');
-    return {
-      healthy: result.exitCode === 0 && candidate.State && candidate.State.Running === true,
-      status: result.exitCode === 0 ? 'http-accepted' : 'http-rejected',
-      identity: adapterState.operationId,
-      checkedAt: now()
-    };
+    const attempts = Number.isInteger(candidateHealthAttempts) && candidateHealthAttempts > 0
+      ? Math.min(candidateHealthAttempts, 120)
+      : DEFAULT_CANDIDATE_HEALTH_ATTEMPTS;
+    const intervalMs = Number.isInteger(candidateHealthIntervalMs) && candidateHealthIntervalMs >= 0
+      ? Math.min(candidateHealthIntervalMs, 5000)
+      : DEFAULT_CANDIDATE_HEALTH_INTERVAL_MS;
+    const timeoutMs = Number.isInteger(candidateHealthTimeoutMs) && candidateHealthTimeoutMs > 0
+      ? Math.min(candidateHealthTimeoutMs, 120000)
+      : DEFAULT_CANDIDATE_HEALTH_TIMEOUT_MS;
+    const deadline = healthClock() + timeoutMs;
+    let proof = null;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      if (attempt > 1 && healthClock() >= deadline) return proof;
+      const remainingMs = Math.max(1, deadline - healthClock());
+      let result = null;
+      let probeUnavailable = false;
+      try {
+        result = await dockerExec(gatewayContainer, [
+          'wget', '--server-response', '--output-document=/dev/null',
+          '--timeout=' + Math.max(1, Math.min(2, Math.ceil(remainingMs / 1000))), url
+        ], {
+          timeoutMs: Math.max(1000, Math.min(5000, remainingMs + 500)),
+          maxResponseBytes: 64 * 1024
+        });
+      } catch {
+        probeUnavailable = true;
+      }
+      const candidate = await dockerRequest(
+        'GET',
+        '/containers/' + adapterState.candidate.containerId + '/json'
+      );
+      const state = candidate.State || {};
+      const statusMatch = result && String(result.output || '').match(/HTTP\/1\.[01]\s+([0-9]{3})/i);
+      const statusCode = statusMatch ? Number.parseInt(statusMatch[1], 10) : null;
+      const accepted = Number.isInteger(statusCode) &&
+        statusCode >= health.acceptedStatusMinimum && statusCode <= health.acceptedStatusMaximum;
+      proof = {
+        healthy: accepted && state.Running === true,
+        status: accepted ? 'http-accepted' : probeUnavailable ? 'probe-unavailable' : 'http-rejected',
+        statusCode,
+        attempts: attempt,
+        execExitCode: result && Number.isInteger(result.exitCode) ? result.exitCode : null,
+        candidateRunning: state.Running === true,
+        candidateExitCode: Number.isInteger(state.ExitCode) ? state.ExitCode : null,
+        candidateOomKilled: Boolean(state.OOMKilled),
+        identity: adapterState.operationId,
+        checkedAt: now()
+      };
+      if (
+        proof.healthy || state.Running !== true || attempt === attempts ||
+        healthClock() >= deadline
+      ) return proof;
+      await wait(Math.min(intervalMs, Math.max(0, deadline - healthClock())));
+    }
+    return proof;
   }
 
   async function verifyCandidateHealth({ plan, operationId }) {
@@ -609,10 +662,56 @@ function createProductionStatelessMigrationAdapter({
     if (!adapterState.candidate) {
       throw new ProductionStatelessMigrationError('Candidate state is missing', 409, 'candidate-state-missing');
     }
-    const proof = await probeCandidate(plan, adapterState);
-    if (!proof.healthy) {
-      throw new ProductionStatelessMigrationError('Candidate HTTP health check failed', 503, 'candidate-http-health-failed');
+    let proof;
+    try {
+      proof = await probeCandidate(plan, adapterState);
+    } catch {
+      const failure = new ProductionStatelessMigrationError(
+        'Candidate HTTP health probe could not be completed',
+        503,
+        'candidate-health-probe-failed'
+      );
+      adapterState.failure = {
+        phase: 'candidate-health',
+        code: failure.code,
+        message: failure.message,
+        recordedAt: now()
+      };
+      persist(adapterState);
+      throw failure;
     }
+    adapterState.candidateAttempt = {
+      phase: 'candidate-health',
+      attempts: proof && proof.attempts || 0,
+      statusCode: proof && proof.statusCode || null,
+      execExitCode: proof && proof.execExitCode,
+      running: Boolean(proof && proof.candidateRunning),
+      exitCode: proof && proof.candidateExitCode,
+      oomKilled: Boolean(proof && proof.candidateOomKilled),
+      healthy: Boolean(proof && proof.healthy),
+      checkedAt: proof && proof.checkedAt || now()
+    };
+    if (!proof.healthy) {
+      const failure = new ProductionStatelessMigrationError(
+        'Candidate HTTP health check failed after the bounded readiness window',
+        503,
+        'candidate-http-health-failed'
+      );
+      adapterState.failure = {
+        phase: 'candidate-health',
+        code: failure.code,
+        message: failure.message,
+        recordedAt: now()
+      };
+      persist(adapterState);
+      throw failure;
+    }
+    adapterState.candidate.health = {
+      statusCode: proof.statusCode,
+      attempts: proof.attempts,
+      checkedAt: proof.checkedAt
+    };
+    persist(adapterState);
     return proof;
   }
 

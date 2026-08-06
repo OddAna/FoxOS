@@ -13,6 +13,7 @@ const START_SERVER_MIGRATION_CONFIRMATION = 'START SERVER MIGRATION';
 const PLAN_ID_PATTERN = /^mplan_[a-f0-9]{32}$/;
 const RESOURCE_ID_PATTERN = /^res_[a-f0-9]{32}$/;
 const RUN_ID_PATTERN = /^mrun_[a-f0-9]{32}$/;
+const STATELESS_OPERATION_PATTERN = /^smop_[a-f0-9]{32}$/;
 const MAX_RUNS = 50;
 const ACTIVE_STATUSES = new Set(['queued', 'preparing', 'executing']);
 
@@ -379,6 +380,9 @@ function createMigrationRunManager({
           result.completedAt = now();
         } catch (error) {
           result.status = 'failed';
+          if (STATELESS_OPERATION_PATTERN.test(String(error && error.operationId || ''))) {
+            result.operationId = error.operationId;
+          }
           result.blockers = [safeError(error, 'migration-execution-failed')];
           result.completedAt = now();
           run.error = result.blockers[0];

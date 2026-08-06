@@ -247,7 +247,7 @@ function safeCandidate(value) {
 }
 
 function safeHealth(value) {
-  return select(value, ['healthy', 'status', 'identity', 'checkedAt']);
+  return select(value, ['healthy', 'status', 'statusCode', 'attempts', 'identity', 'checkedAt']);
 }
 
 function safeRoute(value) {
@@ -764,6 +764,7 @@ function createStatelessMigrationManager({
         operation.error = { code: failure.code, message: failure.message };
         persistOperation(operation);
       }
+      failure.operationId = operationId;
       throw failure;
     } finally {
       inFlight.delete(plan.resource.resourceId);

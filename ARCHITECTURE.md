@@ -438,6 +438,15 @@ expected FoxOS route identity and operation-bound candidate identity. One
 unavailable or mismatched sample is failure and triggers automatic map rollback,
 public source verification and exact operation-owned cleanup.
 
+Candidate readiness is a bounded polling gate, not a single probe immediately
+after Docker reports the process as running. For up to 30 seconds FoxOS probes
+from the owned routing gateway, accepts only the reviewed `200-399` status
+range, and exits early if the candidate process stops. The operation-scoped
+adapter record retains only attempt count, HTTP status, running/exit/OOM state
+and timestamps. It never stores a response body, header, environment value or
+secret. A failed parent run keeps the exact stateless operation ID so the
+owner-only diagnostic record remains traceable after candidate cleanup.
+
 Every apply or rollback also requires a short-lived, one-time approval grant
 whose source is `foxos-ui` and whose plan ID, resource ID and evidence
 fingerprint match exactly. Raw approval material is never stored; only a

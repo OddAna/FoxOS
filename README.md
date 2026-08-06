@@ -668,7 +668,11 @@ standalone working directory and existing `server.js`; this avoids rerunning a
 wrapper that may perform database schema work. Unknown process-title patterns
 fail closed before route or traffic changes. Bounded adapter failures keep their
 actionable code in the owner-only run record without storing environment or
-secret values.
+secret values. Candidate HTTP readiness is retried for a bounded 30-second
+window instead of treating the first connection race as an application
+failure. The first response status is checked against the reviewed `200-399`
+contract; attempt count, status and container exit/OOM state are retained as
+value-free diagnostics, and the migration run retains the exact operation ID.
 
 The transaction has no method that can stop or recreate the source, detach the
 provider, delete provider state or perform destructive source cleanup. A

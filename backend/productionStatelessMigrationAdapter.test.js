@@ -56,6 +56,10 @@ test('Next process titles become an executable standalone runtime contract', () 
     'PORT=3000',
     'HOSTNAME=0.0.0.0'
   ]);
+  assert.deepEqual(environmentForStartup(['PORT=3000'], startup), [
+    'PORT=3000',
+    'HOSTNAME=0.0.0.0'
+  ]);
 });
 
 test('unresolvable process titles fail closed instead of becoming Docker entrypoints', () => {
@@ -182,6 +186,205 @@ test('candidate creation applies the reconstructed Next standalone contract', as
   assert.equal(createPayload.WorkingDir, '/app/.next/standalone');
   assert.equal(createPayload.Env.includes('HOSTNAME=0.0.0.0'), true);
   assert.equal(createPayload.Env.includes('HOSTNAME=source-container'), false);
+  fs.rmSync(dataRoot, { recursive: true, force: true });
+});
+
+test('candidate health waits through the initial connection race and accepts planned redirects', async () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-production-health-retry-'));
+  const operationId = 'smop_' + 'b'.repeat(32);
+  const candidateId = 'c'.repeat(64);
+  let probeCalls = 0;
+  let waitCalls = 0;
+  const adapter = createProductionStatelessMigrationAdapter({
+    dataRoot,
+    dockerRequest: async (method, requestPath) => {
+      assert.equal(method, 'GET');
+      assert.equal(requestPath, '/containers/' + candidateId + '/json');
+      return { State: { Running: true, ExitCode: 0, OOMKilled: false } };
+    },
+    dockerExec: async (_containerId, command) => {
+      assert.equal(command[0], 'wget');
+      probeCalls += 1;
+      if (probeCalls === 1) return { exitCode: 1, output: 'connection refused' };
+      return { exitCode: 1, output: '  HTTP/1.1 307 Temporary Redirect\r\n' };
+    },
+    resourceRegistry: { getLatest: () => null },
+    secretManager: {
+      getEnvironmentRevision: () => null,
+      resolveEnvironment: () => []
+    },
+    certificateImporter: { importDomain: async () => ({}) },
+    ingressAuthority: {
+      stageRoutes: async () => [],
+      verifyLegacyDomain: async () => ({ legacyReady: true })
+    },
+    candidateHealthAttempts: 3,
+    candidateHealthIntervalMs: 0,
+    wait: async () => { waitCalls += 1; }
+  });
+  fs.writeFileSync(path.join(adapter.paths.operationsRoot, operationId + '.json'), JSON.stringify({
+    schemaVersion: 1,
+    operationId,
+    candidate: {
+      containerId: candidateId,
+      alias: 'foxos-health-candidate',
+      privatePort: 3000
+    }
+  }));
+  const proof = await adapter.verifyCandidateHealth({
+    operationId,
+    plan: {
+      executionContract: {
+        candidate: {
+          health: {
+            privatePort: 3000,
+            path: '/',
+            acceptedStatusMinimum: 200,
+            acceptedStatusMaximum: 399
+          }
+        }
+      }
+    }
+  });
+  assert.equal(proof.healthy, true);
+  assert.equal(proof.statusCode, 307);
+  assert.equal(proof.attempts, 2);
+  assert.equal(probeCalls, 2);
+  assert.equal(waitCalls, 1);
+  const state = JSON.parse(fs.readFileSync(
+    path.join(adapter.paths.operationsRoot, operationId + '.json'),
+    'utf8'
+  ));
+  assert.deepEqual(state.candidate.health, {
+    statusCode: 307,
+    attempts: 2,
+    checkedAt: proof.checkedAt
+  });
+  assert.equal(state.candidateAttempt.healthy, true);
+  fs.rmSync(dataRoot, { recursive: true, force: true });
+});
+
+test('candidate health exhaustion persists bounded diagnostics before cleanup', async () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-production-health-failure-'));
+  const operationId = 'smop_' + 'd'.repeat(32);
+  const candidateId = 'e'.repeat(64);
+  const adapter = createProductionStatelessMigrationAdapter({
+    dataRoot,
+    dockerRequest: async () => ({
+      State: { Running: true, ExitCode: 0, OOMKilled: false }
+    }),
+    dockerExec: async () => ({ exitCode: 1, output: 'connection refused' }),
+    resourceRegistry: { getLatest: () => null },
+    secretManager: {
+      getEnvironmentRevision: () => null,
+      resolveEnvironment: () => []
+    },
+    certificateImporter: { importDomain: async () => ({}) },
+    ingressAuthority: {
+      stageRoutes: async () => [],
+      verifyLegacyDomain: async () => ({ legacyReady: true })
+    },
+    candidateHealthAttempts: 2,
+    candidateHealthIntervalMs: 0,
+    wait: async () => {}
+  });
+  fs.writeFileSync(path.join(adapter.paths.operationsRoot, operationId + '.json'), JSON.stringify({
+    schemaVersion: 1,
+    operationId,
+    candidate: {
+      containerId: candidateId,
+      alias: 'foxos-health-candidate',
+      privatePort: 3000
+    }
+  }));
+  await assert.rejects(adapter.verifyCandidateHealth({
+    operationId,
+    plan: {
+      executionContract: {
+        candidate: {
+          health: {
+            privatePort: 3000,
+            path: '/',
+            acceptedStatusMinimum: 200,
+            acceptedStatusMaximum: 399
+          }
+        }
+      }
+    }
+  }), (error) => error.code === 'candidate-http-health-failed');
+  const state = JSON.parse(fs.readFileSync(
+    path.join(adapter.paths.operationsRoot, operationId + '.json'),
+    'utf8'
+  ));
+  assert.equal(state.candidateAttempt.attempts, 2);
+  assert.equal(state.candidateAttempt.running, true);
+  assert.equal(state.candidateAttempt.healthy, false);
+  assert.deepEqual(state.failure.code, 'candidate-http-health-failed');
+  fs.rmSync(dataRoot, { recursive: true, force: true });
+});
+
+test('candidate health polling stops at its bounded readiness deadline', async () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-production-health-deadline-'));
+  const operationId = 'smop_' + '6'.repeat(32);
+  const candidateId = '7'.repeat(64);
+  let elapsed = 0;
+  let probeCalls = 0;
+  const adapter = createProductionStatelessMigrationAdapter({
+    dataRoot,
+    dockerRequest: async () => ({
+      State: { Running: true, ExitCode: 0, OOMKilled: false }
+    }),
+    dockerExec: async () => {
+      probeCalls += 1;
+      return { exitCode: 1, output: 'connection refused' };
+    },
+    resourceRegistry: { getLatest: () => null },
+    secretManager: {
+      getEnvironmentRevision: () => null,
+      resolveEnvironment: () => []
+    },
+    certificateImporter: { importDomain: async () => ({}) },
+    ingressAuthority: {
+      stageRoutes: async () => [],
+      verifyLegacyDomain: async () => ({ legacyReady: true })
+    },
+    candidateHealthAttempts: 20,
+    candidateHealthIntervalMs: 500,
+    candidateHealthTimeoutMs: 600,
+    healthClock: () => elapsed,
+    wait: async (milliseconds) => { elapsed += milliseconds; }
+  });
+  fs.writeFileSync(path.join(adapter.paths.operationsRoot, operationId + '.json'), JSON.stringify({
+    schemaVersion: 1,
+    operationId,
+    candidate: {
+      containerId: candidateId,
+      alias: 'foxos-health-candidate',
+      privatePort: 3000
+    }
+  }));
+  await assert.rejects(adapter.verifyCandidateHealth({
+    operationId,
+    plan: {
+      executionContract: {
+        candidate: {
+          health: {
+            privatePort: 3000,
+            path: '/',
+            acceptedStatusMinimum: 200,
+            acceptedStatusMaximum: 399
+          }
+        }
+      }
+    }
+  }), (error) => error.code === 'candidate-http-health-failed');
+  assert.equal(elapsed, 600);
+  assert.equal(probeCalls, 2);
+  const state = JSON.parse(fs.readFileSync(
+    path.join(adapter.paths.operationsRoot, operationId + '.json'),
+    'utf8'
+  ));
+  assert.equal(state.candidateAttempt.attempts, 2);
   fs.rmSync(dataRoot, { recursive: true, force: true });
 });
 

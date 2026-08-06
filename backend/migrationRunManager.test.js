@@ -78,6 +78,7 @@ function harness({ blockedResource = null, reviewComplete = true, executeFailure
       if (executeFailure && executions.length === executeFailure) {
         const error = new Error('injected execution failure');
         error.code = 'injected-failure';
+        error.operationId = 'smop_' + 'f'.repeat(32);
         throw error;
       }
       return {
@@ -169,6 +170,7 @@ test('stops the serial queue after a failed resource transaction', async () => {
   const failed = context.manager.getRun(queued.runId);
   assert.equal(failed.status, 'failed');
   assert.equal(failed.resources[0].status, 'failed');
+  assert.equal(failed.resources[0].operationId, 'smop_' + 'f'.repeat(32));
   assert.equal(failed.resources[1].status, 'ready');
   assert.equal(context.executions.length, 1);
   fs.rmSync(context.dataRoot, { recursive: true, force: true });
