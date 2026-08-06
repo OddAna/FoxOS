@@ -109,6 +109,7 @@ function applicationProjection({
   const operationalState = operationalStateForRuntime({ state, status, healthStatus });
   const canManage = Boolean(app.canManage && containerId);
   const id = canonicalResource && canonicalResource.id || fallbackApplicationId(app);
+  const canEditAccessLink = Boolean(canonicalResource && canManage);
 
   return {
     schemaVersion: APPLICATION_INVENTORY_SCHEMA_VERSION,
@@ -150,7 +151,8 @@ function applicationProjection({
       stop: canManage && ['running', 'restarting'].includes(String(state).toLowerCase()),
       restart: canManage,
       settings: canManage,
-      editDomain: Boolean(managedByServer && management && management.authorityActive)
+      editAccessLink: canEditAccessLink,
+      editDomain: canEditAccessLink
     },
     management: management ? {
       state: management.state || 'attention-required',
@@ -225,12 +227,13 @@ function buildApplicationInventory({ appStates = [], containers = [], resources 
     const managedByServer = Boolean(
       app.managedByFoxOS || resource && resource.ownership === 'foxos-managed'
     );
+    const preferredDomain = resource && domainPreferences[resource.id];
     applications.push(applicationProjection({
       app,
       canonicalResource: resource,
       runtimeResource: resource,
       container,
-      externalUrl: app.externalUrl || null,
+      externalUrl: preferredDomain ? 'https://' + preferredDomain : app.externalUrl || null,
       managedByServer
     }));
   }

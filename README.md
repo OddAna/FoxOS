@@ -203,15 +203,19 @@ to compromised root access.
 - Use an installed application's three-dot menu to open, start, stop, restart,
   or manage that exact instance. **Ayarlar** opens as a full page inside the
   same Store window; it is not a popup or a separate browser window.
-- For an application already under server management, open **Ayarlar > Erişim >
-  Birincil Alan Adı** to check and change its public address. Create the public
-  DNS record first. **Kontrol Et** performs DNS and ownership checks without
-  changing traffic; the separate confirmed change keeps the old address live,
+- Open **Ayarlar > Erişim > Erişim Linki** to check and change an application's
+  public HTTPS address. This also works for a discovered, running web
+  application when its target container and private HTTP port are unambiguous;
+  a full workload migration is not required. Create the public DNS record
+  first. **Kontrol Et** performs DNS and ownership checks without changing the
+  running application. The separate confirmed change attaches only that exact
+  container to the internal routing network, keeps the previous address live,
   obtains TLS through the server-owned Caddy gateway, verifies the exact route
-  internally and publicly, and automatically removes only the new route if the
-  proof fails. The successful operation can be returned to the previous address
-  from the same page. No Cloudflare account, DNS API token or paid certificate
-  service is required.
+  internally and publicly, and removes both the new route and exact network
+  attachment if proof fails. The successful operation can be returned to the
+  previous address from the same page. Ambiguous multi-port services fail
+  closed with a concrete reason. No Cloudflare account, DNS API token or paid
+  certificate service is required.
 - Open **Terminal** to execute commands on the host.
 - Open **Dosyalar**, then **Sunucu**, to browse the host filesystem.
 - Use **Masaüstü** for FoxOS-only workspace files that should persist without

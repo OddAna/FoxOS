@@ -151,6 +151,34 @@ relationships, ownership status, blockers and conflicts under the FoxOS data
 root and exposes authenticated scan/read/redacted-export APIs. A scan still
 never creates desired state, changes labels or mutates Docker runtime state.
 
+### Implemented boundary: Server-owned access links for observed web apps
+
+FoxOS may give a discovered, running web application a new server-owned HTTPS
+access link without first claiming ownership of the workload. This is a narrow
+routing capability, not adoption: the provider's existing route, metadata,
+network and runtime authority remain untouched and the application stays
+`observed`.
+
+Planning accepts only a stable Registry resource ID, the exact running container
+ID and one unambiguous private TCP web port. It performs public DNS and route
+collision checks without Docker or ingress mutation. Apply rechecks the same
+container and Registry binding under the persistent operation lock, verifies the
+internal labeled routing network, connects only that container under a
+deterministic private alias, stages the new Caddy route and proves route identity,
+TLS and application response both internally and through the resolved public
+address. The desired access-link record and exact target container binding are
+stored locally under the FoxOS data root.
+
+The previous provider address remains live because FoxOS does not edit or remove
+it. Failed proof removes only the newly staged route and the exact network
+attachment created by the operation. Explicit rollback restores the previous
+FoxOS access route, or deletes the preference and returns to the observed
+provider address when this was the first FoxOS link. A recreated container,
+missing route attachment, ambiguous multi-port service, stopped workload or
+Registry drift fails closed instead of silently pointing the saved link at a
+different process. No Coolify API, proxy, network or metadata write is part of
+this path.
+
 ### Implemented boundary: Disposable adoption, route and recovery cutover
 
 Disposable Adoption v1 adds the next import-draft and adoption-plan slice while

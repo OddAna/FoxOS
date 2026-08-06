@@ -535,6 +535,8 @@ const applicationDomainManager = createApplicationDomainManager({
   ingressAuthority: ingressAuthorityManager,
   resourceRegistry,
   getApplicationInventory,
+  dockerRequest,
+  routingNetwork: process.env.FOXOS_ROUTE_NETWORK || 'foxos-routing',
   panelBaseUrl: process.env.FOXOS_ROUTE_BASE_URL || null
 });
 const productionStatelessMigrationAdapter = createProductionStatelessMigrationAdapter({

@@ -95,7 +95,7 @@ const ApplicationManager = ({ target }) => {
   const selectedContainerId = selectedApplication && selectedApplication.runtime.containerId || null;
   const selectedDomainApplicationId = selectedApplication && selectedApplication.id || null;
   const canEditSelectedDomain = Boolean(
-    selectedApplication && selectedApplication.capabilities.editDomain
+    selectedApplication && (selectedApplication.capabilities.editAccessLink || selectedApplication.capabilities.editDomain)
   );
 
   useEffect(() => {
@@ -282,7 +282,7 @@ const ApplicationManager = ({ target }) => {
       setDomainPlan(null);
       setMessage({
         type: 'success',
-        text: `Birincil erişim adresi https://${plan.domain} olarak değiştirildi. Önceki adres açık bırakıldı.`
+        text: `Erişim linki https://${plan.domain} olarak değiştirildi. Önceki adres açık bırakıldı.`
       });
     } catch (domainError) {
       setMessage({ type: 'error', text: domainError.message });
@@ -307,9 +307,10 @@ const ApplicationManager = ({ target }) => {
     const operation = domainStatus && domainStatus.latestOperation;
     if (!selectedApplication || !operation || !domainStatus.rollbackConfirmation) return;
     const applicationId = selectedApplication.id;
+    const previousAddress = operation.previousDomain ? `https://${operation.previousDomain}` : 'önceki erişim adresi';
     showDialog({
       title: 'Önceki Adrese Dön',
-      message: `Birincil erişim adresi yeniden https://${operation.previousDomain} olacak. Sonradan eklenen ${operation.primaryDomain} rotası güvenle kaldırılacak.`,
+      message: `Erişim linki yeniden ${previousAddress} olacak. Sonradan eklenen ${operation.primaryDomain} rotası güvenle kaldırılacak.`,
       type: 'confirm',
       confirmText: 'Geri Dön',
       cancelText: 'Vazgeç',
@@ -325,7 +326,7 @@ const ApplicationManager = ({ target }) => {
           await refreshApplications();
           await refreshDomainStatus(applicationId);
           setDomainPlan(null);
-          setMessage({ type: 'success', text: `Birincil erişim adresi https://${operation.previousDomain} olarak geri alındı.` });
+          setMessage({ type: 'success', text: `Erişim linki ${previousAddress} olarak geri alındı.` });
         } catch (domainError) {
           setMessage({ type: 'error', text: domainError.message });
         } finally {
@@ -426,14 +427,16 @@ const ApplicationManager = ({ target }) => {
           )}
 
           <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
-            <div style={{ marginBottom: '8px', color: '#ccc', fontSize: '13px', fontWeight: 'bold' }}>Birincil Alan Adı</div>
-            {selectedApplication.capabilities.editDomain ? (
+            <div style={{ marginBottom: '8px', color: '#ccc', fontSize: '13px', fontWeight: 'bold' }}>Erişim Linki</div>
+            {canEditSelectedDomain ? (
               domainLoading && !domainStatus ? (
-                <div style={{ color: '#888', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}><Loader2 size={15} className="spin" /> Alan adı ayarları okunuyor...</div>
+                <div style={{ color: '#888', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}><Loader2 size={15} className="spin" /> Erişim linki okunuyor...</div>
+              ) : domainStatus && !domainStatus.editable ? (
+                <div style={{ color: '#888', fontSize: '13px', lineHeight: 1.5 }}>{domainStatus.reason}</div>
               ) : (
                 <>
                   <div style={{ marginBottom: '10px', color: '#888', fontSize: '13px', lineHeight: 1.5 }}>
-                    Yeni adresi önce DNS ve çakışma denetiminden geçirin. Kontrol etmek hiçbir canlı rotayı değiştirmez.
+                    Yeni HTTPS erişim linkini önce DNS ve çakışma denetiminden geçirin. Kontrol etmek çalışan uygulamayı değiştirmez.
                   </div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center' }}>
                     <input
@@ -471,7 +474,7 @@ const ApplicationManager = ({ target }) => {
               )
             ) : (
               <div style={{ color: '#888', fontSize: '13px', lineHeight: 1.5 }}>
-                Bu uygulama yalnız keşfedildi. Alan adı, sunucu yönetimine güvenli geçiş tamamlandıktan sonra buradan değiştirilebilir.
+                Bu uygulama için doğrulanmış bir web hedefi henüz bulunamadı. Sunucu taramasını yenileyip tekrar deneyin.
               </div>
             )}
           </div>
