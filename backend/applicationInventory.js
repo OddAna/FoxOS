@@ -27,7 +27,8 @@ function operationalStateForRuntime({ state, status, healthStatus }) {
     if (normalizedHealth === 'starting') return 'transitioning';
     return 'running';
   }
-  if (['created', 'restarting', 'paused', 'removing'].includes(normalizedState)) {
+  if (normalizedState === 'created') return 'stopped';
+  if (['restarting', 'paused', 'removing'].includes(normalizedState)) {
     return 'transitioning';
   }
   if (normalizedState === 'exited') {

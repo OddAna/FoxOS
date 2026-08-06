@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, RotateCw, Square } from 'lucide-react';
+import { Play, RotateCw, Settings as SettingsIcon, Square } from 'lucide-react';
 import './index.css';
 import { WindowProvider, useWindowManager } from './contexts/WindowContext';
 import { DialogProvider, useDialog } from './contexts/DialogContext';
@@ -16,6 +16,8 @@ import MediaPlayerApp from './apps/MediaPlayerApp';
 import TerminalApp from './apps/TerminalApp';
 import AppStoreApp from './apps/AppStoreApp';
 import ApplicationLogo from './components/ApplicationLogo';
+import { APPLICATION_STATUS, applicationOperationalState } from './utils/applicationStatus';
+import { ApplicationProvider, useApplicationInventory } from './contexts/ApplicationContext';
 import { useAuth } from './contexts/AuthContext';
 import SetupScreen from './components/auth/SetupScreen';
 import LockScreen from './components/auth/LockScreen';
@@ -24,10 +26,14 @@ import { apiFetch } from './api';
 const Desktop = () => {
   const { windows, openWindow } = useWindowManager();
   const { showDialog } = useDialog();
+  const {
+    actions: applicationActions,
+    applications: desktopApplications,
+    refreshApplications,
+    runApplicationAction: executeApplicationAction
+  } = useApplicationInventory();
   const [desktopMenu, setDesktopMenu] = useState(null);
   const [desktopFiles, setDesktopFiles] = useState([]);
-  const [desktopApplications, setDesktopApplications] = useState([]);
-  const [applicationActions, setApplicationActions] = useState({});
   const [selectedIds, setSelectedIds] = useState([]);
   const [selectionBox, setSelectionBox] = useState(null);
   const gridRef = useRef(null);
@@ -144,30 +150,17 @@ const Desktop = () => {
     }
   };
 
-  const fetchDesktopApplications = async () => {
-    try {
-      const response = await apiFetch('/api/applications');
-      const data = await response.json();
-      const applications = data.applications || [];
-      setDesktopApplications(applications);
-      persistNewItemPositions(applications.map((application) => ({
-        positionKey: `application:${application.id}`
-      })));
-    } catch (error) {
-      console.error('Sunucu uygulamaları çekilemedi:', error);
-    }
-  };
-
   const refreshDesktop = () => {
     fetchDesktopFiles();
-    fetchDesktopApplications();
+    refreshApplications({ quiet: true }).catch((error) => {
+      console.error('Sunucu uygulamaları çekilemedi:', error);
+    });
   };
 
   useEffect(() => {
-    refreshDesktop();
+    fetchDesktopFiles();
     const handleRefresh = () => fetchDesktopFiles();
     const handleResize = () => setWindowSize({ width: window.innerWidth, height: window.innerHeight });
-    const applicationRefreshTimer = window.setInterval(fetchDesktopApplications, 15000);
     
     window.addEventListener('refresh_files', handleRefresh);
     window.addEventListener('resize', handleResize);
@@ -175,9 +168,14 @@ const Desktop = () => {
     return () => {
       window.removeEventListener('refresh_files', handleRefresh);
       window.removeEventListener('resize', handleResize);
-      window.clearInterval(applicationRefreshTimer);
     };
   }, []);
+
+  useEffect(() => {
+    persistNewItemPositions(desktopApplications.map((application) => ({
+      positionKey: `application:${application.id}`
+    })));
+  }, [desktopApplications]);
 
   useEffect(() => {
     const closeMenu = () => setDesktopMenu(null);
@@ -529,18 +527,29 @@ const Desktop = () => {
   };
 
   const runApplicationAction = async (application, action) => {
-    const allowed = application.capabilities && application.capabilities[action];
-    if (!allowed || !application.runtime.containerId || applicationActions[application.id]) return;
     setDesktopMenu(null);
-    setApplicationActions((current) => ({ ...current, [application.id]: action }));
     try {
-      await apiFetch(`/api/containers/${application.runtime.containerId}/${action}`, { method: 'POST' });
-      await fetchDesktopApplications();
+      await executeApplicationAction(application, action);
     } catch (error) {
       showDialog({ title: 'İşlem Hatası', message: error.message, type: 'error' });
-    } finally {
-      setApplicationActions((current) => ({ ...current, [application.id]: null }));
     }
+  };
+
+  const openApplicationSettings = (application) => {
+    setDesktopMenu(null);
+    openWindow({
+      id: 'settings',
+      type: 'settings',
+      title: 'Ayarlar',
+      component: null,
+      width: 1000,
+      height: 680,
+      navigation: {
+        tab: 'applications',
+        applicationId: application.id,
+        requestId: Date.now()
+      }
+    });
   };
 
   const handleDesktopItemDoubleClick = (item) => {
@@ -685,7 +694,7 @@ const Desktop = () => {
   const renderApp = (win) => {
     switch (win.type) {
       case 'server': return <ServerApp />;
-      case 'settings': return <SettingsApp />;
+      case 'settings': return <SettingsApp target={win.navigation} />;
       case 'files': return <FilesApp initialPath={win.initialPath} />;
       case 'text-viewer': return <TextEditorApp filePath={win.filePath} />;
       case 'image-viewer': return <ImageViewerApp filePath={win.filePath} />;
@@ -759,13 +768,11 @@ const Desktop = () => {
               }}
             >
               {item.desktopKind === 'application' ? (() => {
-                const state = applicationActions[item.application.id]
-                  ? 'transitioning'
-                  : item.application.runtime.operationalState;
-                let dotColor = '#000';
-                if (state === 'running') dotColor = '#27c93f';
-                if (state === 'error') dotColor = '#ff5f56';
-                if (state === 'transitioning') dotColor = '#ffbd2e';
+                const state = applicationOperationalState(
+                  item.application,
+                  applicationActions[item.application.id]
+                );
+                const dotColor = (APPLICATION_STATUS[state] || APPLICATION_STATUS.stopped).color;
 
                 return (
                   <div style={{ position: 'relative', width: '48px', height: '48px' }}>
@@ -857,6 +864,7 @@ const Desktop = () => {
           {desktopMenu.type === 'application' ? (
             <>
               <div className="context-item" onClick={() => handleOpenApplication(desktopMenu.item.application)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>Aç</div>
+              <div className="context-item" onClick={() => openApplicationSettings(desktopMenu.item.application)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><SettingsIcon size={14} /> Ayarlar'a Git</div>
               <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '4px 0' }}></div>
               {desktopMenu.item.application.capabilities.stop ? (
                 <div className="context-item" onClick={() => runApplicationAction(desktopMenu.item.application, 'stop')} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><Square size={14} /> Durdur</div>
@@ -905,9 +913,11 @@ function App() {
 
   return (
     <DialogProvider>
-      <WindowProvider>
-        <Desktop />
-      </WindowProvider>
+      <ApplicationProvider>
+        <WindowProvider>
+          <Desktop />
+        </WindowProvider>
+      </ApplicationProvider>
     </DialogProvider>
   );
 }

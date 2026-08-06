@@ -17,7 +17,11 @@ export const WindowProvider = ({ children }) => {
       const existing = prev.find(w => w.id === appConfig.id);
       if (existing) {
         focusWindow(appConfig.id);
-        return prev.map(w => w.id === appConfig.id ? { ...w, isMinimized: false } : w);
+        return prev.map(w => w.id === appConfig.id ? {
+          ...w,
+          isMinimized: false,
+          ...(appConfig.navigation ? { navigation: appConfig.navigation } : {})
+        } : w);
       }
       
       const availableWidth = Math.max(280, window.innerWidth - 16);

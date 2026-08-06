@@ -366,9 +366,11 @@ target blocks only adoption/migration operations that require restore proof.
 - [x] Place those applications on the existing desktop without creating files,
   copies or extra containers. Preserve the original icon/status-dot language,
   saved positions, open action and Docker-backed start/stop/restart menu.
-- [ ] Add **Uygulama Yöneticisi** to Settings using the existing FoxOS visual
+- [x] Add **Uygulama Yöneticisi** to Settings using the existing FoxOS visual
   language. Open the selected application's page in the same Settings window;
-  do not create a popup or a second window.
+  do not create a popup or a second window. Desktop and Settings share the same
+  canonical inventory, pending lifecycle state and Docker action path; desktop
+  and Store settings links target the exact application/container record.
 - [ ] Make the first editable setting the primary application domain. Reject a
   domain already assigned to another resource, persist the desired mapping on
   the server, apply it through server-owned routing/TLS and verify health with
