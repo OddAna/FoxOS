@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { Play, RotateCw, Square } from 'lucide-react';
 import './index.css';
 import { WindowProvider, useWindowManager } from './contexts/WindowContext';
 import { DialogProvider, useDialog } from './contexts/DialogContext';
@@ -14,6 +15,7 @@ import ImageViewerApp from './apps/ImageViewerApp';
 import MediaPlayerApp from './apps/MediaPlayerApp';
 import TerminalApp from './apps/TerminalApp';
 import AppStoreApp from './apps/AppStoreApp';
+import ApplicationLogo from './components/ApplicationLogo';
 import { useAuth } from './contexts/AuthContext';
 import SetupScreen from './components/auth/SetupScreen';
 import LockScreen from './components/auth/LockScreen';
@@ -24,6 +26,8 @@ const Desktop = () => {
   const { showDialog } = useDialog();
   const [desktopMenu, setDesktopMenu] = useState(null);
   const [desktopFiles, setDesktopFiles] = useState([]);
+  const [desktopApplications, setDesktopApplications] = useState([]);
+  const [applicationActions, setApplicationActions] = useState({});
   const [selectedIds, setSelectedIds] = useState([]);
   const [selectionBox, setSelectionBox] = useState(null);
   const gridRef = useRef(null);
@@ -33,11 +37,64 @@ const Desktop = () => {
   const [windowSize, setWindowSize] = useState({ width: window.innerWidth, height: window.innerHeight });
 
   const [positions, setPositions] = useState(() => {
-    const saved = localStorage.getItem('desktop_positions_v3');
-    return saved ? JSON.parse(saved) : {};
+    try {
+      const saved = localStorage.getItem('desktop_positions_v3');
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
   });
 
-  const getFilePosition = (file) => {
+  const desktopItems = [
+    ...desktopFiles.map((file) => ({
+      ...file,
+      desktopKind: 'file',
+      desktopId: `file:${file.id}`,
+      positionKey: file.name,
+      file
+    })),
+    ...desktopApplications.map((application) => ({
+      ...application,
+      desktopKind: 'application',
+      desktopId: `application:${application.id}`,
+      positionKey: `application:${application.id}`,
+      application
+    }))
+  ];
+
+  const persistNewItemPositions = (items) => {
+    setPositions((current) => {
+      const updated = { ...current };
+      const occupied = new Set();
+      Object.values(updated).forEach((position) => {
+        if (position.col !== undefined) occupied.add(`${position.col},${position.row}`);
+      });
+
+      const availableHeight = window.innerHeight - 30 - 80 - 40;
+      const maxRows = Math.max(1, Math.floor(availableHeight / 100));
+      let nextIndex = 0;
+      let changed = false;
+
+      items.forEach((item) => {
+        if (updated[item.positionKey] && updated[item.positionKey].col !== undefined) return;
+        let col;
+        let row;
+        do {
+          col = Math.floor(nextIndex / maxRows);
+          row = nextIndex % maxRows;
+          nextIndex += 1;
+        } while (occupied.has(`${col},${row}`));
+        updated[item.positionKey] = { col, row };
+        occupied.add(`${col},${row}`);
+        changed = true;
+      });
+
+      if (changed) localStorage.setItem('desktop_positions_v3', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  const getDesktopItemPosition = (item) => {
     const MARGIN_X = 20;
     const MARGIN_Y = 20;
     const TASKBAR_H = 80;
@@ -54,11 +111,11 @@ const Desktop = () => {
     const cellH = availableH / maxRows;
 
     let col, row;
-    if (positions[file.name] && positions[file.name].col !== undefined) {
-      col = Math.min(positions[file.name].col, maxCols - 1);
-      row = Math.min(positions[file.name].row, maxRows - 1);
+    if (positions[item.positionKey] && positions[item.positionKey].col !== undefined) {
+      col = Math.min(positions[item.positionKey].col, maxCols - 1);
+      row = Math.min(positions[item.positionKey].row, maxRows - 1);
     } else {
-      const index = desktopFiles.findIndex(f => f.name === file.name);
+      const index = desktopItems.findIndex((candidate) => candidate.desktopId === item.desktopId);
       if (index === -1) { col = 0; row = 0; }
       else {
         col = Math.floor(index / maxRows);
@@ -80,55 +137,37 @@ const Desktop = () => {
       const response = await apiFetch('/api/files?path=Masaüstü');
       const data = await response.json();
       const newFiles = data.items || [];
-      
-      setPositions(prev => {
-        let updated = { ...prev };
-        let changed = false;
-        
-        const occupied = new Set();
-        Object.values(updated).forEach(pos => {
-          if (pos.col !== undefined) occupied.add(`${pos.col},${pos.row}`);
-        });
-        
-        const MARGIN_Y = 20;
-        const TASKBAR_H = 80;
-        const availableH = window.innerHeight - 30 - TASKBAR_H - (2 * MARGIN_Y);
-        const maxRows = Math.max(1, Math.floor(availableH / 100));
-        let nextIndex = 0;
-        
-        newFiles.forEach(file => {
-          if (!updated[file.name] || updated[file.name].col === undefined) {
-            let col, row;
-            while (true) {
-              col = Math.floor(nextIndex / maxRows);
-              row = nextIndex % maxRows;
-              if (!occupied.has(`${col},${row}`)) {
-                break;
-              }
-              nextIndex++;
-            }
-            updated[file.name] = { col, row };
-            occupied.add(`${col},${row}`);
-            changed = true;
-          }
-        });
-        
-        if (changed) {
-          localStorage.setItem('desktop_positions_v3', JSON.stringify(updated));
-        }
-        return updated;
-      });
-
       setDesktopFiles(newFiles);
+      persistNewItemPositions(newFiles.map((file) => ({ positionKey: file.name })));
     } catch (err) {
       console.error('Masaüstü dosyaları çekilemedi:', err);
     }
   };
 
-  useEffect(() => {
+  const fetchDesktopApplications = async () => {
+    try {
+      const response = await apiFetch('/api/applications');
+      const data = await response.json();
+      const applications = data.applications || [];
+      setDesktopApplications(applications);
+      persistNewItemPositions(applications.map((application) => ({
+        positionKey: `application:${application.id}`
+      })));
+    } catch (error) {
+      console.error('Sunucu uygulamaları çekilemedi:', error);
+    }
+  };
+
+  const refreshDesktop = () => {
     fetchDesktopFiles();
+    fetchDesktopApplications();
+  };
+
+  useEffect(() => {
+    refreshDesktop();
     const handleRefresh = () => fetchDesktopFiles();
     const handleResize = () => setWindowSize({ width: window.innerWidth, height: window.innerHeight });
+    const applicationRefreshTimer = window.setInterval(fetchDesktopApplications, 15000);
     
     window.addEventListener('refresh_files', handleRefresh);
     window.addEventListener('resize', handleResize);
@@ -136,6 +175,7 @@ const Desktop = () => {
     return () => {
       window.removeEventListener('refresh_files', handleRefresh);
       window.removeEventListener('resize', handleResize);
+      window.clearInterval(applicationRefreshTimer);
     };
   }, []);
 
@@ -149,47 +189,56 @@ const Desktop = () => {
     };
   }, []);
 
-  const handleContextMenu = (e, file = null) => {
+  const handleContextMenu = (e, item = null) => {
     // Dock, pencere veya topbar içindeyken masaüstü menüsünü engelle
-    if (!file && (e.target.closest('.window') || e.target.closest('.dock-container') || e.target.closest('.topbar'))) {
+    if (!item && (e.target.closest('.window') || e.target.closest('.dock-container') || e.target.closest('.topbar'))) {
       return;
     }
     e.preventDefault();
     e.stopPropagation();
     
-    if (file && !selectedIds.includes(file.id)) {
-      setSelectedIds([file.id]);
-    } else if (!file && !e.target.closest('.desktop-file')) {
+    if (item && !selectedIds.includes(item.desktopId)) {
+      setSelectedIds([item.desktopId]);
+    } else if (!item && !e.target.closest('.desktop-file')) {
       setSelectedIds([]);
     }
-    setDesktopMenu({ x: e.clientX, y: e.clientY, type: file ? 'file' : 'grid', file: file });
+    setDesktopMenu({ x: e.clientX, y: e.clientY, type: item ? item.desktopKind : 'grid', item });
   };
 
-  const handleDragStart = (e, file) => {
+  const handleDragStart = (e, item) => {
     const rect = e.target.getBoundingClientRect();
     const offsetX = e.clientX - rect.left;
     const offsetY = e.clientY - rect.top;
 
-    let dragFilesData = [];
-    if (selectedIds.includes(file.id) && selectedIds.length > 1) {
-      const anchorPos = getFilePosition(file);
-      dragFilesData = desktopFiles
-        .filter(f => selectedIds.includes(f.id))
-        .map(f => {
-           const pos = getFilePosition(f);
+    let draggedItems = [];
+    if (selectedIds.includes(item.desktopId) && selectedIds.length > 1) {
+      const anchorPos = getDesktopItemPosition(item);
+      draggedItems = desktopItems
+        .filter((candidate) => selectedIds.includes(candidate.desktopId))
+        .map((candidate) => {
+           const pos = getDesktopItemPosition(candidate);
            return {
-             id: f.id,
-             name: f.name,
+             id: candidate.desktopId,
+             name: candidate.name,
+             positionKey: candidate.positionKey,
+             desktopKind: candidate.desktopKind,
              relX: pos.left - anchorPos.left,
              relY: pos.top - anchorPos.top
            };
         });
     } else {
-      dragFilesData = [{ id: file.id, name: file.name, relX: 0, relY: 0 }];
+      draggedItems = [{
+        id: item.desktopId,
+        name: item.name,
+        positionKey: item.positionKey,
+        desktopKind: item.desktopKind,
+        relX: 0,
+        relY: 0
+      }];
     }
 
     e.dataTransfer.setData('text/plain', JSON.stringify({
-      files: dragFilesData,
+      files: draggedItems,
       sourcePath: 'Masaüstü',
       offsetX,
       offsetY
@@ -197,19 +246,19 @@ const Desktop = () => {
     e.dataTransfer.effectAllowed = 'move';
     
     // Custom drag image for multiple files
-    if (dragFilesData.length > 1) {
+    if (draggedItems.length > 1) {
       const dragContainer = document.createElement('div');
       dragContainer.style.position = 'absolute';
       dragContainer.style.top = '-9999px';
       dragContainer.style.left = '-9999px';
       
       let minX = 0, minY = 0;
-      dragFilesData.forEach(f => {
+      draggedItems.forEach(f => {
         if (f.relX < minX) minX = f.relX;
         if (f.relY < minY) minY = f.relY;
       });
 
-      dragFilesData.forEach(f => {
+      draggedItems.forEach(f => {
         const fileEl = fileRefs.current[f.id];
         if (fileEl) {
            const clone = fileEl.cloneNode(true);
@@ -245,7 +294,13 @@ const Desktop = () => {
     try {
       const data = JSON.parse(dataStr);
       // Tek dosyalı drag payload'larını da normalize et.
-      const filesToMove = data.files || (data.name ? [{ name: data.name, relX: 0, relY: 0 }] : []);
+      const filesToMove = data.files || (data.name ? [{
+        name: data.name,
+        positionKey: data.name,
+        desktopKind: 'file',
+        relX: 0,
+        relY: 0
+      }] : []);
       if (filesToMove.length === 0) return;
 
       const MARGIN_X = 20;
@@ -295,9 +350,11 @@ const Desktop = () => {
         const finalCol = Math.min(maxCols - 1, Math.max(0, col + dCol));
         const finalRow = Math.min(maxRows - 1, Math.max(0, row + dRow));
         
-        const isOccupied = desktopFiles.some((existing) => {
-          if (filesToMove.find(df => df.name === existing.name)) return false; 
-          const existingPos = positions[existing.name] || {};
+        const isOccupied = desktopItems.some((existing) => {
+          if (filesToMove.find((dragged) => (
+            (dragged.positionKey || dragged.name) === existing.positionKey
+          ))) return false;
+          const existingPos = positions[existing.positionKey] || {};
           return existingPos.col === finalCol && existingPos.row === finalRow;
         });
         if (isOccupied) anyCollision = true;
@@ -312,7 +369,7 @@ const Desktop = () => {
         const finalCol = Math.min(maxCols - 1, Math.max(0, col + dCol));
         const finalRow = Math.min(maxRows - 1, Math.max(0, row + dRow));
         
-        newPositions[f.name] = { col: finalCol, row: finalRow };
+        newPositions[f.positionKey || f.name] = { col: finalCol, row: finalRow };
       });
       
       setPositions(newPositions);
@@ -332,6 +389,7 @@ const Desktop = () => {
       const data = JSON.parse(dataStr);
       const filesToMove = data.files || (data.name ? [{ name: data.name }] : []);
       if (filesToMove.length === 0) return;
+      if (filesToMove.some((file) => file.desktopKind === 'application')) return;
       
       if (filesToMove.some(f => f.name === targetFolder.name)) return;
       
@@ -422,7 +480,7 @@ const Desktop = () => {
     });
   };
 
-  const handleFileClick = (e, id) => {
+  const handleDesktopItemClick = (e, id) => {
     e.stopPropagation();
     if (e.ctrlKey || e.metaKey) {
       setSelectedIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
@@ -430,6 +488,67 @@ const Desktop = () => {
       setSelectedIds([id]);
     }
     setDesktopMenu(null);
+  };
+
+  const handleOpenApplication = (application) => {
+    if (application.runtime.operationalState !== 'running') {
+      showDialog({
+        title: 'Servis Kapalı',
+        message: 'Bu uygulama şu anda kapalı. Sağ tıklayarak servisi başlatabilirsiniz.',
+        type: 'warning'
+      });
+      return;
+    }
+    if (application.externalUrl) {
+      window.open(application.externalUrl, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    if (!application.hostPort) {
+      showDialog({
+        title: 'Erişim Adresi Bulunamadı',
+        message: 'Bu uygulama için açılabilir bir alan adı veya yayın portu bulunamadı.',
+        type: 'info'
+      });
+      return;
+    }
+
+    const localFoxOS = ['127.0.0.1', 'localhost'].includes(window.location.hostname);
+    if (application.bindAddress === '127.0.0.1' && !localFoxOS) {
+      showDialog({
+        title: 'Özel Erişim',
+        message: `Bu uygulama 127.0.0.1:${application.hostPort} üzerinde çalışıyor. Aynı portu SSH tüneliyle açın.`,
+        type: 'info'
+      });
+      return;
+    }
+
+    const hostname = application.bindAddress === '127.0.0.1'
+      ? '127.0.0.1'
+      : window.location.hostname;
+    window.open(`http://${hostname}:${application.hostPort}`, '_blank', 'noopener,noreferrer');
+  };
+
+  const runApplicationAction = async (application, action) => {
+    const allowed = application.capabilities && application.capabilities[action];
+    if (!allowed || !application.runtime.containerId || applicationActions[application.id]) return;
+    setDesktopMenu(null);
+    setApplicationActions((current) => ({ ...current, [application.id]: action }));
+    try {
+      await apiFetch(`/api/containers/${application.runtime.containerId}/${action}`, { method: 'POST' });
+      await fetchDesktopApplications();
+    } catch (error) {
+      showDialog({ title: 'İşlem Hatası', message: error.message, type: 'error' });
+    } finally {
+      setApplicationActions((current) => ({ ...current, [application.id]: null }));
+    }
+  };
+
+  const handleDesktopItemDoubleClick = (item) => {
+    if (item.desktopKind === 'application') {
+      handleOpenApplication(item.application);
+      return;
+    }
+    handleFileDoubleClick(item.file);
   };
 
   const handleFileDoubleClick = (file) => {
@@ -601,22 +720,24 @@ const Desktop = () => {
           zIndex: 1,
           overflow: 'hidden'
       }}>
-        {desktopFiles.map((file) => {
-          const isSelected = selectedIds.includes(file.id);
-          const pos = getFilePosition(file);
+        {desktopItems.map((item) => {
+          const isSelected = selectedIds.includes(item.desktopId);
+          const pos = getDesktopItemPosition(item);
 
           return (
             <div
-              key={file.id}
+              key={item.desktopId}
               className="desktop-file"
-              ref={el => fileRefs.current[file.id] = el}
+              ref={el => fileRefs.current[item.desktopId] = el}
               draggable={true}
-              onDragStart={(e) => handleDragStart(e, file)}
-              onDragOver={file.type === 'folder' ? handleDragOver : undefined}
-              onDrop={file.type === 'folder' ? (e) => handleDesktopFolderDrop(e, file) : undefined}
-              onClick={(e) => handleFileClick(e, file.id)}
-              onDoubleClick={() => handleFileDoubleClick(file)}
-              onContextMenu={(e) => handleContextMenu(e, file)}
+              onDragStart={(e) => handleDragStart(e, item)}
+              onDragOver={item.desktopKind === 'file' && item.type === 'folder' ? handleDragOver : undefined}
+              onDrop={item.desktopKind === 'file' && item.type === 'folder'
+                ? (e) => handleDesktopFolderDrop(e, item.file)
+                : undefined}
+              onClick={(e) => handleDesktopItemClick(e, item.desktopId)}
+              onDoubleClick={() => handleDesktopItemDoubleClick(item)}
+              onContextMenu={(e) => handleContextMenu(e, item)}
               style={{
                 position: 'absolute',
                 left: `${pos.left}px`,
@@ -637,7 +758,31 @@ const Desktop = () => {
                 userSelect: 'none'
               }}
             >
-              {getFileIcon(file)}
+              {item.desktopKind === 'application' ? (() => {
+                const state = applicationActions[item.application.id]
+                  ? 'transitioning'
+                  : item.application.runtime.operationalState;
+                let dotColor = '#000';
+                if (state === 'running') dotColor = '#27c93f';
+                if (state === 'error') dotColor = '#ff5f56';
+                if (state === 'transitioning') dotColor = '#ffbd2e';
+
+                return (
+                  <div style={{ position: 'relative', width: '48px', height: '48px' }}>
+                    <div style={{ width: '100%', height: '100%', background: 'rgba(255,255,255,0.9)', borderRadius: '10px', padding: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }}>
+                      <ApplicationLogo app={item.application} size={32} />
+                    </div>
+                    <div
+                      style={{
+                        position: 'absolute', right: '-4px', bottom: '-4px', width: '14px', height: '14px',
+                        borderRadius: '50%', background: dotColor, border: '2px solid rgba(20, 20, 25, 0.9)',
+                        boxShadow: '0 2px 4px rgba(0,0,0,0.3)', zIndex: 2
+                      }}
+                      title={`Durum: ${state}`}
+                    />
+                  </div>
+                );
+              })() : getFileIcon(item.file)}
               <span style={{
                 color: '#fff',
                 fontSize: '12px',
@@ -651,7 +796,7 @@ const Desktop = () => {
                 WebkitBoxOrient: 'vertical',
                 lineHeight: '1.2'
               }}>
-                {file.name}
+                {item.name}
               </span>
             </div>
           );
@@ -709,15 +854,26 @@ const Desktop = () => {
           onClick={(e) => { e.stopPropagation(); setDesktopMenu(null); }}
           onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
         >
-          {desktopMenu.type === 'file' ? (
+          {desktopMenu.type === 'application' ? (
             <>
-              <div className="context-item" onClick={() => handleFileDoubleClick(desktopMenu.file)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>Aç</div>
-              <div className="context-item" onClick={() => handleRename(desktopMenu.file)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>Yeniden Adlandır</div>
-              <div className="context-item" onClick={() => handleDelete(desktopMenu.file)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', color: '#ff5f56' }}>Sil</div>
+              <div className="context-item" onClick={() => handleOpenApplication(desktopMenu.item.application)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>Aç</div>
+              <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '4px 0' }}></div>
+              {desktopMenu.item.application.capabilities.stop ? (
+                <div className="context-item" onClick={() => runApplicationAction(desktopMenu.item.application, 'stop')} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><Square size={14} /> Durdur</div>
+              ) : (
+                <div className="context-item" onClick={() => runApplicationAction(desktopMenu.item.application, 'start')} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><Play size={14} /> Başlat</div>
+              )}
+              <div className="context-item" onClick={() => runApplicationAction(desktopMenu.item.application, 'restart')} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><RotateCw size={14} /> Yeniden Başlat</div>
+            </>
+          ) : desktopMenu.type === 'file' ? (
+            <>
+              <div className="context-item" onClick={() => handleFileDoubleClick(desktopMenu.item.file)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>Aç</div>
+              <div className="context-item" onClick={() => handleRename(desktopMenu.item.file)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>Yeniden Adlandır</div>
+              <div className="context-item" onClick={() => handleDelete(desktopMenu.item.file)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', color: '#ff5f56' }}>Sil</div>
             </>
           ) : (
             <>
-              <div className="context-item" onClick={fetchDesktopFiles} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>Masaüstünü Yenile</div>
+              <div className="context-item" onClick={refreshDesktop} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>Masaüstünü Yenile</div>
               <div className="context-item" onClick={handleNewFolder} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>Yeni Klasör</div>
               <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '4px 0' }}></div>
               <div className="context-item" style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>Duvar Kağıdını Değiştir</div>

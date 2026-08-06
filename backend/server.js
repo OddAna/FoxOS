@@ -73,6 +73,10 @@ const {
 } = require('./imageUpdateManager');
 const { APP_CATALOG, getCatalogApp } = require('./appCatalog');
 const { resolveAppIcon } = require('./appIcon');
+const {
+  APPLICATION_INVENTORY_SCHEMA_VERSION,
+  buildApplicationInventory
+} = require('./applicationInventory');
 const { SCHEMA_VERSION: RESOURCE_SCHEMA_VERSION, createResourceRegistry } = require('./resourceRegistry');
 const {
   catalogContainerForApp,
@@ -889,13 +893,46 @@ async function hostPortIsListening(port) {
   return result.success && result.output.trim() === 'used';
 }
 
-async function getCatalogState() {
+async function getCatalogContext() {
   const listedContainers = await dockerRequest('GET', '/containers/json?all=1');
   const containers = await containersWithConfiguredPorts(listedContainers);
-  return [
-    ...APP_CATALOG.map((catalogApp) => stateForCatalogApp(catalogApp, containers)),
-    ...discoveredAppStates(containers, APP_CATALOG)
-  ];
+  return {
+    containers,
+    apps: [
+      ...APP_CATALOG.map((catalogApp) => stateForCatalogApp(catalogApp, containers)),
+      ...discoveredAppStates(containers, APP_CATALOG)
+    ]
+  };
+}
+
+async function getCatalogState() {
+  return (await getCatalogContext()).apps;
+}
+
+async function getApplicationInventory() {
+  const context = await getCatalogContext();
+  let snapshot = resourceRegistry.getLatest();
+  const resourceContainerIds = new Set((snapshot && snapshot.resources || [])
+    .map((resource) => resource && resource.runtime && resource.runtime.containerId)
+    .filter(Boolean));
+  const installedContainerIds = context.apps
+    .filter((application) => application.installed && application.containerId)
+    .map((application) => application.containerId);
+
+  if (!snapshot || installedContainerIds.some((containerId) => !resourceContainerIds.has(containerId))) {
+    snapshot = await resourceRegistry.scan();
+  }
+
+  return {
+    schemaVersion: APPLICATION_INVENTORY_SCHEMA_VERSION,
+    snapshotId: snapshot && snapshot.snapshotId || null,
+    generatedAt: snapshot && snapshot.generatedAt || null,
+    applications: buildApplicationInventory({
+      appStates: context.apps,
+      containers: context.containers,
+      resources: snapshot && snapshot.resources || []
+    })
+  };
 }
 
 app.get('/api/health', (req, res) => {
@@ -1882,6 +1919,15 @@ app.get('/api/apps', async (req, res) => {
     res.json({ apps: await getCatalogState() });
   } catch (error) {
     res.status(503).json({ error: error.message });
+  }
+});
+
+app.get('/api/applications', async (req, res) => {
+  try {
+    res.json(await getApplicationInventory());
+  } catch (error) {
+    console.error('Could not build the server application inventory:', error.message);
+    res.status(503).json({ error: 'Sunucu uygulamaları okunamadı' });
   }
 });
 

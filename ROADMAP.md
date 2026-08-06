@@ -356,6 +356,31 @@ target blocks only adoption/migration operations that require restore proof.
 
 ## Operations and safety
 
+### Application management interface
+
+- [x] Project every user-facing server application into one canonical,
+  provider-neutral inventory with a stable local resource identity. Keep
+  repeated WordPress sites and other repeated deployments separate while
+  collapsing a migrated cold source and its active server-owned runtime into
+  one application.
+- [x] Place those applications on the existing desktop without creating files,
+  copies or extra containers. Preserve the original icon/status-dot language,
+  saved positions, open action and Docker-backed start/stop/restart menu.
+- [ ] Add **Uygulama Yöneticisi** to Settings using the existing FoxOS visual
+  language. Open the selected application's page in the same Settings window;
+  do not create a popup or a second window.
+- [ ] Make the first editable setting the primary application domain. Reject a
+  domain already assigned to another resource, persist the desired mapping on
+  the server, apply it through server-owned routing/TLS and verify health with
+  automatic rollback.
+- [ ] Add reviewed environment/secret editing, logs, health history, resource
+  limits, deployment/update and backup/restore controls from the same canonical
+  application record as their safety contracts become complete.
+- [ ] On first installation, run the server scan before presenting applications,
+  then offer the optional migration selection flow. Declining migration must
+  still leave discovery, desktop shortcuts and management of safe observed
+  capabilities operational.
+
 - [ ] Add application logs, health history, resource metrics and actionable alerts.
 - [ ] Add audit logs, users/roles and explicit authorization for destructive actions.
 - [ ] Add CPU/memory/storage limits and disk-pressure protection.
