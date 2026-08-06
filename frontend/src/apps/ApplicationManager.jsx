@@ -63,7 +63,6 @@ const ApplicationManager = ({ target }) => {
   const [restartPolicy, setRestartPolicy] = useState('no');
   const [domainStatus, setDomainStatus] = useState(null);
   const [domainInput, setDomainInput] = useState('');
-  const [domainPlan, setDomainPlan] = useState(null);
   const [domainLoading, setDomainLoading] = useState(false);
   const [domainApplying, setDomainApplying] = useState(false);
   const [domainMessage, setDomainMessage] = useState(null);
@@ -132,7 +131,6 @@ const ApplicationManager = ({ target }) => {
     if (!selectedDomainApplicationId || !canEditSelectedDomain) {
       setDomainStatus(null);
       setDomainInput('');
-      setDomainPlan(null);
       setDomainLoading(false);
       setDomainMessage(null);
       return undefined;
@@ -140,7 +138,6 @@ const ApplicationManager = ({ target }) => {
 
     let active = true;
     setDomainLoading(true);
-    setDomainPlan(null);
     setDomainMessage(null);
     setMessage(null);
     apiFetch(`/api/applications/${selectedDomainApplicationId}/domain`)
@@ -148,7 +145,7 @@ const ApplicationManager = ({ target }) => {
       .then((payload) => {
         if (!active) return;
         setDomainStatus(payload);
-        setDomainInput(payload.currentDomain || '');
+        setDomainInput('');
       })
       .catch((domainError) => {
         if (active) setDomainMessage({ type: 'error', text: domainError.message });
@@ -243,10 +240,9 @@ const ApplicationManager = ({ target }) => {
     }
   };
 
-  const checkDomain = async () => {
+  const addDomain = async () => {
     if (!selectedApplication || !domainInput.trim()) return;
     setDomainLoading(true);
-    setDomainPlan(null);
     setDomainMessage(null);
     setMessage(null);
     try {
@@ -256,8 +252,18 @@ const ApplicationManager = ({ target }) => {
         body: JSON.stringify({ domain: domainInput })
       });
       const payload = await response.json();
-      setDomainPlan(payload.plan);
-      setDomainInput(payload.plan.domain);
+      const plan = payload.plan;
+      const dnsChange = plan.dnsAutomation && plan.dnsAutomation.mutationRequired
+        ? ` Cloudflare üzerinde A kaydı ${plan.dnsAutomation.publicIpv4} adresine ayarlanacak${plan.dnsAutomation.removesIpv6 ? ` ve ${plan.dnsAutomation.removesIpv6} AAAA kaydı kaldırılacak` : ''}; işlem tamamlanamazsa DNS değişikliği geri alınacak.`
+        : '';
+      showDialog({
+        title: 'Erişim Linki Ekle',
+        message: `https://${plan.domain} sunucu yönlendirmesi, TLS ve uygulama sağlığıyla doğrulanacak.${dnsChange} Yeni link birincil olur; mevcut erişim linkleri açık kalır.`,
+        type: 'confirm',
+        confirmText: 'Ekle',
+        cancelText: 'Vazgeç',
+        onConfirm: () => applyDomainPlan(plan)
+      });
     } catch (domainError) {
       setDomainMessage({ type: 'error', text: domainError.message });
     } finally {
@@ -269,7 +275,7 @@ const ApplicationManager = ({ target }) => {
     const response = await apiFetch(`/api/applications/${applicationId}/domain`);
     const payload = await response.json();
     setDomainStatus(payload);
-    setDomainInput(payload.currentDomain || '');
+    setDomainInput('');
     return payload;
   };
 
@@ -287,31 +293,15 @@ const ApplicationManager = ({ target }) => {
       });
       await refreshApplications();
       await refreshDomainStatus(applicationId);
-      setDomainPlan(null);
       setDomainMessage({
         type: 'success',
-        text: `${plan.dnsAutomation && plan.dnsAutomation.mutationRequired ? 'Cloudflare DNS kaydı ve erişim linki' : 'Erişim linki'} https://${plan.domain} olarak değiştirildi. Önceki adres açık bırakıldı.`
+        text: `${plan.dnsAutomation && plan.dnsAutomation.mutationRequired ? 'Cloudflare DNS kaydıyla birlikte ' : ''}https://${plan.domain} erişim linki eklendi. Mevcut linkler açık bırakıldı.`
       });
     } catch (domainError) {
       setDomainMessage({ type: 'error', text: domainError.message });
     } finally {
       setDomainApplying(false);
     }
-  };
-
-  const confirmDomainChange = () => {
-    if (!domainPlan) return;
-    const dnsChange = domainPlan.dnsAutomation && domainPlan.dnsAutomation.mutationRequired
-      ? ` Cloudflare üzerinde A kaydı ${domainPlan.dnsAutomation.publicIpv4} adresine ayarlanacak${domainPlan.dnsAutomation.removesIpv6 ? ` ve ${domainPlan.dnsAutomation.removesIpv6} AAAA kaydı kaldırılacak` : ''}; başarısızlıkta önceki DNS durumu geri yüklenecek.`
-      : '';
-    showDialog({
-      title: 'Erişim Linkini Değiştir',
-      message: `https://${domainPlan.domain} sunucu yönlendirmesi, TLS ve uygulama sağlığıyla doğrulanacak.${dnsChange} Mevcut adres işlem boyunca açık kalacak; doğrulama başarısız olursa yeni DNS ve rota değişiklikleri geri alınacak.`,
-      type: 'confirm',
-      confirmText: 'Değiştir',
-      cancelText: 'Vazgeç',
-      onConfirm: () => applyDomainPlan(domainPlan)
-    });
   };
 
   const rollbackDomain = () => {
@@ -340,7 +330,6 @@ const ApplicationManager = ({ target }) => {
           });
           await refreshApplications();
           await refreshDomainStatus(applicationId);
-          setDomainPlan(null);
           setDomainMessage({ type: 'success', text: `Erişim linki ${previousAddress} olarak geri alındı.` });
         } catch (domainError) {
           setDomainMessage({ type: 'error', text: domainError.message });
@@ -357,7 +346,6 @@ const ApplicationManager = ({ target }) => {
     setContainerSettings(null);
     setDomainStatus(null);
     setDomainInput('');
-    setDomainPlan(null);
     setDomainMessage(null);
     setMessage(null);
   };
@@ -368,6 +356,13 @@ const ApplicationManager = ({ target }) => {
     const canStart = selectedApplication.capabilities.start;
     const canStop = selectedApplication.capabilities.stop;
     const canRestart = selectedApplication.capabilities.restart;
+    const activeAccessUrls = domainStatus && domainStatus.editable
+      ? [...new Set([domainStatus.currentDomain, ...(domainStatus.aliases || [])].filter(Boolean))]
+        .sort((left, right) => (
+          left === domainStatus.currentDomain ? -1 : right === domainStatus.currentDomain ? 1 : left.localeCompare(right)
+        ))
+        .map((domain) => `https://${domain}`)
+      : accessUrl ? [accessUrl] : [];
 
     return (
       <div data-application-manager data-application-id={selectedApplication.id}>
@@ -418,32 +413,44 @@ const ApplicationManager = ({ target }) => {
         </section>
 
         <section style={{ padding: '26px 0', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
-          <h3 style={{ margin: '0 0 6px 0', fontSize: '16px' }}>Erişim</h3>
-          <div style={{ marginBottom: '14px', color: '#888', fontSize: '13px' }}>Uygulamanın yayınlanmış adresi.</div>
-          {accessUrl ? (
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'stretch' }}>
-              <div style={{ flex: 1, minWidth: 0, padding: '9px 12px', borderRadius: '8px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: '#ccc', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{accessUrl}</div>
-              <button
-                type="button"
-                onClick={async () => {
-                  try {
-                    await copyText(accessUrl);
-                    setMessage({ type: 'success', text: 'Erişim adresi kopyalandı.' });
-                  } catch (copyError) {
-                    setMessage({ type: 'error', text: copyError.message });
-                  }
-                }}
-                style={{ background: 'rgba(255,255,255,0.08)', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 12px', borderRadius: '8px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px' }}
-              >
-                <Copy size={14} /> Kopyala
-              </button>
+          <h3 style={{ margin: '0 0 6px 0', fontSize: '16px' }}>Erişim Linkleri</h3>
+          <div style={{ marginBottom: '14px', color: '#888', fontSize: '13px' }}>Uygulamayı açan etkin adresler.</div>
+          {activeAccessUrls.length ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {activeAccessUrls.map((url) => {
+                const primary = domainStatus && url === `https://${domainStatus.currentDomain}`;
+                return (
+                  <div key={url} style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'stretch' }}>
+                    <div style={{ flex: '1 1 280px', minWidth: 0, padding: '9px 12px', borderRadius: '8px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: '#ccc', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {url}{primary && <span style={{ marginLeft: '9px', color: '#75da85', fontFamily: 'inherit' }}>Birincil</span>}
+                    </div>
+                    <button type="button" onClick={() => window.open(url, '_blank', 'noopener,noreferrer')} style={{ background: 'rgba(255,255,255,0.08)', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 12px', borderRadius: '8px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px' }}>
+                      <ExternalLink size={14} /> Aç
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await copyText(url);
+                          setMessage({ type: 'success', text: 'Erişim linki kopyalandı.' });
+                        } catch (copyError) {
+                          setMessage({ type: 'error', text: copyError.message });
+                        }
+                      }}
+                      style={{ background: 'rgba(255,255,255,0.08)', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 12px', borderRadius: '8px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px' }}
+                    >
+                      <Copy size={14} /> Kopyala
+                    </button>
+                  </div>
+                );
+              })}
             </div>
           ) : (
             <div style={{ color: '#888', fontSize: '13px' }}>Bu uygulama için yayınlanmış bir web adresi bulunamadı.</div>
           )}
 
           <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
-            <div style={{ marginBottom: '8px', color: '#ccc', fontSize: '13px', fontWeight: 'bold' }}>Erişim Linki</div>
+            <div style={{ marginBottom: '8px', color: '#ccc', fontSize: '13px', fontWeight: 'bold' }}>Yeni Link Ekle</div>
             {canEditSelectedDomain ? (
               domainLoading && !domainStatus ? (
                 <div style={{ color: '#888', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}><Loader2 size={15} className="spin" /> Erişim linki okunuyor...</div>
@@ -453,43 +460,28 @@ const ApplicationManager = ({ target }) => {
                 <>
                   <div style={{ marginBottom: '10px', color: '#888', fontSize: '13px', lineHeight: 1.5 }}>
                     {domainStatus && domainStatus.dnsAutomation && domainStatus.dnsAutomation.connected
-                      ? 'Yeni HTTPS linkini yazın. Cloudflare bağlantısı bu domaini kapsıyorsa gerekli A kaydı onaylanan geçiş sırasında otomatik ayarlanır; bu hostname için AAAA kaydı varsa güvenle geri alınabilir biçimde kaldırılır. Kontrol etmek DNS’i veya çalışan uygulamayı değiştirmez.'
-                      : 'Yeni HTTPS linkini yazın. DNS’i otomatik yönetmek için Ayarlar > Bağlantılar bölümünden Cloudflare bağlayabilirsiniz. Bağlantı kullanmayacaksanız A kaydını sunucunun public IPv4 adresine yönlendirin. Kontrol etmek çalışan uygulamayı değiştirmez.'}
+                      ? 'Yeni HTTPS adresini yazın. Bağlı Cloudflare hesabı bu alan adını kapsıyorsa gerekli DNS kaydı otomatik hazırlanır. Ekleme güvenle tamamlanamazsa hiçbir değişiklik yapılmadan sorun burada gösterilir.'
+                      : 'Yeni HTTPS adresini yazın. Cloudflare bağlantısı yoksa alan adının A kaydı önce bu sunucuya yönlenmiş olmalıdır. Ekleme güvenle tamamlanamazsa hiçbir değişiklik yapılmaz.'}
                   </div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center' }}>
+                  <form onSubmit={(event) => { event.preventDefault(); addDomain(); }} style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center' }}>
                     <input
                       type="text"
                       value={domainInput}
-                      onChange={(event) => { setDomainInput(event.target.value); setDomainPlan(null); setDomainMessage(null); }}
-                      disabled={domainApplying}
+                      onChange={(event) => { setDomainInput(event.target.value); setDomainMessage(null); }}
+                      disabled={domainLoading || domainApplying}
                       placeholder="uygulama.ornek.com"
                       autoComplete="off"
                       spellCheck={false}
                       style={{ flex: '1 1 280px', minWidth: 0, background: '#24242a', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 12px', borderRadius: '8px', outline: 'none', fontSize: '13px' }}
                     />
-                    <button type="button" onClick={checkDomain} disabled={domainLoading || domainApplying || !domainInput.trim()} style={{ background: 'rgba(255,255,255,0.08)', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 14px', borderRadius: '8px', cursor: domainLoading || domainApplying || !domainInput.trim() ? 'not-allowed' : 'pointer', opacity: domainLoading || domainApplying || !domainInput.trim() ? 0.5 : 1, display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px' }}>
-                      {domainLoading ? <Loader2 size={15} className="spin" /> : <Search size={15} />} Kontrol Et
+                    <button type="submit" disabled={domainLoading || domainApplying || !domainInput.trim()} style={{ background: '#0ea5e9', color: '#fff', border: 'none', padding: '9px 14px', borderRadius: '8px', cursor: domainLoading || domainApplying || !domainInput.trim() ? 'not-allowed' : 'pointer', opacity: domainLoading || domainApplying || !domainInput.trim() ? 0.5 : 1, display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px', fontWeight: 'bold' }}>
+                      {domainLoading || domainApplying ? <Loader2 size={15} className="spin" /> : <Save size={15} />} Ekle
                     </button>
-                  </div>
+                  </form>
 
                   {domainMessage && (
                     <div aria-live="polite" style={{ marginTop: '12px', padding: '10px 12px', borderRadius: '8px', background: domainMessage.type === 'error' ? 'rgba(255,95,86,0.12)' : 'rgba(39,201,63,0.12)', border: `1px solid ${domainMessage.type === 'error' ? 'rgba(255,95,86,0.35)' : 'rgba(39,201,63,0.35)'}`, color: domainMessage.type === 'error' ? '#ff8a84' : '#75da85', fontSize: '13px', lineHeight: 1.5 }}>
                       {domainMessage.text}
-                    </div>
-                  )}
-
-                  {domainPlan && (
-                    <div style={{ marginTop: '12px', padding: '10px 12px', borderRadius: '8px', background: 'rgba(39,201,63,0.12)', border: '1px solid rgba(39,201,63,0.35)', color: '#75da85', fontSize: '13px', lineHeight: 1.5 }}>
-                      <div>
-                        {domainPlan.dnsAutomation && domainPlan.dnsAutomation.mutationRequired
-                          ? `https://${domainPlan.domain} kullanılabilir. Cloudflare A kaydı ${domainPlan.dnsAutomation.publicIpv4} adresine otomatik ayarlanacak${domainPlan.dnsAutomation.removesIpv6 ? `; ${domainPlan.dnsAutomation.removesIpv6} AAAA kaydı işlem sırasında kaldırılacak` : ''}.`
-                          : `https://${domainPlan.domain} kullanılabilir ve genel DNS üzerinde çözümleniyor.`}
-                      </div>
-                      <div style={{ marginTop: '10px' }}>
-                        <button type="button" onClick={confirmDomainChange} disabled={domainApplying} style={{ background: '#0ea5e9', color: '#fff', border: 'none', padding: '9px 14px', borderRadius: '8px', cursor: domainApplying ? 'wait' : 'pointer', opacity: domainApplying ? 0.5 : 1, display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px', fontWeight: 'bold' }}>
-                          {domainApplying ? <Loader2 size={15} className="spin" /> : <Save size={15} />} Bu Adrese Geç
-                        </button>
-                      </div>
                     </div>
                   )}
 
@@ -532,7 +524,7 @@ const ApplicationManager = ({ target }) => {
           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 160px) minmax(0, 1fr)', rowGap: '10px', columnGap: '16px', fontSize: '13px', wordBreak: 'break-word' }}>
             <div style={{ color: '#888' }}>Instance</div><div>{selectedApplication.instanceName || selectedApplication.runtime.containerName}</div>
             <div style={{ color: '#888' }}>Container</div><div>{selectedApplication.runtime.containerName}</div>
-            <div style={{ color: '#888' }}>Yönetim</div><div>{selectedApplication.managedByServer ? 'Sunucu tarafından yönetiliyor' : 'Mevcut kurulumundan çalışıyor'}</div>
+            <div style={{ color: '#888' }}>Yönetim</div><div>{selectedApplication.managedByServer ? 'Sunucu tarafından yönetiliyor' : `${selectedApplication.provenance.source === 'coolify' ? 'Coolify' : 'Mevcut'} kurulumundan çalışıyor · geçiş tamamlanmadı`}</div>
             <div style={{ color: '#888' }}>Durum</div><div>{selectedApplication.runtime.status || selectedApplication.runtime.state}</div>
             {containerSettings && containerSettings.ports.length > 0 && (
               <><div style={{ color: '#888' }}>Portlar</div><div>{containerSettings.ports.map((port) => `${port.hostIp}:${port.hostPort} → ${port.privatePort}`).join(', ')}</div></>

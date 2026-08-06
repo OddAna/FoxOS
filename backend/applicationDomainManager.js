@@ -385,7 +385,7 @@ function createApplicationDomainManager({
       addresses = await dnsLookup(domain);
     } catch {
       throw new ApplicationDomainError(
-        '"' + domain + '" için DNS kaydı bulunamadı. DNS’i otomatik yönetmek için Ayarlar > Bağlantılar bölümünden Cloudflare bağlayın veya bu hostname için A kaydını sunucunun public IPv4 adresine yönlendirin. DNS yayıldıktan sonra tekrar Kontrol Et\'e basın.',
+        '"' + domain + '" için DNS kaydı bulunamadı. DNS’i otomatik yönetmek için Ayarlar > Bağlantılar bölümünden Cloudflare bağlayın veya bu hostname için A kaydını sunucunun public IPv4 adresine yönlendirin. DNS yayıldıktan sonra linki yeniden ekleyin.',
         409,
         'domain-dns-unresolved'
       );
@@ -618,7 +618,7 @@ function createApplicationDomainManager({
       throw new ApplicationDomainError('Bu alan adı planı artık kullanılamaz.', 409, 'domain-plan-consumed');
     }
     if (Date.parse(plan.expiresAt) <= Date.parse(now())) {
-      throw new ApplicationDomainError('Alan adı kontrolünün süresi doldu. Yeniden kontrol edin.', 409, 'domain-plan-expired');
+      throw new ApplicationDomainError('Erişim linki ekleme süresi doldu. Yeniden eklemeyi deneyin.', 409, 'domain-plan-expired');
     }
     const fingerprint = fingerprintRoute({
       applicationId: plan.applicationId,
@@ -627,7 +627,7 @@ function createApplicationDomainManager({
       primaryDomain: resolved.currentPrimary
     });
     if (fingerprint !== plan.sourceFingerprint || resolved.currentPrimary !== plan.currentDomain) {
-      throw new ApplicationDomainError('Uygulama rotası kontrolden sonra değişti. Yeniden kontrol edin.', 409, 'domain-plan-stale');
+      throw new ApplicationDomainError('Uygulama rotası işlem sırasında değişti. Linki yeniden eklemeyi deneyin.', 409, 'domain-plan-stale');
     }
   }
 
@@ -693,7 +693,7 @@ function createApplicationDomainManager({
       !container || container.Id !== plan.candidateContainerId || !container.State || container.State.Running !== true ||
       !resource || !resource.runtime || resource.runtime.containerId !== plan.candidateContainerId
     ) {
-      throw new ApplicationDomainError('Uygulamanın çalışan container kimliği değişti. Yeniden kontrol edin.', 409, 'access-target-stale');
+      throw new ApplicationDomainError('Uygulamanın çalışan container kimliği değişti. Linki yeniden eklemeyi deneyin.', 409, 'access-target-stale');
     }
     return { container, network };
   }

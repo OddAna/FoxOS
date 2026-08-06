@@ -153,8 +153,8 @@ never creates desired state, changes labels or mutates Docker runtime state.
 
 ### Implemented boundary: Server-owned access links for observed web apps
 
-FoxOS may give a discovered, running web application a new server-owned HTTPS
-access link without first claiming ownership of the workload. This is a narrow
+FoxOS may give a discovered, running web application multiple server-owned HTTPS
+access links without first claiming ownership of the workload. This is a narrow
 routing capability, not adoption: the provider's existing route, metadata,
 network and runtime authority remain untouched and the application stays
 `observed`.
@@ -169,8 +169,11 @@ TLS and application response both internally and through the resolved public
 address. The desired access-link record and exact target container binding are
 stored locally under the FoxOS data root.
 
-The previous provider address remains live because FoxOS does not edit or remove
-it. Failed proof removes only the newly staged route and the exact network
+The previous provider address and every earlier server-owned alias remain live;
+the newest verified link becomes the displayed primary address. The authenticated
+application page lists all active links and performs read-only planning when the
+operator clicks **Ekle**, so a validation error is reported before any mutation.
+Failed proof removes only the newly staged route and the exact network
 attachment created by the operation. Explicit rollback restores the previous
 FoxOS access route, or deletes the preference and returns to the observed
 provider address when this was the first FoxOS link. A recreated container,

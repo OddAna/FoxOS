@@ -357,6 +357,23 @@ test('apply adds and verifies a new route while preserving the previous address'
   );
 });
 
+test('successive additions remain visible as multiple active access links', async (t) => {
+  const { manager } = fixture(t);
+  const firstPlan = await manager.createPlan(RESOURCE_ID, { domain: 'first.example.com' });
+  await manager.applyPlan(firstPlan.planId, firstPlan.confirmation);
+  const secondPlan = await manager.createPlan(RESOURCE_ID, { domain: 'second.example.com' });
+  await manager.applyPlan(secondPlan.planId, secondPlan.confirmation);
+
+  const status = await manager.getStatus(RESOURCE_ID);
+
+  assert.equal(status.currentDomain, 'second.example.com');
+  assert.deepEqual(status.aliases, [
+    'first.example.com',
+    'old.example.com',
+    'second.example.com'
+  ]);
+});
+
 test('failed TLS or route proof removes only the new route and retains the previous address', async (t) => {
   const { authority, calls, manager } = fixture(t, {
     failProbe: (input) => input.hostname === 'new.example.com'
@@ -430,7 +447,7 @@ test('unresolved DNS returns the exact access-link record action', async (t) => 
       error.message.includes('"missing.example.com" için DNS kaydı bulunamadı') &&
       error.message.includes('Ayarlar > Bağlantılar') &&
       error.message.includes('A kaydını sunucunun public IPv4 adresine yönlendirin') &&
-      error.message.includes("tekrar Kontrol Et'e basın")
+      error.message.includes('linki yeniden ekleyin')
     )
   );
 });
