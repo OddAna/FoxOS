@@ -290,7 +290,7 @@ const ApplicationManager = ({ target }) => {
       setDomainPlan(null);
       setDomainMessage({
         type: 'success',
-        text: `Erişim linki https://${plan.domain} olarak değiştirildi. Önceki adres açık bırakıldı.`
+        text: `${plan.dnsAutomation && plan.dnsAutomation.mutationRequired ? 'Cloudflare DNS kaydı ve erişim linki' : 'Erişim linki'} https://${plan.domain} olarak değiştirildi. Önceki adres açık bırakıldı.`
       });
     } catch (domainError) {
       setDomainMessage({ type: 'error', text: domainError.message });
@@ -301,9 +301,12 @@ const ApplicationManager = ({ target }) => {
 
   const confirmDomainChange = () => {
     if (!domainPlan) return;
+    const dnsChange = domainPlan.dnsAutomation && domainPlan.dnsAutomation.mutationRequired
+      ? ` Cloudflare üzerinde A kaydı ${domainPlan.dnsAutomation.publicIpv4} adresine ayarlanacak${domainPlan.dnsAutomation.removesIpv6 ? ` ve ${domainPlan.dnsAutomation.removesIpv6} AAAA kaydı kaldırılacak` : ''}; başarısızlıkta önceki DNS durumu geri yüklenecek.`
+      : '';
     showDialog({
       title: 'Erişim Linkini Değiştir',
-      message: `https://${domainPlan.domain} sunucu yönlendirmesi, TLS ve uygulama sağlığıyla doğrulanacak. Mevcut adres işlem boyunca açık kalacak; doğrulama başarısız olursa yalnız yeni rota geri alınacak.`,
+      message: `https://${domainPlan.domain} sunucu yönlendirmesi, TLS ve uygulama sağlığıyla doğrulanacak.${dnsChange} Mevcut adres işlem boyunca açık kalacak; doğrulama başarısız olursa yeni DNS ve rota değişiklikleri geri alınacak.`,
       type: 'confirm',
       confirmText: 'Değiştir',
       cancelText: 'Vazgeç',
@@ -316,9 +319,12 @@ const ApplicationManager = ({ target }) => {
     if (!selectedApplication || !operation || !domainStatus.rollbackConfirmation) return;
     const applicationId = selectedApplication.id;
     const previousAddress = operation.previousDomain ? `https://${operation.previousDomain}` : 'önceki erişim adresi';
+    const dnsRollback = operation.dnsAutomation && operation.dnsAutomation.mutationRequired
+      ? ' Bu işlemde değiştirilen Cloudflare DNS kayıtları da önceki durumuna getirilecek.'
+      : '';
     showDialog({
       title: 'Önceki Adrese Dön',
-      message: `Erişim linki yeniden ${previousAddress} olacak. Sonradan eklenen ${operation.primaryDomain} rotası güvenle kaldırılacak.`,
+      message: `Erişim linki yeniden ${previousAddress} olacak. Sonradan eklenen ${operation.primaryDomain} rotası güvenle kaldırılacak.${dnsRollback}`,
       type: 'confirm',
       confirmText: 'Geri Dön',
       cancelText: 'Vazgeç',
@@ -446,7 +452,9 @@ const ApplicationManager = ({ target }) => {
               ) : (
                 <>
                   <div style={{ marginBottom: '10px', color: '#888', fontSize: '13px', lineHeight: 1.5 }}>
-                    Yeni HTTPS linkini yazın. Önce domain sağlayıcınızda A kaydını bu sunucunun public IPv4 adresine yönlendirin; yalnız sunucuda IPv6 kullanıyorsanız AAAA kaydı da ekleyin. FoxOS DNS hesabınızı değiştirmez. Kontrol etmek çalışan uygulamayı değiştirmez.
+                    {domainStatus && domainStatus.dnsAutomation && domainStatus.dnsAutomation.connected
+                      ? 'Yeni HTTPS linkini yazın. Cloudflare bağlantısı bu domaini kapsıyorsa gerekli A kaydı onaylanan geçiş sırasında otomatik ayarlanır; bu hostname için AAAA kaydı varsa güvenle geri alınabilir biçimde kaldırılır. Kontrol etmek DNS’i veya çalışan uygulamayı değiştirmez.'
+                      : 'Yeni HTTPS linkini yazın. DNS’i otomatik yönetmek için Ayarlar > Bağlantılar bölümünden Cloudflare bağlayabilirsiniz. Bağlantı kullanmayacaksanız A kaydını sunucunun public IPv4 adresine yönlendirin. Kontrol etmek çalışan uygulamayı değiştirmez.'}
                   </div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center' }}>
                     <input
@@ -472,7 +480,11 @@ const ApplicationManager = ({ target }) => {
 
                   {domainPlan && (
                     <div style={{ marginTop: '12px', padding: '10px 12px', borderRadius: '8px', background: 'rgba(39,201,63,0.12)', border: '1px solid rgba(39,201,63,0.35)', color: '#75da85', fontSize: '13px', lineHeight: 1.5 }}>
-                      <div>https://{domainPlan.domain} kullanılabilir ve genel DNS üzerinde çözümleniyor.</div>
+                      <div>
+                        {domainPlan.dnsAutomation && domainPlan.dnsAutomation.mutationRequired
+                          ? `https://${domainPlan.domain} kullanılabilir. Cloudflare A kaydı ${domainPlan.dnsAutomation.publicIpv4} adresine otomatik ayarlanacak${domainPlan.dnsAutomation.removesIpv6 ? `; ${domainPlan.dnsAutomation.removesIpv6} AAAA kaydı işlem sırasında kaldırılacak` : ''}.`
+                          : `https://${domainPlan.domain} kullanılabilir ve genel DNS üzerinde çözümleniyor.`}
+                      </div>
                       <div style={{ marginTop: '10px' }}>
                         <button type="button" onClick={confirmDomainChange} disabled={domainApplying} style={{ background: '#0ea5e9', color: '#fff', border: 'none', padding: '9px 14px', borderRadius: '8px', cursor: domainApplying ? 'wait' : 'pointer', opacity: domainApplying ? 0.5 : 1, display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px', fontWeight: 'bold' }}>
                           {domainApplying ? <Loader2 size={15} className="spin" /> : <Save size={15} />} Bu Adrese Geç

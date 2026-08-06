@@ -387,8 +387,20 @@ target blocks only adoption/migration operations that require restore proof.
   yönetiliyor** or **Mevcut kurulumundan çalışıyor** so discovery is not
   mistaken for an application failure. DNS/check feedback remains beside the
   **Kontrol Et** action instead of appearing outside the visible settings
-  section; unresolved DNS explicitly asks for an IPv4 `A` record and mentions
-  `AAAA` only for servers that publish IPv6.
+  section; unresolved DNS offers the optional **Ayarlar > Bağlantılar** path or
+  an exact manual IPv4 `A` record instead of making the user diagnose `AAAA`.
+- [x] Add the provider-neutral **Bağlantılar** section with Cloudflare as its
+  first optional adapter. A restricted `Zone Read` + `DNS Edit` token is
+  encrypted with the server-local master key and never returned through the API.
+  Token/zone discovery and public IPv4 detection happen only when the operator
+  configures or verifies the connection; clean install and ordinary host
+  management make no Cloudflare call. Erişim Linki planning remains read-only.
+  The separately confirmed transaction rechecks DNS drift, creates or updates
+  one exact DNS-only `A` record, removes exact-hostname `AAAA` records, proves
+  public DNS/TLS/route/application health and restores the prior DNS snapshot on
+  failure or explicit rollback. CNAME conflicts and ambiguous A records fail
+  closed. The adapter requires neither Cloudflare proxying nor a paid plan and
+  does not make Cloudflare the owner of application or route state.
 - [ ] Add reviewed environment/secret editing, logs, health history, resource
   limits, deployment/update and backup/restore controls from the same canonical
   application record as their safety contracts become complete.

@@ -43,6 +43,10 @@ const { createProductionStatelessMigrationAdapter } = require('./productionState
 const { createTraefikCertificateImporter } = require('./traefikCertificateImporter');
 const { createUiApprovalManager } = require('./uiApprovalManager');
 const { createBackupManager } = require('./backupManager');
+const {
+  CloudflareConnectionError,
+  createCloudflareConnectionManager
+} = require('./cloudflareConnectionManager');
 const { createDockerClient } = require('./dockerClient');
 const { createEncryptionStore } = require('./encryptionStore');
 const { createRouteManager } = require('./routeManager');
@@ -494,6 +498,10 @@ const backupManager = createBackupManager({
   dataRoot: DATA_ROOT,
   encryptionStore
 });
+const cloudflareConnectionManager = createCloudflareConnectionManager({
+  dataRoot: DATA_ROOT,
+  encryptionStore
+});
 const adoptionManager = createAdoptionManager({
   dataRoot: DATA_ROOT,
   dockerRequest,
@@ -537,7 +545,8 @@ const applicationDomainManager = createApplicationDomainManager({
   getApplicationInventory,
   dockerRequest,
   routingNetwork: process.env.FOXOS_ROUTE_NETWORK || 'foxos-routing',
-  panelBaseUrl: process.env.FOXOS_ROUTE_BASE_URL || null
+  panelBaseUrl: process.env.FOXOS_ROUTE_BASE_URL || null,
+  dnsAutomation: cloudflareConnectionManager
 });
 const productionStatelessMigrationAdapter = createProductionStatelessMigrationAdapter({
   dataRoot: DATA_ROOT,
@@ -696,6 +705,17 @@ function sendApplicationDomainError(res, error, action) {
       ? 'Alan adı işlemi tamamlanamadı'
       : error.message,
     code: error.code || 'application-domain-error'
+  });
+}
+
+function sendConnectionError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof CloudflareConnectionError)
+      ? 'Bağlantı işlemi tamamlanamadı'
+      : error.message,
+    code: error.code || 'connection-error'
   });
 }
 
@@ -1936,6 +1956,40 @@ app.post('/api/adoptions/:operationId/rollback', async (req, res) => {
     res.json({ operation });
   } catch (error) {
     sendAdoptionError(res, error, 'Could not roll back adoption operation');
+  }
+});
+
+app.get('/api/connections', (req, res) => {
+  try {
+    res.json({ connections: [cloudflareConnectionManager.status()] });
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not read provider connections');
+  }
+});
+
+app.put('/api/connections/cloudflare', async (req, res) => {
+  try {
+    const connection = await cloudflareConnectionManager.configure(req.body || {});
+    res.json({ connection });
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not configure Cloudflare connection');
+  }
+});
+
+app.post('/api/connections/cloudflare/verify', async (req, res) => {
+  try {
+    const connection = await cloudflareConnectionManager.verifyStored();
+    res.json({ connection });
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not verify Cloudflare connection');
+  }
+});
+
+app.delete('/api/connections/cloudflare', (req, res) => {
+  try {
+    res.json(cloudflareConnectionManager.disconnect(req.body && req.body.confirmation));
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not disconnect Cloudflare');
   }
 });
 

@@ -62,6 +62,12 @@
 - External registrars, certificate authorities, Git hosts, registries and DNS
   APIs are replaceable adapters. FoxOS must keep the desired state and recovery
   information locally so changing an adapter does not erase resource truth.
+- The authenticated **Bağlantılar** section is the explicit configuration
+  boundary for optional external accounts. Cloudflare is currently the first DNS
+  adapter: keep token storage encrypted and owner-only, never return the token,
+  keep access-link planning read-only, require the separate confirmed apply,
+  recheck DNS drift and preserve exact rollback. It must not become a clean-
+  install, startup, paid-plan, proxy or application-authority dependency.
 - A clean public installation must require no external provider account, domain,
   API token, object store, payment method or existing panel. Base startup and
   ordinary host management must work with recovery explicitly unconfigured.

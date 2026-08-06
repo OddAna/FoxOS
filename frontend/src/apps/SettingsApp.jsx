@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { Settings, Globe, Monitor, Shield, User, Bell, Server, Box } from 'lucide-react';
+import { Settings, Globe, Monitor, Shield, User, Bell, Server, Box, Link2 } from 'lucide-react';
 import MigrationSettings from './MigrationSettings';
 import ApplicationManager from './ApplicationManager';
+import ConnectionsSettings from './ConnectionsSettings';
 
 const SettingsApp = ({ target }) => {
   const [activeTab, setActiveTab] = useState(target && target.tab || 'general');
@@ -21,6 +22,7 @@ const SettingsApp = ({ target }) => {
     { id: 'security', icon: <Shield size={18} />, label: 'Güvenlik' },
     { id: 'notifications', icon: <Bell size={18} />, label: 'Bildirimler' },
     { id: 'users', icon: <User size={18} />, label: 'Kullanıcılar' },
+    { id: 'connections', icon: <Link2 size={18} />, label: 'Bağlantılar' },
     { id: 'applications', icon: <Box size={18} />, label: 'Uygulama Yöneticisi' },
     { id: 'migration', icon: <Server size={18} />, label: 'Sunucu Geçişi' },
   ];
@@ -78,9 +80,10 @@ const SettingsApp = ({ target }) => {
         )}
 
         {activeTab === 'migration' && <MigrationSettings />}
+        {activeTab === 'connections' && <ConnectionsSettings />}
         {activeTab === 'applications' && <ApplicationManager target={applicationTarget} />}
 
-        {activeTab !== 'general' && activeTab !== 'migration' && activeTab !== 'applications' && (
+        {activeTab !== 'general' && activeTab !== 'migration' && activeTab !== 'connections' && activeTab !== 'applications' && (
           <p style={{ color: '#888', fontSize: '14px' }}>Bu bölüm yakında eklenecek.</p>
         )}
       </div>
