@@ -95,6 +95,14 @@ function applicationRuntimeIdentity(resource, routes = []) {
   return { appId: slug, displayName, name, alias: name };
 }
 
+function dependencyBridgeRuntimeName(application, dependency, ordinal = 1) {
+  const protocol = String(dependency && dependency.protocol || 'service').replace(/:$/, '');
+  const kind = applicationSlug(protocol === 'postgresql' ? 'postgres' : protocol) || 'service';
+  const suffix = Number.isInteger(ordinal) && ordinal > 1 ? '-' + ordinal : '';
+  const slug = applicationSlug(application.appId + '-' + kind + suffix);
+  return 'foxos-bridge-' + slug;
+}
+
 function ensureDirectory(directory) {
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   fs.chmodSync(directory, 0o700);
@@ -574,11 +582,10 @@ function createProductionStatelessMigrationAdapter({
     await dockerRequest('DELETE', '/containers/' + containerId + '?v=1&force=0');
   }
 
-  async function createDependencyBridge(operationId, dependency, agentImageId) {
+  async function createDependencyBridge(operationId, dependency, agentImageId, application, ordinal) {
     const bridgeAlias = 'foxos-dep-' + operationId.slice(-12) + '-' + crypto.createHash('sha256')
       .update(dependency.hostname + ':' + dependency.port).digest('hex').slice(0, 8);
-    const name = 'foxos-dependency-' + operationId.slice(-12) + '-' + crypto.createHash('sha256')
-      .update(dependency.hostname + ':' + dependency.port).digest('hex').slice(0, 8);
+    const name = dependencyBridgeRuntimeName(application, dependency, ordinal);
     const created = await dockerRequest('POST', '/containers/create?name=' + encodeURIComponent(name), {
       Image: agentImageId,
       Entrypoint: ['node', '/app/tcpBridge.js'],
@@ -590,6 +597,8 @@ function createProductionStatelessMigrationAdapter({
       ],
       Labels: {
         'com.foxos.managed': 'true',
+        'com.foxos.app.id': application.appId,
+        'com.foxos.app.name': application.displayName,
         'com.foxos.temporary': 'stateless-dependency-bridge',
         'com.foxos.stateless-migration.id': operationId
       },
@@ -662,8 +671,14 @@ function createProductionStatelessMigrationAdapter({
     const createdBridges = [];
     let candidateId = null;
     try {
+      const application = applicationRuntimeIdentity(resource, plan.executionContract.routes);
+      const dependencyKindCounts = new Map();
       for (const dependency of adapterState.dependencies) {
-        const bridge = await createDependencyBridge(operationId, dependency, agent.Image);
+        const dependencyProtocol = String(dependency.protocol || 'service').replace(/:$/, '');
+        const dependencyKind = dependencyProtocol === 'postgresql' ? 'postgres' : dependencyProtocol;
+        const ordinal = (dependencyKindCounts.get(dependencyKind) || 0) + 1;
+        dependencyKindCounts.set(dependencyKind, ordinal);
+        const bridge = await createDependencyBridge(operationId, dependency, agent.Image, application, ordinal);
         dependency.bridgeContainerId = bridge.containerId;
         dependency.bridgeAlias = bridge.bridgeAlias;
         createdBridges.push(dependency.bridgeContainerId);
@@ -703,7 +718,6 @@ function createProductionStatelessMigrationAdapter({
           'candidate-startup-contract-unsupported'
         );
       }
-      const application = applicationRuntimeIdentity(resource, plan.executionContract.routes);
       const { alias, name } = application;
       const exposedPorts = Object.fromEntries(contract.ingressPorts.map((port) => [port + '/tcp', {}]));
       const candidateEnvironment = environmentForStartup(
@@ -1273,6 +1287,7 @@ module.exports = {
   createProductionStatelessMigrationAdapter,
   capabilityProfileForStartup,
   dependencyBridgeHealthcheck,
+  dependencyBridgeRuntimeName,
   dependencyFromValue,
   environmentForStartup,
   immutableImageFallbackAllowed,

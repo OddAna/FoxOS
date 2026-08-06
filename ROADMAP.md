@@ -257,7 +257,8 @@ target blocks only adoption/migration operations that require restore proof.
 - [x] Replace opaque `foxos-stateless-<operation>` production names with
   provider-neutral `foxos-app-<domain-or-app>` identities. Prefer reviewed
   public domains, fall back to a clear service name for temporary previews, and
-  retain migration identifiers only as internal evidence.
+  retain migration identifiers only as internal evidence. Supporting bridges
+  follow `foxos-bridge-<app>-<service>` for the same reason.
 - [ ] Expand the implemented disposable dry-run, conflict detection, verified
   cutover and reversible rollback to real application classes one safety gate at
   a time.

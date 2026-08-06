@@ -9,6 +9,7 @@ const {
   capabilityProfileForStartup,
   createProductionStatelessMigrationAdapter,
   dependencyBridgeHealthcheck,
+  dependencyBridgeRuntimeName,
   dependencyFromValue,
   environmentForStartup,
   immutableImageFallbackAllowed,
@@ -45,6 +46,21 @@ test('temporary preview domains fall back to the understandable application serv
     name: 'foxos-app-minilauncher-update-channel',
     alias: 'foxos-app-minilauncher-update-channel'
   });
+});
+
+test('supporting dependency bridges use the application and service type in their visible name', () => {
+  const application = applicationRuntimeIdentity({
+    name: 'defter',
+    provenance: { service: 'defter', safeLabels: {} }
+  }, [{ domain: 'defter.esenburak.com', path: '/' }]);
+  assert.equal(
+    dependencyBridgeRuntimeName(application, { protocol: 'postgres:' }),
+    'foxos-bridge-defter-esenburak-com-postgres'
+  );
+  assert.equal(
+    dependencyBridgeRuntimeName(application, { protocol: 'postgresql:' }, 2),
+    'foxos-bridge-defter-esenburak-com-postgres-2'
+  );
 });
 
 test('health routing uses the reviewed private port while Docker health remains the source gate', () => {
