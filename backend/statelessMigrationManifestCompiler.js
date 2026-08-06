@@ -306,8 +306,21 @@ function createStatelessMigrationManifestCompiler({
     const routes = normalizedRoutes(resource, blockers);
     const environment = safeEnvironment(manifest.desired && manifest.desired.environment, blockers, resource.id);
     const ingressPorts = Array.from(new Set(routes.map((route) => route.upstreamPrivatePort))).sort((left, right) => left - right);
-    const healthSelectionRequired = routes.length !== 1 || ingressPorts.length !== 1;
-    const healthPath = routes.length === 1 ? routes[0].path : null;
+    const healthTargets = Array.from(new Map(routes.map((route) => [
+      canonicalJson({ privatePort: route.upstreamPrivatePort, path: route.path }),
+      { privatePort: route.upstreamPrivatePort, path: route.path }
+    ])).values()).sort((left, right) => (
+      left.privatePort - right.privatePort || left.path.localeCompare(right.path)
+    ));
+    const healthSelectionRequired = healthTargets.length !== 1;
+    const healthTarget = healthTargets.length === 1 ? healthTargets[0] : null;
+    if (routes.length > 0 && healthSelectionRequired) {
+      blockers.push(blocker(
+        'multiple-health-targets-not-executable',
+        'health',
+        'Observed routes resolve to more than one candidate health target; automatic execution stays blocked until one reviewed target is bound to the runtime contract.'
+      ));
+    }
     const defaultedLimits = [];
     if (!constraints.memoryBytes) defaultedLimits.push('memoryBytes');
     if (!constraints.nanoCpus) defaultedLimits.push('nanoCpus');
@@ -353,8 +366,8 @@ function createStatelessMigrationManifestCompiler({
         ingressPorts,
         health: {
           protocol: 'http',
-          privatePort: ingressPorts.length === 1 ? ingressPorts[0] : null,
-          path: healthPath,
+          privatePort: healthTarget ? healthTarget.privatePort : null,
+          path: healthTarget ? healthTarget.path : null,
           acceptedStatusMinimum: 200,
           acceptedStatusMaximum: 399,
           reviewRequired: true,

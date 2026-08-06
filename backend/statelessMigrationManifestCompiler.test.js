@@ -150,15 +150,17 @@ function harness(options = {}) {
   };
 }
 
-test('generic OCI manifest compiles to a deterministic, multi-route and value-free review contract', () => {
+test('generic OCI manifest blocks ambiguous multi-target health execution', () => {
   const context = harness();
   const first = context.compile();
   const second = context.compile();
 
   assert.deepEqual(first, second);
   assert.match(first.contractId, /^smcontract_[a-f0-9]{32}$/);
-  assert.equal(first.readiness.status, 'backend-contract-ready-ui-configuration-required');
-  assert.deepEqual(first.readiness.blockers, []);
+  assert.equal(first.readiness.status, 'blocked');
+  assert.equal(first.readiness.blockers.some((entry) => (
+    entry.code === 'multiple-health-targets-not-executable' && entry.section === 'health'
+  )), true);
   assert.equal(first.routes.length, 2);
   assert.deepEqual(first.routes.map((route) => [route.domain, route.upstreamPrivatePort]), [
     ['api.example.test', 9090],
@@ -189,6 +191,26 @@ test('generic OCI manifest compiles to a deterministic, multi-route and value-fr
   assert.equal(serialized.includes('secret-value-must-not-enter-contract'), false);
   assert.equal(serialized.includes('legacy-control-plane'), false);
   assert.equal(serialized.toLowerCase().includes('cloudflare'), false);
+});
+
+test('domain aliases sharing one path and port compile to one executable health target', () => {
+  const resource = observedResource({
+    ports: [{ privatePort: 80, protocol: 'tcp', hostIp: null, hostPort: null }],
+    routes: [
+      { domain: 'example.test', path: '/', tls: true, privatePort: 80 },
+      { domain: 'www.example.test', path: '/', tls: true, privatePort: 80 }
+    ]
+  });
+  const contract = harness({ resource, manifest: applicationManifest(resource) }).compile();
+
+  assert.equal(contract.readiness.status, 'backend-contract-ready-ui-configuration-required');
+  assert.deepEqual(contract.readiness.blockers, []);
+  assert.equal(contract.routes.length, 2);
+  assert.deepEqual(contract.candidate.ingressPorts, [80]);
+  assert.equal(contract.candidate.health.privatePort, 80);
+  assert.equal(contract.candidate.health.path, '/');
+  assert.equal(contract.candidate.health.selectionRequired, false);
+  assert.equal(contract.uiReview.healthTargetSelectionRequired, false);
 });
 
 test('exact local Docker image ID compiles without inventing a registry digest', () => {
