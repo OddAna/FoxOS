@@ -426,7 +426,10 @@ function runHostCommand(command, cwd = '/') {
 }
 
 function runExactHostFile(file, args) {
-  if (!['iptables', 'ip6tables'].includes(file) || !Array.isArray(args) || args.some((entry) => (
+  if (![
+    'iptables', 'iptables-legacy', 'iptables-nft',
+    'ip6tables', 'ip6tables-legacy', 'ip6tables-nft'
+  ].includes(file) || !Array.isArray(args) || args.some((entry) => (
     typeof entry !== 'string' || entry.length > 128 || /[\r\n\0]/.test(entry)
   ))) {
     return Promise.resolve({ success: false, exitCode: 1, output: 'Host command is outside FoxOS ingress policy.\n' });

@@ -128,6 +128,43 @@ test('legacy readiness waits for a browser-trusted response before traffic autho
   fs.rmSync(dataRoot, { recursive: true, force: true });
 });
 
+test('host ingress falls back to legacy firewall binaries when nftables is incompatible', async () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-ingress-firewall-fallback-'));
+  const hostCalls = [];
+  const manager = createIngressAuthorityManager({
+    dataRoot,
+    dockerRequest: async (method, requestPath) => {
+      if (requestPath === '/networks/foxos-routing') {
+        return { Internal: true, Labels: { 'com.foxos.routing': 'true', 'com.foxos.core': 'true' } };
+      }
+      if (requestPath === '/containers/foxos-gateway/json') {
+        return { Id: 'a'.repeat(64), State: { Running: true }, Config: { Labels: { 'com.foxos.gateway': 'true' } } };
+      }
+      if (requestPath === '/containers/foxos-ingress/json') {
+        return { Id: 'b'.repeat(64), State: { Running: true }, Config: { Labels: { 'com.foxos.ingress': 'true' } } };
+      }
+      throw new Error('Unexpected Docker request: ' + method + ' ' + requestPath);
+    },
+    dockerExec: async () => ({ exitCode: 0 }),
+    hostCommand: async (binary, args) => {
+      hostCalls.push([binary, ...args]);
+      if ((binary === 'iptables' || binary === 'ip6tables') && args.includes('-L')) {
+        return { success: false, exitCode: 2, output: 'Incompatible with this kernel' };
+      }
+      if (args.includes('-C')) return { success: false, exitCode: 1, output: '' };
+      return { success: true, exitCode: 0, output: '' };
+    }
+  });
+
+  await manager.activatePublicAuthority();
+  assert.equal(manager.state().publicAuthorityActive, true);
+  assert.equal(hostCalls.some((call) => call[0] === 'iptables-legacy' && call.includes('-I')), true);
+  assert.equal(hostCalls.some((call) => call[0] === 'ip6tables-legacy' && call.includes('-I')), true);
+  assert.equal(hostCalls.some((call) => call[0] === 'iptables-nft'), false);
+  assert.equal(hostCalls.some((call) => call[0] === 'ip6tables-nft'), false);
+  fs.rmSync(dataRoot, { recursive: true, force: true });
+});
+
 test('legacy bridge overrides the agent healthcheck with its own listening ports', async () => {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-ingress-bridge-health-'));
   const proxyId = 'c'.repeat(64);
