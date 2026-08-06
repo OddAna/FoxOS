@@ -184,15 +184,19 @@ function immutableImageFallbackAllowed({ image, imageId, dependencies, runtime, 
 }
 
 function capabilityProfileForStartup({ startup, runtime, privatePort } = {}) {
-  if (!startup || startup.kind !== 'immutable-image-defaults' || !runtime || String(runtime.user || '')) {
+  if (!startup || startup.kind !== 'immutable-image-defaults' || !runtime) {
     return { name: 'capability-free', capabilities: [] };
   }
-  const capabilities = ['CHOWN', 'SETGID', 'SETUID'];
-  if (Number.isInteger(privatePort) && privatePort > 0 && privatePort < 1024) {
+  const rootBootstrap = !String(runtime.user || '');
+  const lowPort = Number.isInteger(privatePort) && privatePort > 0 && privatePort < 1024;
+  const capabilities = rootBootstrap ? ['CHOWN', 'SETGID', 'SETUID'] : [];
+  if (lowPort) {
     capabilities.push('NET_BIND_SERVICE');
   }
   return {
-    name: 'immutable-image-local-bootstrap-v1',
+    name: rootBootstrap
+      ? 'immutable-image-local-bootstrap-v1'
+      : lowPort ? 'immutable-image-low-port-v1' : 'capability-free',
     capabilities
   };
 }
