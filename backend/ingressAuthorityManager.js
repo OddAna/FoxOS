@@ -140,6 +140,26 @@ function createIngressAuthorityManager({
     return { network, gateway, ingress };
   }
 
+  async function hostIngressAddress() {
+    const agent = await dockerRequest('GET', '/containers/' + encodeURIComponent(agentContainer) + '/json');
+    const labels = agent.Config && agent.Config.Labels || {};
+    const networks = agent.NetworkSettings && agent.NetworkSettings.Networks || {};
+    const gateways = [...new Set(Object.values(networks)
+      .map((entry) => String(entry && entry.Gateway || ''))
+      .filter((gateway) => net.isIP(gateway) === 4))].sort();
+    if (
+      labels['com.foxos.core'] !== 'true' || !agent.State || agent.State.Running !== true ||
+      gateways.length === 0
+    ) {
+      throw new IngressAuthorityError(
+        'FoxOS could not resolve a direct host ingress address',
+        503,
+        'host-ingress-address-unavailable'
+      );
+    }
+    return gateways[0];
+  }
+
   async function ensureLegacyBridge({ proxyContainerId, legacyNetwork }) {
     if (!CONTAINER_ID_PATTERN.test(String(proxyContainerId || '')) || !NETWORK_NAME_PATTERN.test(String(legacyNetwork || ''))) {
       throw new IngressAuthorityError('Legacy bridge input is invalid', 400, 'invalid-legacy-bridge-input');
@@ -553,6 +573,7 @@ function createIngressAuthorityManager({
     activatePublicAuthority,
     deactivatePublicAuthorityIfUnused,
     ensureLegacyBridge,
+    hostIngressAddress,
     httpsProbe,
     inspectOwnedInfrastructure,
     paths: { root, authorityFile, routeMapFile, caddyRoutesFile },

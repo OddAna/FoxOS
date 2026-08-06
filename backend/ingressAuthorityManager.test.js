@@ -165,6 +165,30 @@ test('host ingress falls back to legacy firewall binaries when nftables is incom
   fs.rmSync(dataRoot, { recursive: true, force: true });
 });
 
+test('direct host ingress proof resolves the running FoxOS agent bridge gateway', async () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-ingress-host-address-'));
+  const manager = createIngressAuthorityManager({
+    dataRoot,
+    dockerRequest: async (method, requestPath) => {
+      assert.equal(method, 'GET');
+      assert.equal(requestPath, '/containers/foxos/json');
+      return {
+        State: { Running: true },
+        Config: { Labels: { 'com.foxos.core': 'true' } },
+        NetworkSettings: {
+          Networks: {
+            'foxos_default': { Gateway: '10.0.3.1' }
+          }
+        }
+      };
+    },
+    dockerExec: async () => ({ exitCode: 0 }),
+    hostCommand: async () => ({ success: true })
+  });
+  assert.equal(await manager.hostIngressAddress(), '10.0.3.1');
+  fs.rmSync(dataRoot, { recursive: true, force: true });
+});
+
 test('legacy bridge overrides the agent healthcheck with its own listening ports', async () => {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-ingress-bridge-health-'));
   const proxyId = 'c'.repeat(64);
