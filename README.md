@@ -210,25 +210,29 @@ to compromised root access.
   Cloudflare is the first connection in this provider-neutral section; future
   API and account connections can be added without making them part of the core
   installation.
-- Open **Ayarlar > Uygulama Yöneticisi > Erişim Linki** to check and change an
-  application's public HTTPS address. This also works for a discovered, running web
+- Open **Ayarlar > Uygulama Yöneticisi > Erişim Linkleri** to see every active
+  public HTTPS address and add another one. This also works for a discovered, running web
   application when its target container and private HTTP port are unambiguous;
   a full workload migration is not required. **Mevcut kurulumundan çalışıyor**
   is an ownership status, not an application error or an access-link lock: the
   workload is still running from its existing server configuration instead of
-  a finalized server-owned manifest. When a connected Cloudflare zone covers
-  the requested hostname, **Kontrol Et** reads the current records and prepares
-  a plan without changing DNS or the running application. Only the separately
-  confirmed **Bu Adrese Geç** transaction creates or updates the exact DNS-only
+  a finalized server-owned manifest. The page now states this as an incomplete
+  migration instead of implying that an access link changes workload ownership.
+  When a connected Cloudflare zone covers the requested hostname, clicking
+  **Ekle** performs the read-only validation first. Validation errors appear in
+  the same section without a DNS, route or runtime mutation. The confirmed add
+  transaction creates or updates the exact DNS-only
   `A` record to the detected server IPv4 and removes exact-hostname `AAAA`
   records that would send traffic elsewhere. The prior DNS records are stored
   in the operation receipt and restored if DNS, TLS, routing or health proof
   fails. A CNAME conflict, multiple A records or post-check drift stops the
   operation before an unsafe overwrite. The same transaction attaches only the
-  exact container to the internal routing network, keeps the previous address
-  live, obtains TLS through the server-owned Caddy gateway and verifies the exact
-  route internally and publicly. The successful operation can be returned to
-  the previous address from the same page, including its DNS state. Without a
+  exact container to the internal routing network, keeps every previous address
+  live, makes the added address primary, obtains TLS through the server-owned
+  Caddy gateway and verifies the exact route internally and publicly. All active
+  links remain visible with open and copy actions. The latest successful addition
+  can be returned to the previous primary address from the same page, including
+  its DNS state. Without a
   connection, users can still point an `A` record to the server manually.
   Cloudflare, a DNS API token and paid Cloudflare services remain optional.
 - Open **Terminal** to execute commands on the host.

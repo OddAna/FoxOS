@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Cloud,
   ExternalLink,
   Link2,
   Loader2,
@@ -10,6 +9,7 @@ import {
 } from 'lucide-react';
 import { apiFetch } from '../api';
 import { useDialog } from '../contexts/DialogContext';
+import cloudflareLogo from '../assets/cloudflare-logo.svg';
 
 const CARD_STYLE = {
   padding: '16px',
@@ -161,8 +161,8 @@ const ConnectionsSettings = () => {
       <section style={CARD_STYLE}>
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '16px', marginBottom: '16px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>
-            <div style={{ width: '38px', height: '38px', borderRadius: '10px', background: 'rgba(255,255,255,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-              <Cloud size={21} />
+            <div style={{ width: '88px', height: '38px', padding: '0 7px', boxSizing: 'border-box', borderRadius: '10px', background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+              <img src={cloudflareLogo} alt="Cloudflare" style={{ display: 'block', width: '74px', height: 'auto' }} />
             </div>
             <div style={{ minWidth: 0 }}>
               <h3 style={{ margin: 0, fontSize: '15px', color: '#fff' }}>Cloudflare</h3>
