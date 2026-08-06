@@ -259,7 +259,7 @@ function select(value, keys) {
 function safeCandidate(value) {
   return select(value, [
     'candidateId', 'containerId', 'networkId', 'networkName', 'revisionId',
-    'imageId', 'imageDigest', 'privatePort', 'owned', 'separateFromSource', 'sourceTouched'
+    'imageId', 'imageDigest', 'imageReference', 'privatePort', 'owned', 'separateFromSource', 'sourceTouched'
   ]);
 }
 

@@ -282,6 +282,14 @@ the user-visible application name. Controller brands are also excluded:
 supporting TCP helpers use names such as `example-com-postgres-bridge` rather
 than FoxOS/provider prefixes or operation hashes.
 
+The same rule applies to visible Docker image references. Registry-backed
+applications keep their real reference, for example `nocodb/nocodb:latest`.
+Server-local migration images use a readable reference such as
+`local/example-com:current`; raw `sha256:...` values remain internal immutable
+proof and are not used as the runtime's displayed image name. These local tags
+live in Docker itself, so the application does not need the FoxOS interface to
+remain running.
+
 ## Server-owned Resource Registry
 
 FoxOS keeps a provider-neutral, versioned observation of the server under

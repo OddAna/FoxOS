@@ -274,7 +274,8 @@ function createIngressAuthorityManager({
         lines.push(matcher ? '\thandle ' + matcher + ' {' : '\thandle {');
         lines.push('\t\theader X-FoxOS-Route "' + route.routeId + '"');
         lines.push('\t\theader X-FoxOS-Candidate "' + route.operationId + '"');
-        lines.push('\t\treverse_proxy ' + route.alias + ':' + route.privatePort);
+        lines.push('\t\theader X-FoxOS-Runtime "' + route.runtimeContainerId.slice(0, 12) + '"');
+        lines.push('\t\treverse_proxy ' + route.runtimeAddress + ':' + route.privatePort);
         lines.push('\t}');
       }
       lines.push('}');
@@ -283,14 +284,78 @@ function createIngressAuthorityManager({
     return blocks.join('\n\n') + (blocks.length ? '\n' : '');
   }
 
-  async function reloadCaddy(routes, gatewayContainerId = null) {
+  async function resolveRouteRuntime(route, preferredContainerId = null) {
+    const network = await dockerRequest('GET', '/networks/' + encodeURIComponent(routingNetwork));
+    const candidateIds = preferredContainerId
+      ? [preferredContainerId]
+      : Object.keys(network.Containers || {}).filter((containerId) => CONTAINER_ID_PATTERN.test(containerId));
+    const matches = [];
+    for (const containerId of candidateIds) {
+      if (!CONTAINER_ID_PATTERN.test(String(containerId || ''))) continue;
+      let details;
+      try {
+        details = await dockerRequest('GET', '/containers/' + containerId + '/json');
+      } catch (error) {
+        if (!preferredContainerId && /No such container/i.test(String(error.message || ''))) continue;
+        throw error;
+      }
+      const attachment = details.NetworkSettings && details.NetworkSettings.Networks &&
+        details.NetworkSettings.Networks[routingNetwork];
+      const aliases = attachment && Array.isArray(attachment.Aliases) ? attachment.Aliases : [];
+      const address = String(attachment && attachment.IPAddress || '').split('/')[0];
+      if (
+        details.State && details.State.Running === true && aliases.includes(route.alias) &&
+        net.isIP(address) === 4 && CONTAINER_ID_PATTERN.test(String(details.Id || ''))
+      ) {
+        matches.push({ containerId: details.Id, address });
+      }
+    }
+    if (matches.length !== 1) {
+      throw new IngressAuthorityError(
+        preferredContainerId
+          ? 'The selected route runtime is not running with the required Docker alias'
+          : 'The route alias does not resolve to exactly one running container',
+        503,
+        preferredContainerId ? 'route-runtime-proof-failed' : 'route-runtime-ambiguous'
+      );
+    }
+    return matches[0];
+  }
+
+  async function hydrateRouteRuntimes(routes, runtimeOverrides = {}) {
+    const hydrated = {};
+    const resolvedAliases = new Map();
+    for (const [routeId, route] of Object.entries(routes || {})) {
+      if (route.status === 'removed') {
+        hydrated[routeId] = { ...route };
+        continue;
+      }
+      const preferredContainerId = runtimeOverrides[routeId] || null;
+      const cacheKey = route.alias + ':' + (preferredContainerId || 'auto');
+      let runtime = resolvedAliases.get(cacheKey);
+      if (!runtime) {
+        runtime = await resolveRouteRuntime(route, preferredContainerId);
+        resolvedAliases.set(cacheKey, runtime);
+      }
+      hydrated[routeId] = {
+        ...route,
+        runtimeContainerId: runtime.containerId,
+        runtimeAddress: runtime.address,
+        runtimeResolvedAt: now()
+      };
+    }
+    return hydrated;
+  }
+
+  async function reloadCaddy(routes, gatewayContainerId = null, runtimeOverrides = {}) {
     let exactGatewayContainerId = gatewayContainerId;
     if (!CONTAINER_ID_PATTERN.test(String(exactGatewayContainerId || ''))) {
       const infrastructure = await inspectOwnedInfrastructure();
       exactGatewayContainerId = infrastructure.gateway.Id;
     }
+    const hydratedRoutes = await hydrateRouteRuntimes(routes, runtimeOverrides);
     ensureDirectory(caddyRuntimeRoot);
-    atomicWrite(caddyRoutesFile, renderCaddyRoutes(routes));
+    atomicWrite(caddyRoutesFile, renderCaddyRoutes(hydratedRoutes));
     const validate = await dockerExec(exactGatewayContainerId, [
       'caddy', 'validate', '--config', '/etc/caddy/Caddyfile', '--adapter', 'caddyfile'
     ], { timeoutMs: 30000 });
@@ -304,6 +369,7 @@ function createIngressAuthorityManager({
     if (reload.exitCode !== 0) {
       throw new IngressAuthorityError('FoxOS route configuration reload failed', 503, 'caddy-route-reload-failed');
     }
+    return hydratedRoutes;
   }
 
   function validateRoute(route) {
@@ -334,7 +400,7 @@ function createIngressAuthorityManager({
       current.routes[input.routeId] = { ...input, status: 'staged', stagedAt: now() };
       if (!current.domains[input.domain]) current.domains[input.domain] = 'legacy';
     }
-    await reloadCaddy(current.routes, infrastructure.gateway.Id);
+    current.routes = await reloadCaddy(current.routes, infrastructure.gateway.Id);
     persist(current);
     for (const domain of new Set(routeInputs.map((route) => route.domain))) {
       await setRuntimeMap(domain, current.domains[domain]);
@@ -461,7 +527,8 @@ function createIngressAuthorityManager({
     if (current.publicAuthorityActive !== true) {
       return { active: false, reconciled: false };
     }
-    await inspectOwnedInfrastructure();
+    const infrastructure = await inspectOwnedInfrastructure();
+    current.routes = await reloadCaddy(current.routes, infrastructure.gateway.Id);
     const ipv4Backend = await installFirewallFamily('iptables');
     let ipv6Backend;
     try {
@@ -481,6 +548,23 @@ function createIngressAuthorityManager({
     };
     persist(current);
     return { active: true, reconciled: true, ...current.firewall };
+  }
+
+  async function refreshOperationRuntime(operationId, containerId) {
+    if (!OPERATION_ID_PATTERN.test(String(operationId || '')) || !CONTAINER_ID_PATTERN.test(String(containerId || ''))) {
+      throw new IngressAuthorityError('Route runtime refresh input is invalid', 400, 'invalid-route-runtime-refresh');
+    }
+    const current = state();
+    const routes = Object.values(current.routes || {}).filter((route) => (
+      route.operationId === operationId && route.status !== 'removed'
+    ));
+    if (!routes.length) {
+      throw new IngressAuthorityError('No route belongs to the selected operation', 409, 'operation-route-not-found');
+    }
+    const overrides = Object.fromEntries(routes.map((route) => [route.routeId, containerId]));
+    current.routes = await reloadCaddy(current.routes, null, overrides);
+    persist(current);
+    return routes.map((route) => current.routes[route.routeId]);
   }
 
   async function deactivatePublicAuthorityIfUnused() {
@@ -526,7 +610,7 @@ function createIngressAuthorityManager({
         await setRuntimeMap(domain, 'legacy');
       }
     }
-    await reloadCaddy(current.routes);
+    current.routes = await reloadCaddy(current.routes);
     persist(current);
     await deactivatePublicAuthorityIfUnused();
   }
@@ -669,6 +753,7 @@ function createIngressAuthorityManager({
     paths: { root, authorityFile, routeMapFile, caddyRoutesFile },
     removeRoutes,
     reconcilePublicAuthority,
+    refreshOperationRuntime,
     stageRoutes,
     state,
     switchDomain,

@@ -13,6 +13,7 @@ const {
   dependencyFromValue,
   environmentForStartup,
   immutableImageFallbackAllowed,
+  localRuntimeImageReference,
   routeForHealth,
   sourceHealthAccepted,
   startupContractFromImageDefaults,
@@ -60,6 +61,15 @@ test('supporting dependency bridges use the application and service type in thei
   assert.equal(
     dependencyBridgeRuntimeName(application, { protocol: 'postgresql:' }, 2),
     'defter-esenburak-com-postgres-2-bridge'
+  );
+});
+
+test('managed runtimes use readable server-local image references without controller branding', () => {
+  assert.equal(localRuntimeImageReference('defter.esenburak.com'), 'local/defter-esenburak-com:current');
+  assert.equal(localRuntimeImageReference('defter-esenburak-com-postgres-bridge'), 'local/defter-esenburak-com-postgres-bridge:current');
+  assert.throws(
+    () => localRuntimeImageReference('---'),
+    (error) => error.code === 'runtime-image-reference-unavailable'
   );
 });
 
@@ -333,7 +343,12 @@ test('candidate creation falls back to matching immutable image defaults with en
     if (method === 'POST' && requestPath === '/networks/foxos-egress/connect') return {};
     if (method === 'POST' && requestPath === '/containers/' + candidateId + '/start') return {};
     if (method === 'GET' && requestPath === '/containers/' + candidateId + '/json') {
-      return { Id: candidateId, Image: imageId, State: { Running: true, ExitCode: 0, OOMKilled: false } };
+      return {
+        Id: candidateId,
+        Image: imageId,
+        Config: { Image: 'local/app-example-com:current' },
+        State: { Running: true, ExitCode: 0, OOMKilled: false }
+      };
     }
     throw new Error('Unexpected Docker request: ' + method + ' ' + requestPath);
   };
@@ -402,8 +417,10 @@ test('candidate creation falls back to matching immutable image defaults with en
   assert.equal(candidate.containerName, 'app-example-com');
   assert.equal(candidate.applicationName, 'app.example.com');
   assert.equal(createPath, '/containers/create?name=app-example-com');
+  assert.equal(createPayload.Image, 'local/app-example-com:current');
   assert.equal(createPayload.Labels['com.foxos.app.id'], 'app-example-com');
   assert.equal(createPayload.Labels['com.foxos.app.name'], 'app.example.com');
+  assert.equal(createPayload.Labels['com.foxos.image.reference'], 'local/app-example-com:current');
   assert.deepEqual(createPayload.Entrypoint, imageConfig.Entrypoint);
   assert.deepEqual(createPayload.Cmd, imageConfig.Cmd);
   assert.equal(createPayload.WorkingDir, '/app/');
@@ -417,6 +434,7 @@ test('candidate creation falls back to matching immutable image defaults with en
   ));
   assert.equal(state.candidate.startupKind, 'immutable-image-defaults');
   assert.equal(state.candidate.capabilityProfile, 'immutable-image-local-bootstrap-v1');
+  assert.equal(state.candidate.imageReference, 'local/app-example-com:current');
   fs.rmSync(dataRoot, { recursive: true, force: true });
 });
 
@@ -448,7 +466,12 @@ test('candidate creation applies the reconstructed Next standalone contract', as
     if (method === 'POST' && requestPath === '/networks/foxos-egress/connect') return {};
     if (method === 'POST' && requestPath === '/containers/' + candidateId + '/start') return {};
     if (method === 'GET' && requestPath === '/containers/' + candidateId + '/json') {
-      return { Id: candidateId, Image: imageId, State: { Running: true, ExitCode: 0, OOMKilled: false } };
+      return {
+        Id: candidateId,
+        Image: imageId,
+        Config: { Image: 'local/next-example-com:current' },
+        State: { Running: true, ExitCode: 0, OOMKilled: false }
+      };
     }
     throw new Error('Unexpected Docker request: ' + method + ' ' + requestPath);
   };
