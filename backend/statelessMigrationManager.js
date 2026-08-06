@@ -55,7 +55,7 @@ class StatelessMigrationError extends Error {
 function transactionFailure(error) {
   if (error instanceof StatelessMigrationError) return error;
   if (
-    error && error.name === 'ProductionStatelessMigrationError' &&
+    error && ['ProductionStatelessMigrationError', 'IngressAuthorityError'].includes(error.name) &&
     /^[a-z0-9][a-z0-9-]{2,80}$/.test(String(error.code || '')) &&
     typeof error.message === 'string' && error.message.length >= 1 && error.message.length <= 240 &&
     !/[\r\n\0]/.test(error.message)

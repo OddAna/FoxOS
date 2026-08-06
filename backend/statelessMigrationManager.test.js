@@ -441,6 +441,34 @@ test('bounded production adapter failures remain actionable in the operation rec
   fs.rmSync(root, { recursive: true, force: true });
 });
 
+test('bounded ingress authority failures remain actionable in the operation record', async () => {
+  const ingressFailure = new Error('FoxOS route configuration reload failed');
+  ingressFailure.name = 'IngressAuthorityError';
+  ingressFailure.statusCode = 503;
+  ingressFailure.code = 'caddy-route-reload-failed';
+  const adapter = readyAdapter({
+    stageRoute: async () => { throw ingressFailure; }
+  });
+  const { manager, root } = harness({ adapter });
+  const plan = prepare(manager);
+  await assert.rejects(
+    manager.execute(plan.planId, 'approval-secret-value'),
+    (error) => (
+      error.code === 'caddy-route-reload-failed' &&
+      error.message === ingressFailure.message &&
+      /^smop_[a-f0-9]{32}$/.test(error.operationId)
+    )
+  );
+  const operation = manager.status().operations[0];
+  assert.equal(operation.status, 'failed-before-switch-cleaned');
+  assert.deepEqual(operation.error, {
+    code: 'caddy-route-reload-failed',
+    message: ingressFailure.message
+  });
+  assert.deepEqual(adapter.events.slice(-2), ['stageRoute', 'cleanupCandidate']);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
 test('any unavailable traffic sample triggers verified automatic rollback and cleanup', async () => {
   const adapter = readyAdapter({
     verifyTraffic: async () => ({
