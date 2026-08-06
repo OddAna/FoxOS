@@ -240,6 +240,55 @@ test('exact local Docker image ID compiles without inventing a registry digest',
   assert.equal(contract.source.providerRequiredAtRuntime, false);
 });
 
+test('an invalid or unbound source archive cannot poison the exact observed local image fallback', () => {
+  const resource = observedResource({
+    ports: [{ privatePort: 80, protocol: 'tcp', hostIp: null, hostPort: null }],
+    routes: [{ domain: 'app.example.test', path: '/', tls: true, privatePort: 80 }]
+  });
+  const manifest = applicationManifest(resource);
+  manifest.desired.source = null;
+  manifest.gates.blockers.push({
+    code: 'foxos-source-archive-invalid',
+    section: 'source',
+    message: 'The source archive cannot be used as runtime authority.'
+  });
+
+  const contract = harness({ resource, manifest }).compile();
+
+  assert.equal(contract.readiness.status, 'backend-contract-ready-ui-configuration-required');
+  assert.deepEqual(contract.readiness.blockers, []);
+  assert.equal(contract.source.type, 'docker-image-id');
+  assert.equal(contract.source.imageId, IMAGE_ID);
+  assert.equal(contract.source.localDockerAuthority, true);
+  assert.equal(contract.source.manifestSourceType, null);
+  assert.equal(contract.source.fallbackReason, 'unbound-or-invalid-source-archive');
+  assert.equal(contract.candidate.imageId, IMAGE_ID);
+  assert.equal(contract.guarantees.exactLocalImageFallback, true);
+});
+
+test('the exact image fallback never suppresses unrelated source evidence blockers', () => {
+  const resource = observedResource({
+    ports: [{ privatePort: 80, protocol: 'tcp', hostIp: null, hostPort: null }],
+    routes: [{ domain: 'app.example.test', path: '/', tls: true, privatePort: 80 }]
+  });
+  const manifest = applicationManifest(resource);
+  manifest.desired.source = null;
+  manifest.gates.blockers.push(
+    { code: 'foxos-source-archive-invalid', section: 'source', message: 'Archive invalid.' },
+    { code: 'source-policy-unsupported', section: 'source', message: 'Policy unsupported.' }
+  );
+
+  const contract = harness({ resource, manifest }).compile();
+
+  assert.equal(contract.guarantees.exactLocalImageFallback, true);
+  assert.equal(contract.readiness.blockers.some((entry) => (
+    entry.code === 'manifest-blocker:source-policy-unsupported'
+  )), true);
+  assert.equal(contract.readiness.blockers.some((entry) => (
+    entry.code === 'manifest-blocker:foxos-source-archive-invalid'
+  )), false);
+});
+
 test('snapshot and manifest drift fail before a contract can be persisted or executed', () => {
   const current = harness();
   current.serverPlan.sourceSnapshotId = 'snap_' + 'c'.repeat(32);
@@ -263,10 +312,18 @@ test('unsupported source, persistence, dependency, route and runtime evidence re
   const cases = [
     {
       expected: 'immutable-oci-runtime-binding-missing',
-      setup: (resource) => ({
-        resource,
-        manifest: applicationManifest(resource, { desired: { source: { type: 'foxos-encrypted-source-archive-revision' } } })
-      })
+      setup: (resource) => {
+        const withoutExactImage = {
+          ...resource,
+          runtime: { ...resource.runtime, imageId: null }
+        };
+        return {
+          resource: withoutExactImage,
+          manifest: applicationManifest(withoutExactImage, {
+            desired: { source: { type: 'foxos-encrypted-source-archive-revision' } }
+          })
+        };
+      }
     },
     {
       expected: 'writable-persistence-not-stateless',

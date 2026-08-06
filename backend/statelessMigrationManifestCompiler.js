@@ -27,6 +27,11 @@ const TRANSACTION_PROVEN_MANIFEST_BLOCKERS = new Set([
   'runtime-resource-limits-missing'
 ]);
 
+const LOCAL_IMAGE_REPLACED_MANIFEST_BLOCKERS = new Set([
+  'foxos-source-archive-invalid',
+  'source-runtime-binding-missing'
+]);
+
 class StatelessMigrationManifestError extends Error {
   constructor(message, statusCode = 409, code = 'stateless-manifest-contract-error') {
     super(message);
@@ -240,8 +245,28 @@ function createStatelessMigrationManifestCompiler({
         'Only a running, fully inspected, provider-owned stateless application can compile this contract.'
       ));
     }
+    const source = manifest.desired && manifest.desired.source || null;
+    const manifestBlockerCodes = new Set((manifest.gates && manifest.gates.blockers || [])
+      .map((entry) => entry.code));
+    const exactLocalImageFallback = Boolean(
+      IMAGE_ID_PATTERN.test(String(resource.runtime && resource.runtime.imageId || '')) &&
+      [...manifestBlockerCodes].some((code) => LOCAL_IMAGE_REPLACED_MANIFEST_BLOCKERS.has(code)) &&
+      (!source || source.type === 'foxos-encrypted-source-archive-revision')
+    );
+    const executionSource = exactLocalImageFallback ? {
+      type: 'docker-image-id',
+      requestedReference: resource.runtime.image || null,
+      immutableReference: null,
+      imageId: resource.runtime.imageId,
+      contentAddressed: true,
+      localDockerAuthority: true,
+      providerRequiredAtRuntime: false
+    } : source;
     for (const entry of manifest.gates && manifest.gates.blockers || []) {
-      if (!TRANSACTION_PROVEN_MANIFEST_BLOCKERS.has(entry.code)) {
+      if (
+        !TRANSACTION_PROVEN_MANIFEST_BLOCKERS.has(entry.code) &&
+        !(exactLocalImageFallback && LOCAL_IMAGE_REPLACED_MANIFEST_BLOCKERS.has(entry.code))
+      ) {
         blockers.push(blocker(
           'manifest-blocker:' + entry.code,
           entry.section || 'manifest',
@@ -251,19 +276,18 @@ function createStatelessMigrationManifestCompiler({
       }
     }
 
-    const source = manifest.desired && manifest.desired.source || null;
     const immutableOciSource = Boolean(
-      source && source.type === 'oci-image' &&
-      IMMUTABLE_IMAGE_PATTERN.test(String(source.immutableReference || ''))
+      executionSource && executionSource.type === 'oci-image' &&
+      IMMUTABLE_IMAGE_PATTERN.test(String(executionSource.immutableReference || ''))
     );
     const localImageIdSource = Boolean(
-      source && source.type === 'docker-image-id' && source.contentAddressed === true &&
-      source.localDockerAuthority === true && source.providerRequiredAtRuntime === false
+      executionSource && executionSource.type === 'docker-image-id' && executionSource.contentAddressed === true &&
+      executionSource.localDockerAuthority === true && executionSource.providerRequiredAtRuntime === false
     );
     if (
       (!immutableOciSource && !localImageIdSource) ||
-      !IMAGE_ID_PATTERN.test(String(source && source.imageId || '')) ||
-      source.imageId !== resource.runtime.imageId
+      !IMAGE_ID_PATTERN.test(String(executionSource && executionSource.imageId || '')) ||
+      executionSource.imageId !== resource.runtime.imageId
     ) {
       blockers.push(blocker(
         'immutable-oci-runtime-binding-missing',
@@ -332,18 +356,20 @@ function createStatelessMigrationManifestCompiler({
       registrySnapshotId: snapshot.snapshotId,
       manifestRevisionId: manifest.revisionId,
       source: {
-        type: source && source.type || null,
-        immutableReference: source && source.immutableReference || null,
-        imageId: source && source.imageId || null,
+        type: executionSource && executionSource.type || null,
+        immutableReference: executionSource && executionSource.immutableReference || null,
+        imageId: executionSource && executionSource.imageId || null,
         observedContainerId: resource.runtime && resource.runtime.containerId || null,
         localDockerAuthority: Boolean(localImageIdSource),
-        providerRequiredAtRuntime: false
+        providerRequiredAtRuntime: false,
+        manifestSourceType: source && source.type || null,
+        fallbackReason: exactLocalImageFallback ? 'unbound-or-invalid-source-archive' : null
       },
       candidate: {
         engine: 'docker',
         ownership: 'foxos',
         desiredState: 'running',
-        imageId: source && source.imageId || null,
+        imageId: executionSource && executionSource.imageId || null,
         environment,
         runtime: {
           user: constraints.user || null,
@@ -398,6 +424,7 @@ function createStatelessMigrationManifestCompiler({
         providerMutated: false,
         providerDetached: false,
         providerRequiredAsRuntimeAuthority: false,
+        exactLocalImageFallback,
         secretValuesIncluded: false,
         ordinaryEnvironmentValuesIncluded: false
       }
