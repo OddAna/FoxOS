@@ -174,11 +174,10 @@ function startupContractFromImageDefaults({ sourceConfig, imageConfig } = {}) {
   };
 }
 
-function immutableImageFallbackAllowed({ image, imageId, dependencies, environmentRevision, runtime, sourceConfig } = {}) {
+function immutableImageFallbackAllowed({ image, imageId, dependencies, runtime, sourceConfig } = {}) {
   return Boolean(
     image && image.Id === imageId &&
     Array.isArray(dependencies) && dependencies.length === 0 &&
-    environmentRevision && (environmentRevision.secretRefs || []).length === 0 &&
     runtime && runtime.writableMounts === 0 &&
     String(runtime.user || '') === String(sourceConfig && sourceConfig.User || '')
   );
@@ -570,7 +569,6 @@ function createProductionStatelessMigrationAdapter({
           image,
           imageId: resource.runtime.imageId,
           dependencies: adapterState.dependencies,
-          environmentRevision: environment.revision,
           runtime: contract.runtime,
           sourceConfig: source.Config
         });

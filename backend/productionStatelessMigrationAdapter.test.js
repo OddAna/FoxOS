@@ -126,22 +126,17 @@ test('image-default startup fallback rejects provider overrides and unsafe argum
   }), null);
 });
 
-test('immutable image fallback stays closed for dependencies, secrets, mounts and runtime-user drift', () => {
+test('immutable image fallback stays closed for dependencies, mounts and runtime-user drift', () => {
   const imageId = 'sha256:' + '1'.repeat(64);
   const safe = {
     image: { Id: imageId },
     imageId,
     dependencies: [],
-    environmentRevision: { secretRefs: [] },
     runtime: { writableMounts: 0, user: null },
     sourceConfig: { User: '' }
   };
   assert.equal(immutableImageFallbackAllowed(safe), true);
   assert.equal(immutableImageFallbackAllowed({ ...safe, dependencies: [{ hostname: 'database' }] }), false);
-  assert.equal(immutableImageFallbackAllowed({
-    ...safe,
-    environmentRevision: { secretRefs: [{ name: 'TOKEN' }] }
-  }), false);
   assert.equal(immutableImageFallbackAllowed({
     ...safe,
     runtime: { ...safe.runtime, writableMounts: 1 }
@@ -191,7 +186,7 @@ test('immutable root bootstrap receives only local identity capabilities', () =>
   });
 });
 
-test('candidate creation falls back to matching immutable image defaults without dependencies or secrets', async () => {
+test('candidate creation falls back to matching immutable image defaults with encrypted secrets', async () => {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-production-image-default-startup-'));
   const operationId = 'smop_' + 'a'.repeat(32);
   const resourceId = 'res_' + 'b'.repeat(32);
@@ -201,6 +196,12 @@ test('candidate creation falls back to matching immutable image defaults without
   const agentImageId = 'sha256:' + 'f'.repeat(64);
   const snapshotId = 'snap_' + '1'.repeat(32);
   const environmentRevision = 'env_rev_' + '2'.repeat(32);
+  const secretRef = {
+    name: 'APP_TOKEN',
+    secretId: 'secret_' + '5'.repeat(32),
+    revision: 'secret_rev_' + '6'.repeat(32),
+    keyId: 'key_' + '7'.repeat(24)
+  };
   const imageConfig = {
     Entrypoint: ['/bin/bash', '-l', '-c'],
     Cmd: ['test -n "$PORT" && nginx -c /assets/nginx.conf'],
@@ -244,8 +245,8 @@ test('candidate creation falls back to matching immutable image defaults without
       })
     },
     secretManager: {
-      getEnvironmentRevision: () => ({ revision: environmentRevision, secretRefs: [] }),
-      resolveEnvironment: () => ['PORT=3000']
+      getEnvironmentRevision: () => ({ revision: environmentRevision, secretRefs: [secretRef] }),
+      resolveEnvironment: () => ['APP_TOKEN=resolved-at-candidate-creation', 'PORT=3000']
     },
     certificateImporter: { importDomain: async () => ({}) },
     ingressAuthority: {
@@ -295,6 +296,7 @@ test('candidate creation falls back to matching immutable image defaults without
   assert.deepEqual(createPayload.HostConfig.CapDrop, ['ALL']);
   assert.deepEqual(createPayload.HostConfig.CapAdd, ['CHOWN', 'SETGID', 'SETUID']);
   assert.deepEqual(createPayload.HostConfig.SecurityOpt, ['no-new-privileges:true']);
+  assert.deepEqual(createPayload.Env, ['APP_TOKEN=resolved-at-candidate-creation', 'PORT=3000']);
   const state = JSON.parse(fs.readFileSync(
     path.join(adapter.paths.operationsRoot, operationId + '.json'),
     'utf8'
