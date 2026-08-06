@@ -184,6 +184,20 @@ function immutableImageFallbackAllowed({ image, imageId, dependencies, environme
   );
 }
 
+function capabilityProfileForStartup({ startup, runtime, privatePort } = {}) {
+  if (!startup || startup.kind !== 'immutable-image-defaults' || !runtime || String(runtime.user || '')) {
+    return { name: 'capability-free', capabilities: [] };
+  }
+  const capabilities = ['CHOWN', 'SETGID', 'SETUID'];
+  if (Number.isInteger(privatePort) && privatePort > 0 && privatePort < 1024) {
+    capabilities.push('NET_BIND_SERVICE');
+  }
+  return {
+    name: 'immutable-image-local-bootstrap-v1',
+    capabilities
+  };
+}
+
 function environmentForStartup(entries, startup) {
   const environment = [...(entries || [])];
   if (startup && startup.kind === 'next-standalone-runtime') {
@@ -581,6 +595,11 @@ function createProductionStatelessMigrationAdapter({
         rewriteEnvironmentDependencies(environment.resolved, adapterState.dependencies),
         startup
       );
+      const capabilityProfile = capabilityProfileForStartup({
+        startup,
+        runtime: contract.runtime,
+        privatePort: contract.health.privatePort
+      });
       const created = await dockerRequest('POST', '/containers/create?name=' + encodeURIComponent(name), {
         Image: resource.runtime.imageId,
         Entrypoint: startup.entrypoint,
@@ -602,6 +621,7 @@ function createProductionStatelessMigrationAdapter({
           ReadonlyRootfs: contract.runtime.readOnlyRootFilesystem === true,
           Privileged: false,
           CapDrop: ['ALL'],
+          ...(capabilityProfile.capabilities.length ? { CapAdd: capabilityProfile.capabilities } : {}),
           SecurityOpt: ['no-new-privileges:true'],
           Memory: contract.runtime.memoryBytes,
           NanoCpus: contract.runtime.nanoCpus,
@@ -638,6 +658,7 @@ function createProductionStatelessMigrationAdapter({
         imageId: candidate.Image,
         privatePort: contract.health.privatePort,
         startupKind: startup.kind,
+        capabilityProfile: capabilityProfile.name,
         createdAt: now()
       };
       persist(adapterState);
@@ -1018,6 +1039,7 @@ module.exports = {
   PRODUCTION_STATELESS_ADAPTER_SCHEMA_VERSION,
   ProductionStatelessMigrationError,
   createProductionStatelessMigrationAdapter,
+  capabilityProfileForStartup,
   dependencyFromValue,
   environmentForStartup,
   immutableImageFallbackAllowed,
