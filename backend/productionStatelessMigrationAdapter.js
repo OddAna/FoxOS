@@ -91,7 +91,7 @@ function applicationRuntimeIdentity(resource, routes = []) {
       'application-runtime-name-unavailable'
     );
   }
-  const name = 'foxos-app-' + slug;
+  const name = slug;
   return { appId: slug, displayName, name, alias: name };
 }
 
@@ -100,7 +100,7 @@ function dependencyBridgeRuntimeName(application, dependency, ordinal = 1) {
   const kind = applicationSlug(protocol === 'postgresql' ? 'postgres' : protocol) || 'service';
   const suffix = Number.isInteger(ordinal) && ordinal > 1 ? '-' + ordinal : '';
   const slug = applicationSlug(application.appId + '-' + kind + suffix);
-  return 'foxos-bridge-' + slug;
+  return slug + '-bridge';
 }
 
 function ensureDirectory(directory) {

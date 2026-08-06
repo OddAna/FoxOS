@@ -31,8 +31,8 @@ test('application runtime names use the clearest public route instead of migrati
   ]), {
     appId: 'firasdaas-com',
     displayName: 'firasdaas.com',
-    name: 'foxos-app-firasdaas-com',
-    alias: 'foxos-app-firasdaas-com'
+    name: 'firasdaas-com',
+    alias: 'firasdaas-com'
   });
 });
 
@@ -43,8 +43,8 @@ test('temporary preview domains fall back to the understandable application serv
   }, [{ domain: 'preview.46.224.223.157.sslip.io', path: '/' }]), {
     appId: 'minilauncher-update-channel',
     displayName: 'minilauncher-update-channel',
-    name: 'foxos-app-minilauncher-update-channel',
-    alias: 'foxos-app-minilauncher-update-channel'
+    name: 'minilauncher-update-channel',
+    alias: 'minilauncher-update-channel'
   });
 });
 
@@ -55,11 +55,11 @@ test('supporting dependency bridges use the application and service type in thei
   }, [{ domain: 'defter.esenburak.com', path: '/' }]);
   assert.equal(
     dependencyBridgeRuntimeName(application, { protocol: 'postgres:' }),
-    'foxos-bridge-defter-esenburak-com-postgres'
+    'defter-esenburak-com-postgres-bridge'
   );
   assert.equal(
     dependencyBridgeRuntimeName(application, { protocol: 'postgresql:' }, 2),
-    'foxos-bridge-defter-esenburak-com-postgres-2'
+    'defter-esenburak-com-postgres-2-bridge'
   );
 });
 
@@ -399,9 +399,9 @@ test('candidate creation falls back to matching immutable image defaults with en
     }
   });
   assert.equal(candidate.owned, true);
-  assert.equal(candidate.containerName, 'foxos-app-app-example-com');
+  assert.equal(candidate.containerName, 'app-example-com');
   assert.equal(candidate.applicationName, 'app.example.com');
-  assert.equal(createPath, '/containers/create?name=foxos-app-app-example-com');
+  assert.equal(createPath, '/containers/create?name=app-example-com');
   assert.equal(createPayload.Labels['com.foxos.app.id'], 'app-example-com');
   assert.equal(createPayload.Labels['com.foxos.app.name'], 'app.example.com');
   assert.deepEqual(createPayload.Entrypoint, imageConfig.Entrypoint);

@@ -268,7 +268,7 @@ function createMigrationRunManager({
         if (managedResource) {
           run.blockers = [{
             code: 'resource-already-foxos-managed',
-            message: 'Kaynak zaten FoxOS yönetiminde; yeniden geçiş çalıştırılmadı.',
+            message: 'Kaynak zaten sunucu yönetiminde; yeniden geçiş çalıştırılmadı.',
             section: 'ownership',
             severity: 'blocking',
             source: 'migration-run'
@@ -471,7 +471,7 @@ function createMigrationRunManager({
         : null;
       if (management && management.owner === 'foxos') {
         throw new MigrationRunError(
-          'Kaynak zaten FoxOS yönetiminde; yeniden geçiş başlatılamaz.',
+          'Kaynak zaten sunucu yönetiminde; yeniden geçiş başlatılamaz.',
           409,
           'resource-already-foxos-managed'
         );

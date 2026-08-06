@@ -350,7 +350,7 @@ const AppStoreApp = () => {
 
   const managementSource = settingsApp
     ? settingsApp.managedByFoxOS
-      ? 'FoxOS'
+      ? 'Sunucu'
       : settingsApp.installationSource === 'coolify' ? 'Coolify' : 'Docker'
     : null;
 

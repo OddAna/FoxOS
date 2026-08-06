@@ -115,7 +115,7 @@ const DISCOVERY_EXCLUDED_NAMES = new Set([
 ]);
 
 function containerName(appId) {
-  return 'foxos-app-' + appId;
+  return appId;
 }
 
 function validateInstallOptions(catalogApp, input = {}) {
@@ -367,7 +367,7 @@ function discoveredAppStates(containers, catalogApps) {
         publisher: profile ? profile.publisher : labels['coolify.projectName'] || 'Docker',
         category: profile ? profile.category : 'Web Apps',
         summary: profile ? profile.description : 'Bu sunucuda önceden kurulmuş uygulama.',
-        description: profile ? profile.description : 'FoxOS bu uygulamayı mevcut Docker kurulumundan otomatik olarak keşfetti.',
+        description: profile ? profile.description : 'Bu uygulama sunucunun mevcut Docker kurulumunda otomatik olarak keşfedildi.',
         image: container.Image,
         logoUrl: profile && profile.logoUrl
           ? profile.logoUrl
