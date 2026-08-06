@@ -242,7 +242,11 @@ target blocks only adoption/migration operations that require restore proof.
   bounded 30-second readiness window that accepts the reviewed `200-399`
   response range, persists value-free attempt/exit/OOM diagnostics and retains
   the failed transaction's exact operation ID in the parent migration run.
-- [ ] Complete the first fresh UI-authorized production stateless migration and
+- [x] Discover credential-free local HTTP targets from existing Docker health
+  checks without persisting commands or credentials; bind their private port
+  and path through source, candidate, staged-route, cutover and rollback proof
+  while leaving the public application route unchanged.
+- [x] Complete fresh UI-authorized production stateless migrations and
   record source continuity, zero unavailable samples, rollback availability and
   unchanged non-selected workloads before calling the live boundary complete.
 - [ ] Expand the implemented disposable dry-run, conflict detection, verified

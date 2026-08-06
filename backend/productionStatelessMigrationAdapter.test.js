@@ -10,10 +10,43 @@ const {
   dependencyFromValue,
   environmentForStartup,
   immutableImageFallbackAllowed,
+  routeForHealth,
+  sourceHealthAccepted,
   startupContractFromImageDefaults,
   startupContractFromObservation,
   rewriteEnvironmentDependencies
 } = require('./productionStatelessMigrationAdapter');
+
+test('health routing uses the reviewed private port while Docker health remains the source gate', () => {
+  const health = { privatePort: 8080, path: '/healthz' };
+  const routes = [
+    { routeId: 'other', upstreamPrivatePort: 9090, path: '/api' },
+    { routeId: 'health', upstreamPrivatePort: 8080, path: '/' }
+  ];
+  assert.equal(routeForHealth(routes, health).routeId, 'health');
+  assert.equal(sourceHealthAccepted({
+    State: { Health: { Status: 'healthy' } }
+  }, {
+    runtime: { health: { configured: true } }
+  }, {
+    statusCode: 404,
+    tlsValid: true
+  }), true);
+  assert.equal(sourceHealthAccepted({
+    State: { Health: { Status: 'unhealthy' } }
+  }, {
+    runtime: { health: { configured: true } }
+  }, {
+    statusCode: 200,
+    tlsValid: true
+  }), false);
+  assert.equal(sourceHealthAccepted({ State: {} }, {
+    runtime: { health: { configured: false } }
+  }, {
+    statusCode: 302,
+    tlsValid: true
+  }), true);
+});
 
 test('dependency discovery accepts known URL transports without retaining credentials', () => {
   assert.deepEqual(dependencyFromValue('postgres://user:secret@database:5432/app'), {

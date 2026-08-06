@@ -639,12 +639,16 @@ const migrationRunManager = createMigrationRunManager({
   prepareStatelessReview: (plan) => {
     const routes = plan.executionContract.routes || [];
     if (!routes.length) throw new MigrationRunError('No production route is available for review', 409, 'production-route-missing');
+    const healthPort = plan.executionContract.candidate && plan.executionContract.candidate.health &&
+      plan.executionContract.candidate.health.privatePort;
+    const healthRoute = routes.find((route) => route.upstreamPrivatePort === healthPort);
+    if (!healthRoute) throw new MigrationRunError('No production route exposes the reviewed health port', 409, 'production-health-route-missing');
     return statelessMigrationReviewManager.save({
       statelessPlanId: plan.planId,
       serverPlanId: plan.serverPlanId,
       resourceId: plan.resource.resourceId,
       executionContractId: plan.executionContract.contractId,
-      healthRouteId: routes[0].routeId,
+      healthRouteId: healthRoute.routeId,
       runtimeConfirmed: true,
       routes: routes.map((route) => ({
         routeId: route.routeId,

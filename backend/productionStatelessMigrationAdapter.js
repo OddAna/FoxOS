@@ -212,6 +212,25 @@ function environmentForStartup(entries, startup) {
   return environment;
 }
 
+function routeForHealth(routes, health) {
+  const privatePort = health && health.privatePort;
+  return (routes || []).find((route) => (
+    privatePort && (route.upstreamPrivatePort === privatePort || route.privatePort === privatePort)
+  )) ||
+    (routes || [])[0] || null;
+}
+
+function sourceHealthAccepted(source, resource, publicProof) {
+  const configured = Boolean(resource && resource.runtime && resource.runtime.health && resource.runtime.health.configured);
+  if (configured) {
+    return Boolean(source && source.State && source.State.Health && source.State.Health.Status === 'healthy');
+  }
+  return Boolean(
+    publicProof && publicProof.tlsValid === true &&
+    publicProof.statusCode >= 200 && publicProof.statusCode < 400
+  );
+}
+
 function createProductionStatelessMigrationAdapter({
   dataRoot,
   dockerRequest,
@@ -391,9 +410,11 @@ function createProductionStatelessMigrationAdapter({
         'foxos-egress-unavailable'
       );
     }
+    const contractHealth = plan.executionContract.candidate.health;
+    const sourceHealthRoute = routeForHealth(plan.executionContract.routes, contractHealth);
     const sourcePublic = await ingressAuthority.httpsProbe({
-      hostname: plan.executionContract.routes[0].domain,
-      requestPath: plan.executionContract.routes[0].path
+      hostname: sourceHealthRoute.domain,
+      requestPath: contractHealth.path
     });
     const routeCollision = (snapshot.conflicts || []).some((entry) => (
       entry.severity === 'blocking' && entry.type === 'domain-route' && (entry.resourceIds || []).includes(resource.id)
@@ -410,6 +431,12 @@ function createProductionStatelessMigrationAdapter({
         continuouslyRunning: true,
         stopped: false,
         recreated: false
+      },
+      health: {
+        protocol: contractHealth.protocol,
+        privatePort: contractHealth.privatePort,
+        path: contractHealth.path,
+        source: contractHealth.source || 'observed-route'
       },
       environmentRevision: environment.revision.revision,
       proxy: {
@@ -432,7 +459,7 @@ function createProductionStatelessMigrationAdapter({
     persist(adapterState);
     return {
       evidenceFingerprint: plan.resource.evidenceFingerprint,
-      sourceHealthy: sourcePublic.tlsValid === true && sourcePublic.statusCode >= 200 && sourcePublic.statusCode < 400,
+      sourceHealthy: sourceHealthAccepted(source, resource, sourcePublic),
       sourceContinuouslyRunning: true,
       routeCollisionFree: !routeCollision,
       dependencyBridgesPlanned: dependencies.length,
@@ -847,10 +874,11 @@ function createProductionStatelessMigrationAdapter({
       proxyContainerId: adapterState.proxy.containerId,
       legacyNetwork: adapterState.proxy.legacyNetwork
     });
+    const health = plan.executionContract.candidate.health;
     for (const route of plan.executionContract.routes) {
       await ingressAuthority.verifyLegacyDomain({
         hostname: route.domain,
-        requestPath: route.path
+        requestPath: route.upstreamPrivatePort === health.privatePort ? health.path : route.path
       });
     }
     for (const route of plan.executionContract.routes) {
@@ -875,12 +903,12 @@ function createProductionStatelessMigrationAdapter({
       privatePort: route.privatePort
     }));
     persist(adapterState);
-    const primary = staged[0];
+    const primary = routeForHealth(staged, health);
     const stagedProbe = await ingressAuthority.httpsProbe({
       hostname: primary.domain,
       connectHost: 'foxos-gateway',
       port: 443,
-      requestPath: primary.path,
+      requestPath: health.path,
       expectedRouteId: primary.routeId
     });
     return {
@@ -913,7 +941,7 @@ function createProductionStatelessMigrationAdapter({
 
   async function verifyTraffic({ operationId }) {
     const adapterState = getState(operationId);
-    const primary = adapterState.routes[0];
+    const primary = routeForHealth(adapterState.routes, adapterState.health);
     const connectHost = await ingressAuthority.hostIngressAddress();
     const probes = [];
     for (let index = 0; index < 8; index += 1) {
@@ -921,7 +949,7 @@ function createProductionStatelessMigrationAdapter({
         probes.push(await ingressAuthority.httpsProbe({
           hostname: primary.domain,
           connectHost,
-          requestPath: primary.path,
+          requestPath: adapterState.health && adapterState.health.path || primary.path,
           expectedRouteId: primary.routeId
         }));
       } catch (error) {
@@ -957,7 +985,7 @@ function createProductionStatelessMigrationAdapter({
 
   async function verifyRollback({ operationId }) {
     const adapterState = getState(operationId);
-    const primary = adapterState.routes[0];
+    const primary = routeForHealth(adapterState.routes, adapterState.health);
     const connectHost = await ingressAuthority.hostIngressAddress();
     const probes = [];
     for (let index = 0; index < 5; index += 1) {
@@ -965,7 +993,7 @@ function createProductionStatelessMigrationAdapter({
         probes.push(await ingressAuthority.httpsProbe({
           hostname: primary.domain,
           connectHost,
-          requestPath: primary.path
+          requestPath: adapterState.health && adapterState.health.path || primary.path
         }));
       } catch (error) {
         probes.push({ error: error.code || 'probe-failed', tlsValid: false, statusCode: 0 });
@@ -1045,6 +1073,8 @@ module.exports = {
   dependencyFromValue,
   environmentForStartup,
   immutableImageFallbackAllowed,
+  routeForHealth,
+  sourceHealthAccepted,
   startupContractFromObservation,
   startupContractFromImageDefaults,
   rewriteEnvironmentDependencies

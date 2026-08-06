@@ -265,6 +265,48 @@ function redactRoutePath(routePath) {
   }).join('/');
 }
 
+function parseDockerHttpHealthTarget(healthcheck, observedPorts = []) {
+  const test = healthcheck && healthcheck.Test;
+  if (!Array.isArray(test) || test.length < 2 || test[0] === 'NONE') return null;
+  const command = test.slice(1).map(String).join(' ');
+  if (
+    /(?:^|\s)(?:-H|--header|-u|--user|--cookie|--proxy-user|--cert|--key)(?:\s|=)/i.test(command) ||
+    /\b(?:authorization|cookie)\b/i.test(command)
+  ) return null;
+  const candidates = test.slice(1)
+    .flatMap((entry) => String(entry).split(/\s+/))
+    .map((entry) => entry.replace(/^["']+|["']+$/g, ''))
+    .filter((entry) => /^https?:\/\//i.test(entry));
+  const targets = new Map();
+  for (const candidate of candidates) {
+    let parsed;
+    try {
+      parsed = new URL(candidate);
+    } catch {
+      continue;
+    }
+    if (
+      parsed.protocol !== 'http:' ||
+      !['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname.toLowerCase()) ||
+      parsed.username || parsed.password || parsed.search || parsed.hash ||
+      parsed.pathname.length > 256 || !/^\/[A-Za-z0-9._~%/-]*$/.test(parsed.pathname)
+    ) continue;
+    const privatePort = parsed.port ? Number.parseInt(parsed.port, 10) : 80;
+    if (
+      !Number.isInteger(privatePort) || privatePort < 1 || privatePort > 65535 ||
+      !observedPorts.some((port) => port.protocol === 'tcp' && port.privatePort === privatePort)
+    ) continue;
+    const target = {
+      protocol: 'http',
+      privatePort,
+      path: parsed.pathname || '/',
+      source: 'docker-http-healthcheck'
+    };
+    targets.set(`${target.privatePort}:${target.path}`, target);
+  }
+  return targets.size === 1 ? Array.from(targets.values())[0] : null;
+}
+
 function normalizePorts(container, details) {
   const ports = [];
   for (const port of container.Ports || []) {
@@ -449,6 +491,7 @@ function normalizeResource(container, details, resourceId, inspectionFailed) {
   const provider = providerFor(labels);
   const healthConfig = details && details.Config && details.Config.Healthcheck;
   const healthState = details && details.State && details.State.Health;
+  const httpHealthTarget = parseDockerHttpHealthTarget(healthConfig, ports);
 
   const resource = {
     schemaVersion: SCHEMA_VERSION,
@@ -475,7 +518,8 @@ function normalizeResource(container, details, resourceId, inspectionFailed) {
       restartPolicy: details && details.HostConfig && details.HostConfig.RestartPolicy && details.HostConfig.RestartPolicy.Name || 'no',
       health: {
         configured: Boolean(healthConfig && Array.isArray(healthConfig.Test) && healthConfig.Test.length),
-        status: healthState && healthState.Status || null
+        status: healthState && healthState.Status || null,
+        httpTarget: httpHealthTarget
       },
       constraints: {
         user: details && details.Config && details.Config.User || null,
@@ -874,6 +918,7 @@ module.exports = {
   createResourceRegistry,
   detectConflicts,
   identityAliases,
+  parseDockerHttpHealthTarget,
   parseTraefikRoutes,
   readFoxosMigrationManagement,
   resolveResourceId,
