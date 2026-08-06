@@ -203,6 +203,15 @@ to compromised root access.
 - Use an installed application's three-dot menu to open, start, stop, restart,
   or manage that exact instance. **Ayarlar** opens as a full page inside the
   same Store window; it is not a popup or a separate browser window.
+- For an application already under server management, open **Ayarlar > Erişim >
+  Birincil Alan Adı** to check and change its public address. Create the public
+  DNS record first. **Kontrol Et** performs DNS and ownership checks without
+  changing traffic; the separate confirmed change keeps the old address live,
+  obtains TLS through the server-owned Caddy gateway, verifies the exact route
+  internally and publicly, and automatically removes only the new route if the
+  proof fails. The successful operation can be returned to the previous address
+  from the same page. No Cloudflare account, DNS API token or paid certificate
+  service is required.
 - Open **Terminal** to execute commands on the host.
 - Open **Dosyalar**, then **Sunucu**, to browse the host filesystem.
 - Use **Masaüstü** for FoxOS-only workspace files that should persist without
@@ -1161,9 +1170,11 @@ Do not copy its contents into Git or logs.
 - Automatic production migration currently supports only eligible stateless
   Docker web applications. Stateful applications, databases, workers,
   privileged containers, writable mounts and ambiguous routes remain blocked
-- The first certificate handoff imports an already valid matching certificate
-  from readable Traefik ACME storage. After import, FoxOS Caddy owns renewal;
-  other legacy proxy storage formats need their own migration adapters
+- The first migration certificate handoff imports an already valid matching
+  certificate from readable Traefik ACME storage. After import, FoxOS Caddy owns
+  renewal. A later primary-domain change issues its new certificate directly
+  through provider-neutral ACME HTTP-01 after the user creates public DNS;
+  other legacy proxy storage formats still need their own migration adapters
 - A migrated stateless application may still depend on a database or service
   that has not moved yet. FoxOS bridges that dependency without joining the
   candidate to the provider network, but the application is not fully
