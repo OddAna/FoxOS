@@ -123,6 +123,67 @@ function startupContractFromObservation({
   return null;
 }
 
+function boundedArgumentList(value, { executableFirst = false } = {}) {
+  if (!Array.isArray(value) || value.length > 32) return null;
+  const normalized = value.map(String);
+  if (
+    normalized.some((entry) => !entry || entry.length > 4096 || /[\r\n\0]/.test(entry)) ||
+    (executableFirst && normalized.length > 0 && !EXECUTABLE_PATTERN.test(normalized[0]))
+  ) {
+    return null;
+  }
+  return normalized;
+}
+
+function sameArgumentList(left, right) {
+  const normalizedLeft = Array.isArray(left) ? left.map(String) : [];
+  const normalizedRight = Array.isArray(right) ? right.map(String) : [];
+  return normalizedLeft.length === normalizedRight.length &&
+    normalizedLeft.every((entry, index) => entry === normalizedRight[index]);
+}
+
+function startupContractFromImageDefaults({ sourceConfig, imageConfig } = {}) {
+  if (!sourceConfig || !imageConfig) return null;
+  const sourceEntrypoint = Array.isArray(sourceConfig.Entrypoint) ? sourceConfig.Entrypoint : [];
+  const imageEntrypoint = Array.isArray(imageConfig.Entrypoint) ? imageConfig.Entrypoint : [];
+  const sourceCmd = Array.isArray(sourceConfig.Cmd) ? sourceConfig.Cmd : [];
+  const imageCmd = Array.isArray(imageConfig.Cmd) ? imageConfig.Cmd : [];
+  const imageWorkingDirectory = String(imageConfig.WorkingDir || '');
+  const workingDirectory = imageWorkingDirectory || '/';
+  const sourceUser = String(sourceConfig.User || '');
+  const imageUser = String(imageConfig.User || '');
+  if (
+    !sameArgumentList(sourceEntrypoint, imageEntrypoint) ||
+    !sameArgumentList(sourceCmd, imageCmd) ||
+    String(sourceConfig.WorkingDir || '') !== imageWorkingDirectory ||
+    sourceUser !== imageUser ||
+    !safeContainerPath(workingDirectory) ||
+    sourceEntrypoint.length + sourceCmd.length < 1 ||
+    sourceEntrypoint.length + sourceCmd.length > 32
+  ) {
+    return null;
+  }
+  const entrypoint = boundedArgumentList(imageEntrypoint, { executableFirst: imageEntrypoint.length > 0 });
+  const cmd = boundedArgumentList(imageCmd, { executableFirst: imageEntrypoint.length === 0 });
+  if (!entrypoint || !cmd) return null;
+  return {
+    kind: 'immutable-image-defaults',
+    entrypoint,
+    cmd,
+    workingDirectory
+  };
+}
+
+function immutableImageFallbackAllowed({ image, imageId, dependencies, environmentRevision, runtime, sourceConfig } = {}) {
+  return Boolean(
+    image && image.Id === imageId &&
+    Array.isArray(dependencies) && dependencies.length === 0 &&
+    environmentRevision && (environmentRevision.secretRefs || []).length === 0 &&
+    runtime && runtime.writableMounts === 0 &&
+    String(runtime.user || '') === String(sourceConfig && sourceConfig.User || '')
+  );
+}
+
 function environmentForStartup(entries, startup) {
   const environment = [...(entries || [])];
   if (startup && startup.kind === 'next-standalone-runtime') {
@@ -462,7 +523,7 @@ function createProductionStatelessMigrationAdapter({
   async function createCandidate({ plan, operationId }) {
     const adapterState = getState(operationId);
     const { resource } = currentResource(plan);
-    await sourceProof(resource);
+    const source = await sourceProof(resource);
     const environment = environmentFor(plan);
     const agent = await dockerRequest('GET', '/containers/' + encodeURIComponent(agentContainer) + '/json');
     if (!IMAGE_ID_PATTERN.test(String(agent.Image || ''))) {
@@ -485,7 +546,27 @@ function createProductionStatelessMigrationAdapter({
           encodeURIComponent(localTag) + '&tag=' + resource.runtime.imageId.slice(7, 19)
       );
       const contract = plan.executionContract.candidate;
-      const startup = await observedProcessContract(resource.runtime.containerId);
+      let startup = await observedProcessContract(resource.runtime.containerId);
+      if (!startup) {
+        const image = await dockerRequest(
+          'GET',
+          '/images/' + encodeURIComponent(resource.runtime.imageId) + '/json'
+        );
+        const imageDefaultFallbackAllowed = immutableImageFallbackAllowed({
+          image,
+          imageId: resource.runtime.imageId,
+          dependencies: adapterState.dependencies,
+          environmentRevision: environment.revision,
+          runtime: contract.runtime,
+          sourceConfig: source.Config
+        });
+        startup = imageDefaultFallbackAllowed
+          ? startupContractFromImageDefaults({
+              sourceConfig: source.Config,
+              imageConfig: image.Config
+            })
+          : null;
+      }
       if (!startup) {
         throw new ProductionStatelessMigrationError(
           'A safe provider-neutral candidate startup contract could not be reconstructed',
@@ -939,6 +1020,8 @@ module.exports = {
   createProductionStatelessMigrationAdapter,
   dependencyFromValue,
   environmentForStartup,
+  immutableImageFallbackAllowed,
   startupContractFromObservation,
+  startupContractFromImageDefaults,
   rewriteEnvironmentDependencies
 };
