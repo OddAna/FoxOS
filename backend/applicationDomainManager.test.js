@@ -132,6 +132,119 @@ function fixture(t, options = {}) {
   return { authority, calls, dataRoot, manager };
 }
 
+function observedFixture(t, options = {}) {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-observed-access-'));
+  t.after(() => fs.rmSync(dataRoot, { recursive: true, force: true }));
+  const containerId = 'd'.repeat(64);
+  const calls = [];
+  let attached = false;
+  const authority = { owner: 'foxos', publicAuthorityActive: true, domains: {}, routes: {} };
+  const resource = {
+    id: RESOURCE_ID,
+    kind: 'container',
+    provider: 'coolify',
+    ownership: 'observed',
+    runtime: { containerId, state: 'running' },
+    ports: options.ports || [{ privatePort: 8080, protocol: 'tcp', hostPort: null }],
+    routes: [{ domain: 'old.example.com', scheme: 'https', path: '/' }]
+  };
+  const ingressAuthority = {
+    state: () => JSON.parse(JSON.stringify(authority)),
+    stageRoutes: async (routes) => {
+      calls.push({ kind: 'stage', routes });
+      for (const route of routes) {
+        authority.routes[route.routeId] = { ...route, status: 'staged' };
+        authority.domains[route.domain] = 'legacy';
+      }
+    },
+    switchDomain: async (domain, target) => {
+      calls.push({ kind: 'switch', domain, target });
+      authority.domains[domain] = target;
+      for (const route of Object.values(authority.routes)) {
+        if (route.domain === domain) route.status = target === 'foxos' ? 'active' : 'staged';
+      }
+    },
+    removeRoutes: async (routeIds) => {
+      calls.push({ kind: 'remove', routeIds });
+      for (const routeId of routeIds) {
+        const route = authority.routes[routeId];
+        if (route) authority.domains[route.domain] = 'legacy';
+        delete authority.routes[routeId];
+      }
+    },
+    httpsProbe: async (input) => {
+      calls.push({ kind: 'probe', ...input });
+      if (options.failProbe && options.failProbe(input)) throw new Error('probe failed');
+      const route = authority.routes[input.expectedRouteId];
+      return {
+        statusCode: 200,
+        tlsValid: true,
+        expectedRoute: Boolean(route && route.status === 'active'),
+        candidateIdentity: route && route.operationId || null
+      };
+    }
+  };
+  const resourceRegistry = {
+    getMigrationManagement: () => null,
+    getLatest: () => ({ resources: [resource] })
+  };
+  const dockerRequest = async (method, requestPath, payload) => {
+    calls.push({ kind: 'docker', method, requestPath, payload });
+    if (method === 'GET' && requestPath === '/networks/foxos-routing') {
+      return {
+        Internal: true,
+        Labels: { 'com.foxos.routing': 'true', 'com.foxos.core': 'true' }
+      };
+    }
+    if (method === 'GET' && requestPath === '/containers/' + containerId + '/json') {
+      return {
+        Id: containerId,
+        State: { Running: true },
+        NetworkSettings: {
+          Networks: attached ? { 'foxos-routing': { Aliases: ['app-' + hashForTest(RESOURCE_ID)] } } : {}
+        }
+      };
+    }
+    if (method === 'POST' && requestPath === '/networks/foxos-routing/connect') {
+      attached = true;
+      return {};
+    }
+    if (method === 'POST' && requestPath === '/networks/foxos-routing/disconnect') {
+      attached = false;
+      return {};
+    }
+    throw new Error('Unexpected Docker request: ' + method + ' ' + requestPath);
+  };
+  let manager = null;
+  const getApplicationInventory = async () => ({
+    applications: [{
+      id: RESOURCE_ID,
+      resourceId: RESOURCE_ID,
+      externalUrl: manager && manager.primaryDomains()[RESOURCE_ID]
+        ? 'https://' + manager.primaryDomains()[RESOURCE_ID]
+        : 'https://old.example.com',
+      managedByServer: false,
+      capabilities: { editAccessLink: true, editDomain: true },
+      runtime: { operationalState: 'running', containerId }
+    }]
+  });
+  manager = createApplicationDomainManager({
+    dataRoot,
+    ingressAuthority,
+    resourceRegistry,
+    getApplicationInventory,
+    dockerRequest,
+    dnsLookup: async () => [{ address: '93.184.216.34', family: 4 }],
+    delay: async () => {},
+    probeAttempts: 1
+  });
+  return { authority, calls, manager, isAttached: () => attached };
+}
+
+function hashForTest(value) {
+  return require('node:crypto').createHash('sha256').update(String(value)).digest('hex').slice(0, 24);
+}
+
 test('domain input accepts a hostname or HTTPS root URL and rejects unsafe URL components', () => {
   assert.equal(normalizeDomain('App.Example.COM'), 'app.example.com');
   assert.equal(normalizeDomain('https://app.example.com/'), 'app.example.com');
@@ -256,4 +369,52 @@ test('a domain observed on another server resource is rejected even when not act
     manager.createPlan(RESOURCE_ID, { domain: 'reserved.example.com' }),
     { code: 'resource-domain-conflict' }
   );
+});
+
+test('a discovered running web app receives a real reversible access link without full migration', async (t) => {
+  const { authority, calls, manager, isAttached } = observedFixture(t);
+  const plan = await manager.createPlan(RESOURCE_ID, { domain: 'new.example.com' });
+
+  assert.equal(plan.currentDomain, 'old.example.com');
+  assert.equal(isAttached(), false);
+  assert.equal(calls.some((call) => call.kind === 'stage'), false);
+
+  const applied = await manager.applyPlan(plan.planId, plan.confirmation);
+  assert.equal(applied.status, 'completed');
+  assert.equal(manager.primaryDomains()[RESOURCE_ID], 'new.example.com');
+  assert.equal(authority.domains['new.example.com'], 'foxos');
+  assert.equal(isAttached(), true);
+  assert.equal(calls.filter((call) => call.requestPath === '/networks/foxos-routing/connect').length, 1);
+  assert.equal(calls.filter((call) => call.kind === 'probe').length, 2);
+
+  const status = await manager.getStatus(RESOURCE_ID);
+  const rolledBack = await manager.rollbackOperation(applied.operationId, status.rollbackConfirmation);
+  assert.equal(rolledBack.status, 'rolled-back');
+  assert.equal(manager.primaryDomains()[RESOURCE_ID], undefined);
+  assert.equal(isAttached(), false);
+  assert.equal(Object.values(authority.routes).some((route) => route.domain === 'new.example.com'), false);
+});
+
+test('failed access-link proof removes the new route and exact observed network attachment', async (t) => {
+  const { authority, manager, isAttached } = observedFixture(t, {
+    failProbe: (input) => input.hostname === 'new.example.com'
+  });
+  const plan = await manager.createPlan(RESOURCE_ID, { domain: 'new.example.com' });
+
+  await assert.rejects(manager.applyPlan(plan.planId, plan.confirmation), { code: 'domain-apply-rolled-back' });
+  assert.equal(isAttached(), false);
+  assert.equal(Object.values(authority.routes).some((route) => route.domain === 'new.example.com'), false);
+  assert.equal(manager.primaryDomains()[RESOURCE_ID], undefined);
+});
+
+test('an ambiguous discovered service explains why its access link cannot be changed', async (t) => {
+  const { manager } = observedFixture(t, {
+    ports: [
+      { privatePort: 80, protocol: 'tcp' },
+      { privatePort: 3000, protocol: 'tcp' }
+    ]
+  });
+  const status = await manager.getStatus(RESOURCE_ID);
+  assert.equal(status.editable, false);
+  assert.match(status.reason, /web portu kesin olarak belirlenemedi/i);
 });

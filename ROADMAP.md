@@ -371,14 +371,19 @@ target blocks only adoption/migration operations that require restore proof.
   do not create a popup or a second window. Desktop and Settings share the same
   canonical inventory, pending lifecycle state and Docker action path; desktop
   and Store settings links target the exact application/container record.
-- [x] Make the first editable setting the primary application domain. The
-  owner-only transaction rejects panel/resource/pending-plan collisions and
-  private or unresolved DNS before mutation, rechecks drift under a persistent
-  lock, keeps the previous route live, uses server-owned Caddy ACME and ingress,
-  verifies the exact route internally and through a pinned public DNS address,
-  and removes only the new route on failed TLS/health proof. A completed change
-  keeps the old address as a reversible alias and exposes verified rollback in
-  the same Settings page.
+- [x] Make the first editable setting the application **Erişim Linki**. The
+  owner-only transaction works for both server-managed applications and
+  discovered running web containers with one unambiguous private HTTP port; it
+  does not require full workload migration or falsely claim workload ownership.
+  It rejects panel/resource/pending-plan collisions and private or unresolved
+  DNS before mutation, rechecks container/route drift under a persistent lock,
+  attaches only the exact observed target to the internal routing network,
+  keeps the previous provider address live, uses server-owned Caddy ACME and
+  ingress, verifies the exact route internally and through a pinned public DNS
+  address, and removes the new route plus its exact network attachment on
+  failed TLS/health proof. A completed change exposes verified rollback in the
+  same Settings page; ambiguous multi-port services fail closed with a concrete
+  reason.
 - [ ] Add reviewed environment/secret editing, logs, health history, resource
   limits, deployment/update and backup/restore controls from the same canonical
   application record as their safety contracts become complete.

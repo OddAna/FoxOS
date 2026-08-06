@@ -14,6 +14,8 @@ const PLAN_ID_PATTERN = /^adplan_[a-f0-9]{32}$/;
 const OPERATION_ID_PATTERN = /^adop_[a-f0-9]{32}$/;
 const MIGRATION_OPERATION_ID_PATTERN = /^smop_[a-f0-9]{32}$/;
 const ROUTE_ID_PATTERN = /^smroute_[a-f0-9]{24}$/;
+const CONTAINER_ID_PATTERN = /^[a-f0-9]{12,64}$/;
+const ROUTE_ALIAS_PATTERN = /^[a-z][a-z0-9-]{2,62}$/;
 const DOMAIN_PATTERN = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 const RESERVED_SUFFIXES = ['.localhost', '.local', '.internal', '.invalid', '.test', '.example'];
 
@@ -103,11 +105,11 @@ function fingerprintRoute({ applicationId, management, route, primaryDomain }) {
   return hash(JSON.stringify({
     applicationId,
     operationId: management.operationId,
-    routeId: route.routeId,
-    domain: route.domain,
-    path: route.path,
-    alias: route.alias,
-    privatePort: route.privatePort,
+    routeId: route && route.routeId || null,
+    domain: route && route.domain || null,
+    path: route && route.path || management.path || '/',
+    alias: route && route.alias || management.alias,
+    privatePort: route && route.privatePort || management.privatePort,
     candidateContainerId: management.candidateContainerId,
     primaryDomain
   }), 40);
@@ -150,6 +152,8 @@ function createApplicationDomainManager({
   ingressAuthority,
   resourceRegistry,
   getApplicationInventory,
+  dockerRequest = null,
+  routingNetwork = 'foxos-routing',
   panelBaseUrl = null,
   dnsLookup = (hostname) => dns.lookup(hostname, { all: true, verbatim: true }),
   clock = () => new Date(),
@@ -218,15 +222,83 @@ function createApplicationDomainManager({
 
   function primaryDomains() {
     const authority = ingressAuthority.state();
+    const snapshot = resourceRegistry.getLatest && resourceRegistry.getLatest();
+    const resources = new Map((snapshot && snapshot.resources || []).map((resource) => [resource.id, resource]));
     return Object.fromEntries(Object.entries(state().preferences)
       .filter(([resourceId, preference]) => (
         RESOURCE_ID_PATTERN.test(resourceId) && preference && DOMAIN_PATTERN.test(preference.primaryDomain) &&
+        (preference.routeMode !== 'observed-runtime' || (
+          resources.get(resourceId) && resources.get(resourceId).runtime &&
+          resources.get(resourceId).runtime.containerId === preference.targetContainerId
+        )) &&
         authority.routes && authority.routes[preference.primaryRouteId] &&
         authority.routes[preference.primaryRouteId].domain === preference.primaryDomain &&
         authority.routes[preference.primaryRouteId].status === 'active' &&
         authority.domains && authority.domains[preference.primaryDomain] === 'foxos'
       ))
       .map(([resourceId, preference]) => [resourceId, preference.primaryDomain]));
+  }
+
+  function snapshotResource(resourceId) {
+    const snapshot = resourceRegistry.getLatest && resourceRegistry.getLatest();
+    return snapshot && (snapshot.resources || []).find((resource) => resource.id === resourceId) || null;
+  }
+
+  function observedPrivatePort(resource, currentDomain) {
+    const routes = (resource && resource.routes || []).filter((route) => (
+      route && route.path === '/' && (!currentDomain || route.domain === currentDomain)
+    ));
+    const routePorts = [...new Set(routes
+      .map((route) => Number(route.privatePort))
+      .filter((port) => Number.isInteger(port) && port > 0 && port <= 65535))];
+    if (routePorts.length === 1) return routePorts[0];
+    if (routePorts.length > 1) return null;
+
+    const tcpPorts = [...new Set((resource && resource.ports || [])
+      .filter((port) => String(port.protocol || 'tcp').toLowerCase() === 'tcp')
+      .map((port) => Number(port.privatePort))
+      .filter((port) => Number.isInteger(port) && port > 0 && port <= 65535))];
+    return tcpPorts.length === 1 ? tcpPorts[0] : null;
+  }
+
+  function observedRouteContext(application, authority) {
+    if (typeof dockerRequest !== 'function') return null;
+    const resource = snapshotResource(application.resourceId);
+    const currentDomain = hostnameFromUrl(application.externalUrl);
+    const privatePort = observedPrivatePort(resource, currentDomain);
+    const candidateContainerId = application.runtime && application.runtime.containerId;
+    if (
+      !resource || resource.kind !== 'container' || !CONTAINER_ID_PATTERN.test(String(candidateContainerId || '')) ||
+      application.runtime.operationalState !== 'running' || !privatePort
+    ) return null;
+
+    const preference = state().preferences[application.resourceId] || null;
+    const preferredRoute = preference && authority.routes && authority.routes[preference.primaryRouteId];
+    const routeOperationId = preference && MIGRATION_OPERATION_ID_PATTERN.test(String(preference.routeOperationId || ''))
+      ? preference.routeOperationId
+      : 'smop_' + hash('application-access:' + application.resourceId, 32);
+    const validPreference = preferredRoute && preferredRoute.domain === preference.primaryDomain &&
+      preferredRoute.operationId === routeOperationId && preferredRoute.status === 'active' &&
+      authority.domains && authority.domains[preference.primaryDomain] === 'foxos'
+      ? preference
+      : null;
+    const alias = 'app-' + hash(application.resourceId, 24);
+    if (!ROUTE_ALIAS_PATTERN.test(alias)) return null;
+    return {
+      mode: 'observed-runtime',
+      resource,
+      preference: validPreference,
+      route: validPreference ? preferredRoute : null,
+      currentPrimary: validPreference && validPreference.primaryDomain || currentDomain,
+      management: {
+        operationId: routeOperationId,
+        candidateContainerId,
+        alias,
+        privatePort,
+        path: '/',
+        authorityActive: Boolean(validPreference)
+      }
+    };
   }
 
   async function resolveApplication(applicationId) {
@@ -238,41 +310,68 @@ function createApplicationDomainManager({
     if (!application) {
       throw new ApplicationDomainError('Uygulama bulunamadı.', 404, 'application-not-found');
     }
+    const authority = ingressAuthority.state();
     const management = resourceRegistry.getMigrationManagement(application.resourceId);
     if (
-      !application.managedByServer || !application.capabilities || application.capabilities.editDomain !== true ||
-      !management || management.authorityActive !== true || management.state !== 'active' ||
-      !MIGRATION_OPERATION_ID_PATTERN.test(String(management.operationId || '')) ||
-      !ROUTE_ID_PATTERN.test(String(management.routeId || '')) ||
-      application.runtime.operationalState !== 'running' ||
-      application.runtime.containerId !== management.candidateContainerId
+      application.managedByServer && management && management.authorityActive === true &&
+      management.state === 'active' && MIGRATION_OPERATION_ID_PATTERN.test(String(management.operationId || '')) &&
+      ROUTE_ID_PATTERN.test(String(management.routeId || '')) &&
+      application.runtime.operationalState === 'running' &&
+      application.runtime.containerId === management.candidateContainerId
     ) {
-      throw new ApplicationDomainError(
-        'Bu uygulamanın alan adı henüz sunucu tarafından güvenle yönetilemiyor.',
-        409,
-        'domain-management-unavailable'
-      );
+      const route = authority.routes && authority.routes[management.routeId];
+      if (
+        !route || route.operationId !== management.operationId || route.status !== 'active' ||
+        authority.domains && authority.domains[route.domain] !== 'foxos'
+      ) {
+        throw new ApplicationDomainError('Uygulamanın etkin sunucu rotası doğrulanamadı.', 409, 'active-route-unverified');
+      }
+      const persistedPreference = state().preferences[application.resourceId] || null;
+      const preferredRoute = persistedPreference && authority.routes && authority.routes[persistedPreference.primaryRouteId];
+      const preference = preferredRoute && preferredRoute.domain === persistedPreference.primaryDomain &&
+        preferredRoute.operationId === management.operationId && preferredRoute.status === 'active' &&
+        authority.domains[persistedPreference.primaryDomain] === 'foxos'
+        ? persistedPreference
+        : null;
+      const currentPrimary = preference && preference.primaryDomain || hostnameFromUrl(application.externalUrl) || route.domain;
+      const primaryRoute = preference ? preferredRoute : Object.values(authority.routes || {}).find((entry) => (
+        entry.domain === currentPrimary && entry.operationId === management.operationId && entry.status === 'active'
+      )) || route;
+      return {
+        mode: 'managed', application, management, authority, route: primaryRoute,
+        currentPrimary, preference, resource: snapshotResource(application.resourceId)
+      };
     }
-    const authority = ingressAuthority.state();
-    const route = authority.routes && authority.routes[management.routeId];
-    if (
-      !route || route.operationId !== management.operationId || route.status !== 'active' ||
-      authority.domains && authority.domains[route.domain] !== 'foxos'
-    ) {
-      throw new ApplicationDomainError('Uygulamanın etkin sunucu rotası doğrulanamadı.', 409, 'active-route-unverified');
+
+    const observed = observedRouteContext(application, authority);
+    if (observed) {
+      if (observed.preference) {
+        try {
+          const inspected = await inspectObservedTarget({
+            resourceId: application.resourceId,
+            candidateContainerId: observed.management.candidateContainerId,
+            alias: observed.management.alias
+          });
+          if (!observedAttachment(inspected.container, observed.management.alias).aliased) {
+            throw new Error('route attachment missing');
+          }
+        } catch {
+          throw new ApplicationDomainError(
+            'Kayıtlı erişim linkinin çalışan container bağlantısı doğrulanamadı.',
+            409,
+            'access-link-target-unavailable'
+          );
+        }
+      }
+      return { application, authority, ...observed };
     }
-    const persistedPreference = state().preferences[application.resourceId] || null;
-    const preferredRoute = persistedPreference && authority.routes && authority.routes[persistedPreference.primaryRouteId];
-    const preference = preferredRoute && preferredRoute.domain === persistedPreference.primaryDomain &&
-      preferredRoute.operationId === management.operationId && preferredRoute.status === 'active' &&
-      authority.domains[persistedPreference.primaryDomain] === 'foxos'
-      ? persistedPreference
-      : null;
-    const currentPrimary = preference && preference.primaryDomain || hostnameFromUrl(application.externalUrl) || route.domain;
-    const primaryRoute = preference ? preferredRoute : Object.values(authority.routes || {}).find((entry) => (
-      entry.domain === currentPrimary && entry.operationId === management.operationId && entry.status === 'active'
-    )) || route;
-    return { application, management, authority, route: primaryRoute, currentPrimary, preference };
+    throw new ApplicationDomainError(
+      application.runtime && application.runtime.operationalState !== 'running'
+        ? 'Erişim linkini doğrulamak için uygulamayı önce çalıştırın.'
+        : 'Bu uygulamanın web portu kesin olarak belirlenemedi; erişim linki güvenle değiştirilemiyor.',
+      409,
+      'access-link-management-unavailable'
+    );
   }
 
   async function resolvePublicDns(domain) {
@@ -296,16 +395,17 @@ function createApplicationDomainManager({
     return publicDnsEvidence(addresses);
   }
 
-  async function assertDomainAvailable(domain, applicationId, planId = null) {
+  async function assertDomainAvailable(domain, applicationId, planId = null, routeOperationId = null) {
     if (panelDomain && domain === panelDomain) {
       throw new ApplicationDomainError('Bu alan adı yönetim paneli tarafından kullanılıyor.', 409, 'panel-domain-conflict');
     }
 
     const authority = ingressAuthority.state();
     const management = resourceRegistry.getMigrationManagement(applicationId);
+    const ownedOperationId = routeOperationId || management && management.operationId || null;
     const collision = Object.values(authority.routes || {}).find((route) => (
       route.domain === domain && route.status !== 'removed' &&
-      (!management || route.operationId !== management.operationId)
+      (!ownedOperationId || route.operationId !== ownedOperationId)
     ));
     if (collision) {
       throw new ApplicationDomainError('Bu alan adı başka bir uygulama tarafından kullanılıyor.', 409, 'domain-conflict');
@@ -387,7 +487,7 @@ function createApplicationDomainManager({
     if (domain === resolved.currentPrimary) {
       throw new ApplicationDomainError('Bu alan adı zaten uygulamanın birincil adresi.', 409, 'domain-unchanged');
     }
-    await assertDomainAvailable(domain, applicationId);
+    await assertDomainAvailable(domain, applicationId, null, resolved.management.operationId);
     const dnsEvidence = await resolvePublicDns(domain);
     const matchingRoute = routeForDomain(resolved.authority, domain, resolved.management.operationId);
     if (matchingRoute && (
@@ -409,8 +509,9 @@ function createApplicationDomainManager({
       planId,
       applicationId,
       resourceId: resolved.application.resourceId,
+      routeMode: resolved.mode,
       currentDomain: resolved.currentPrimary,
-      currentRouteId: resolved.route.routeId,
+      currentRouteId: resolved.route && resolved.route.routeId || null,
       domain,
       routeId,
       existingAlias: Boolean(existingRoute),
@@ -422,9 +523,9 @@ function createApplicationDomainManager({
       }),
       migrationOperationId: resolved.management.operationId,
       candidateContainerId: resolved.management.candidateContainerId,
-      alias: resolved.route.alias,
-      privatePort: resolved.route.privatePort,
-      path: resolved.route.path,
+      alias: resolved.route && resolved.route.alias || resolved.management.alias,
+      privatePort: resolved.route && resolved.route.privatePort || resolved.management.privatePort,
+      path: resolved.route && resolved.route.path || resolved.management.path || '/',
       dns: dnsEvidence,
       previousPreferenceOperationId: resolved.preference && resolved.preference.operationId || null,
       status: 'ready',
@@ -502,6 +603,84 @@ function createApplicationDomainManager({
     try { fs.unlinkSync(lockFile); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
 
+  async function inspectObservedTarget(plan) {
+    const [network, container] = await Promise.all([
+      dockerRequest('GET', '/networks/' + encodeURIComponent(routingNetwork)),
+      dockerRequest('GET', '/containers/' + encodeURIComponent(plan.candidateContainerId) + '/json')
+    ]);
+    const labels = network && network.Labels || {};
+    const resource = snapshotResource(plan.resourceId);
+    if (
+      labels['com.foxos.routing'] !== 'true' || labels['com.foxos.core'] !== 'true' ||
+      network.Internal !== true
+    ) {
+      throw new ApplicationDomainError('Sunucunun erişim ağı doğrulanamadı.', 503, 'access-route-network-unverified');
+    }
+    if (
+      !container || container.Id !== plan.candidateContainerId || !container.State || container.State.Running !== true ||
+      !resource || !resource.runtime || resource.runtime.containerId !== plan.candidateContainerId
+    ) {
+      throw new ApplicationDomainError('Uygulamanın çalışan container kimliği değişti. Yeniden kontrol edin.', 409, 'access-target-stale');
+    }
+    return { container, network };
+  }
+
+  function observedAttachment(container, alias) {
+    const attachment = container && container.NetworkSettings && container.NetworkSettings.Networks &&
+      container.NetworkSettings.Networks[routingNetwork];
+    return {
+      attached: Boolean(attachment),
+      aliased: Boolean(attachment && (attachment.Aliases || []).includes(alias))
+    };
+  }
+
+  async function attachObservedTarget(plan) {
+    const before = await inspectObservedTarget(plan);
+    const attachment = observedAttachment(before.container, plan.alias);
+    if (attachment.aliased) return false;
+    if (attachment.attached) {
+      throw new ApplicationDomainError(
+        'Uygulama erişim ağına beklenmeyen bir kimlikle bağlı; otomatik değişiklik yapılmadı.',
+        409,
+        'access-route-alias-conflict'
+      );
+    }
+    await dockerRequest('POST', '/networks/' + encodeURIComponent(routingNetwork) + '/connect', {
+      Container: plan.candidateContainerId,
+      EndpointConfig: { Aliases: [plan.alias] }
+    });
+    try {
+      const after = await inspectObservedTarget(plan);
+      if (!observedAttachment(after.container, plan.alias).aliased) {
+        throw new ApplicationDomainError('Uygulama erişim ağına bağlanamadı.', 503, 'access-route-attachment-failed');
+      }
+    } catch (error) {
+      try {
+        await dockerRequest('POST', '/networks/' + encodeURIComponent(routingNetwork) + '/disconnect', {
+          Container: plan.candidateContainerId,
+          Force: true
+        });
+      } catch {
+        throw new ApplicationDomainError(
+          'Uygulama erişim ağına bağlandı ancak doğrulama ve otomatik geri alma tamamlanamadı.',
+          503,
+          'access-route-attachment-attention-required'
+        );
+      }
+      throw error;
+    }
+    return true;
+  }
+
+  async function detachObservedTarget(plan) {
+    const inspected = await inspectObservedTarget(plan);
+    if (!observedAttachment(inspected.container, plan.alias).attached) return;
+    await dockerRequest('POST', '/networks/' + encodeURIComponent(routingNetwork) + '/disconnect', {
+      Container: plan.candidateContainerId,
+      Force: false
+    });
+  }
+
   async function applyPlan(planId, confirmation) {
     if (!PLAN_ID_PATTERN.test(String(planId || ''))) {
       throw new ApplicationDomainError('Alan adı planı kimliği geçersiz.', 400, 'invalid-domain-plan-id');
@@ -517,11 +696,12 @@ function createApplicationDomainManager({
     const lock = acquireLock(operationId);
     let staged = false;
     let switched = false;
+    let networkAttached = false;
     let operation = null;
     try {
       const resolved = await resolveApplication(plan.applicationId);
       assertPlanFresh(plan, resolved);
-      await assertDomainAvailable(plan.domain, plan.applicationId, plan.planId);
+      await assertDomainAvailable(plan.domain, plan.applicationId, plan.planId, plan.migrationOperationId);
       const dnsEvidence = await resolvePublicDns(plan.domain);
       const existingRoute = routeForDomain(ingressAuthority.state(), plan.domain, plan.migrationOperationId);
       if (Boolean(existingRoute) !== plan.existingAlias || (existingRoute && existingRoute.routeId !== plan.routeId)) {
@@ -534,13 +714,19 @@ function createApplicationDomainManager({
         planId,
         applicationId: plan.applicationId,
         resourceId: plan.resourceId,
+        routeMode: plan.routeMode || 'managed',
         previousDomain: plan.currentDomain,
         previousRouteId: plan.currentRouteId,
         previousPreferenceOperationId: plan.previousPreferenceOperationId || null,
         primaryDomain: plan.domain,
         routeId: plan.routeId,
         migrationOperationId: plan.migrationOperationId,
+        candidateContainerId: plan.candidateContainerId,
+        alias: plan.alias,
+        privatePort: plan.privatePort,
+        path: plan.path,
         createdRoute: !plan.existingAlias,
+        networkAttachedByOperation: false,
         dns: dnsEvidence,
         status: 'applying',
         startedAt: now(),
@@ -552,13 +738,21 @@ function createApplicationDomainManager({
       current.operations[operationId] = operation;
       persist(current);
 
-      const previousDomainProof = await probeRoute({
+      const previousDomainProof = plan.currentRouteId ? await probeRoute({
         domain: plan.currentDomain,
         routeId: plan.currentRouteId,
         operationId: plan.migrationOperationId,
         connectHost: 'foxos-gateway',
         requestPath: plan.path
-      });
+      }) : null;
+
+      if (plan.routeMode === 'observed-runtime') {
+        networkAttached = await attachObservedTarget(plan);
+        current = state();
+        current.operations[operationId].networkAttachedByOperation = networkAttached;
+        current.operations[operationId].updatedAt = now();
+        persist(current);
+      }
 
       if (!existingRoute) {
         await ingressAuthority.stageRoutes([{
@@ -607,6 +801,9 @@ function createApplicationDomainManager({
         primaryRouteId: plan.routeId,
         previousDomain: plan.currentDomain,
         previousRouteId: plan.currentRouteId,
+        routeOperationId: plan.migrationOperationId,
+        routeMode: plan.routeMode || 'managed',
+        targetContainerId: plan.candidateContainerId,
         operationId,
         changedAt: now()
       };
@@ -615,8 +812,8 @@ function createApplicationDomainManager({
       persist(current);
       return publicOperation(operation);
     } catch (error) {
-      let rollback = { attempted: Boolean(staged || switched), completed: false, previousDomainPreserved: true };
-      if (staged || switched) {
+      let rollback = { attempted: Boolean(staged || switched || networkAttached), completed: false, previousDomainPreserved: true };
+      if (staged || switched || networkAttached) {
         try {
           const authority = ingressAuthority.state();
           const exactRoute = authority.routes && authority.routes[plan.routeId];
@@ -626,13 +823,14 @@ function createApplicationDomainManager({
             }
             await ingressAuthority.removeRoutes([plan.routeId]);
           }
-          rollback.previousDomainProof = await probeRoute({
+          if (networkAttached) await detachObservedTarget(plan);
+          rollback.previousDomainProof = plan.currentRouteId ? await probeRoute({
             domain: plan.currentDomain,
             routeId: plan.currentRouteId,
             operationId: plan.migrationOperationId,
             connectHost: 'foxos-gateway',
             requestPath: plan.path
-          });
+          }) : null;
           rollback.completed = true;
         } catch (rollbackError) {
           rollback.error = rollbackError.message;
@@ -644,9 +842,9 @@ function createApplicationDomainManager({
         current.plans[planId].updatedAt = now();
       }
       if (operation && current.operations[operationId]) {
-        current.operations[operationId].status = rollback.completed || !rollback.attempted
-          ? 'failed-rolled-back'
-          : 'attention-required';
+        current.operations[operationId].status = error.code === 'access-route-attachment-attention-required'
+          ? 'attention-required'
+          : rollback.completed || !rollback.attempted ? 'failed-rolled-back' : 'attention-required';
         current.operations[operationId].failure = {
           code: error.code || 'domain-apply-failed',
           message: error.message,
@@ -704,17 +902,23 @@ function createApplicationDomainManager({
     try {
       const resolved = await resolveApplication(operation.applicationId);
       const authority = ingressAuthority.state();
-      const previousRoute = routeForDomain(authority, operation.previousDomain, operation.migrationOperationId);
-      if (!previousRoute || authority.domains[operation.previousDomain] !== 'foxos') {
-        throw new ApplicationDomainError('Önceki alan adı rotası artık etkin değil.', 409, 'previous-domain-unavailable');
+      const previousRoute = operation.previousRouteId
+        ? routeForDomain(authority, operation.previousDomain, operation.migrationOperationId)
+        : null;
+      if (operation.previousRouteId && (
+        !previousRoute || authority.domains[operation.previousDomain] !== 'foxos'
+      )) {
+        throw new ApplicationDomainError('Önceki erişim rotası artık etkin değil.', 409, 'previous-domain-unavailable');
       }
-      await probeRoute({
-        domain: operation.previousDomain,
-        routeId: previousRoute.routeId,
-        operationId: operation.migrationOperationId,
-        connectHost: 'foxos-gateway',
-        requestPath: previousRoute.path
-      });
+      if (previousRoute) {
+        await probeRoute({
+          domain: operation.previousDomain,
+          routeId: previousRoute.routeId,
+          operationId: operation.migrationOperationId,
+          connectHost: 'foxos-gateway',
+          requestPath: previousRoute.path
+        });
+      }
       if (resolved.application.runtime.operationalState !== 'running') {
         throw new ApplicationDomainError('Uygulama çalışmadığı için geri alma doğrulanamadı.', 409, 'application-not-running');
       }
@@ -736,23 +940,43 @@ function createApplicationDomainManager({
         await ingressAuthority.removeRoutes([operation.routeId]);
       }
 
-      const restoredProof = await probeRoute({
+      const restoredProof = previousRoute ? await probeRoute({
         domain: operation.previousDomain,
         routeId: previousRoute.routeId,
         operationId: operation.migrationOperationId,
         connectHost: 'foxos-gateway',
         requestPath: previousRoute.path
-      });
+      }) : null;
+
+      if (operation.routeMode === 'observed-runtime' && operation.networkAttachedByOperation) {
+        const remainingRoute = Object.values(ingressAuthority.state().routes || {}).find((route) => (
+          route.operationId === operation.migrationOperationId && route.status === 'active'
+        ));
+        if (!remainingRoute) {
+          await detachObservedTarget({
+            resourceId: operation.resourceId,
+            candidateContainerId: operation.candidateContainerId,
+            alias: operation.alias
+          });
+        }
+      }
 
       current = state();
-      current.preferences[operation.resourceId] = {
-        primaryDomain: operation.previousDomain,
-        primaryRouteId: previousRoute.routeId,
-        previousDomain: operation.primaryDomain,
-        previousRouteId: operation.routeId,
-        operationId: operation.previousPreferenceOperationId || null,
-        changedAt: now()
-      };
+      if (previousRoute) {
+        current.preferences[operation.resourceId] = {
+          primaryDomain: operation.previousDomain,
+          primaryRouteId: previousRoute.routeId,
+          previousDomain: operation.primaryDomain,
+          previousRouteId: operation.routeId,
+          routeOperationId: operation.migrationOperationId,
+          routeMode: operation.routeMode || 'managed',
+          targetContainerId: operation.candidateContainerId,
+          operationId: operation.previousPreferenceOperationId || null,
+          changedAt: now()
+        };
+      } else {
+        delete current.preferences[operation.resourceId];
+      }
       current.operations[operationId].status = 'rolled-back';
       current.operations[operationId].rollback = {
         attempted: true,
@@ -784,7 +1008,28 @@ function createApplicationDomainManager({
   }
 
   async function getStatus(applicationId) {
-    const resolved = await resolveApplication(applicationId);
+    let resolved;
+    try {
+      resolved = await resolveApplication(applicationId);
+    } catch (error) {
+      if (error instanceof ApplicationDomainError && [
+        'access-link-management-unavailable', 'access-link-target-unavailable'
+      ].includes(error.code)) {
+        const inventory = await getApplicationInventory();
+        const application = (inventory.applications || []).find((entry) => entry.id === applicationId);
+        return {
+          applicationId,
+          editable: false,
+          reason: error.message,
+          currentDomain: application && hostnameFromUrl(application.externalUrl) || null,
+          aliases: [],
+          oldAddressPreservedDuringChange: true,
+          latestOperation: null,
+          rollbackConfirmation: null
+        };
+      }
+      throw error;
+    }
     const current = state();
     const aliases = Object.values(resolved.authority.routes || {})
       .filter((route) => (
