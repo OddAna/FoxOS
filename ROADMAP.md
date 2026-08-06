@@ -383,7 +383,12 @@ target blocks only adoption/migration operations that require restore proof.
   address, and removes the new route plus its exact network attachment on
   failed TLS/health proof. A completed change exposes verified rollback in the
   same Settings page; ambiguous multi-port services fail closed with a concrete
-  reason.
+  reason. Management ownership is presented separately as **Sunucu tarafından
+  yönetiliyor** or **Mevcut kurulumundan çalışıyor** so discovery is not
+  mistaken for an application failure. DNS/check feedback remains beside the
+  **Kontrol Et** action instead of appearing outside the visible settings
+  section; unresolved DNS explicitly asks for an IPv4 `A` record and mentions
+  `AAAA` only for servers that publish IPv6.
 - [ ] Add reviewed environment/secret editing, logs, health history, resource
   limits, deployment/update and backup/restore controls from the same canonical
   application record as their safety contracts become complete.

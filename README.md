@@ -206,9 +206,15 @@ to compromised root access.
 - Open **Ayarlar > Erişim > Erişim Linki** to check and change an application's
   public HTTPS address. This also works for a discovered, running web
   application when its target container and private HTTP port are unambiguous;
-  a full workload migration is not required. Create the public DNS record
-  first. **Kontrol Et** performs DNS and ownership checks without changing the
-  running application. The separate confirmed change attaches only that exact
+  a full workload migration is not required. **Mevcut kurulumundan çalışıyor**
+  is an ownership status, not an application error or an access-link lock: the
+  workload is still running from its existing server configuration instead of
+  a finalized server-owned manifest. Create an `A` record for the new hostname
+  at your DNS provider and point it to the server's public IPv4 address first;
+  add `AAAA` only when the server actually publishes IPv6. FoxOS does not need
+  or modify a DNS-provider account. **Kontrol Et** performs DNS and ownership
+  checks without changing the running application, and its result is shown
+  beside this control. The separate confirmed change attaches only that exact
   container to the internal routing network, keeps the previous address live,
   obtains TLS through the server-owned Caddy gateway, verifies the exact route
   internally and publicly, and removes both the new route and exact network

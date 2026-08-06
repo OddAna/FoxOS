@@ -66,18 +66,21 @@ const ApplicationManager = ({ target }) => {
   const [domainPlan, setDomainPlan] = useState(null);
   const [domainLoading, setDomainLoading] = useState(false);
   const [domainApplying, setDomainApplying] = useState(false);
+  const [domainMessage, setDomainMessage] = useState(null);
   const [message, setMessage] = useState(null);
 
   useEffect(() => {
     if (!target) {
       setSelectedApplicationId(null);
       setTargetContainerId(null);
+      setDomainMessage(null);
       setMessage(null);
       return;
     }
     setSelectedApplicationId(target.applicationId || null);
     setTargetContainerId(target.containerId || null);
     setSearchQuery('');
+    setDomainMessage(null);
     setMessage(null);
   }, [target]);
 
@@ -131,12 +134,15 @@ const ApplicationManager = ({ target }) => {
       setDomainInput('');
       setDomainPlan(null);
       setDomainLoading(false);
+      setDomainMessage(null);
       return undefined;
     }
 
     let active = true;
     setDomainLoading(true);
     setDomainPlan(null);
+    setDomainMessage(null);
+    setMessage(null);
     apiFetch(`/api/applications/${selectedDomainApplicationId}/domain`)
       .then((response) => response.json())
       .then((payload) => {
@@ -145,7 +151,7 @@ const ApplicationManager = ({ target }) => {
         setDomainInput(payload.currentDomain || '');
       })
       .catch((domainError) => {
-        if (active) setMessage({ type: 'error', text: domainError.message });
+        if (active) setDomainMessage({ type: 'error', text: domainError.message });
       })
       .finally(() => {
         if (active) setDomainLoading(false);
@@ -241,6 +247,7 @@ const ApplicationManager = ({ target }) => {
     if (!selectedApplication || !domainInput.trim()) return;
     setDomainLoading(true);
     setDomainPlan(null);
+    setDomainMessage(null);
     setMessage(null);
     try {
       const response = await apiFetch(`/api/applications/${selectedApplication.id}/domain/plans`, {
@@ -252,7 +259,7 @@ const ApplicationManager = ({ target }) => {
       setDomainPlan(payload.plan);
       setDomainInput(payload.plan.domain);
     } catch (domainError) {
-      setMessage({ type: 'error', text: domainError.message });
+      setDomainMessage({ type: 'error', text: domainError.message });
     } finally {
       setDomainLoading(false);
     }
@@ -270,6 +277,7 @@ const ApplicationManager = ({ target }) => {
     if (!selectedApplication || !plan) return;
     const applicationId = selectedApplication.id;
     setDomainApplying(true);
+    setDomainMessage(null);
     setMessage(null);
     try {
       await apiFetch(`/api/application-domain-plans/${plan.planId}/apply`, {
@@ -280,12 +288,12 @@ const ApplicationManager = ({ target }) => {
       await refreshApplications();
       await refreshDomainStatus(applicationId);
       setDomainPlan(null);
-      setMessage({
+      setDomainMessage({
         type: 'success',
         text: `Erişim linki https://${plan.domain} olarak değiştirildi. Önceki adres açık bırakıldı.`
       });
     } catch (domainError) {
-      setMessage({ type: 'error', text: domainError.message });
+      setDomainMessage({ type: 'error', text: domainError.message });
     } finally {
       setDomainApplying(false);
     }
@@ -294,7 +302,7 @@ const ApplicationManager = ({ target }) => {
   const confirmDomainChange = () => {
     if (!domainPlan) return;
     showDialog({
-      title: 'Erişim Adresini Değiştir',
+      title: 'Erişim Linkini Değiştir',
       message: `https://${domainPlan.domain} sunucu yönlendirmesi, TLS ve uygulama sağlığıyla doğrulanacak. Mevcut adres işlem boyunca açık kalacak; doğrulama başarısız olursa yalnız yeni rota geri alınacak.`,
       type: 'confirm',
       confirmText: 'Değiştir',
@@ -316,6 +324,7 @@ const ApplicationManager = ({ target }) => {
       cancelText: 'Vazgeç',
       onConfirm: async () => {
         setDomainApplying(true);
+        setDomainMessage(null);
         setMessage(null);
         try {
           await apiFetch(`/api/application-domain-operations/${operation.operationId}/rollback`, {
@@ -326,9 +335,9 @@ const ApplicationManager = ({ target }) => {
           await refreshApplications();
           await refreshDomainStatus(applicationId);
           setDomainPlan(null);
-          setMessage({ type: 'success', text: `Erişim linki ${previousAddress} olarak geri alındı.` });
+          setDomainMessage({ type: 'success', text: `Erişim linki ${previousAddress} olarak geri alındı.` });
         } catch (domainError) {
-          setMessage({ type: 'error', text: domainError.message });
+          setDomainMessage({ type: 'error', text: domainError.message });
         } finally {
           setDomainApplying(false);
         }
@@ -343,6 +352,7 @@ const ApplicationManager = ({ target }) => {
     setDomainStatus(null);
     setDomainInput('');
     setDomainPlan(null);
+    setDomainMessage(null);
     setMessage(null);
   };
 
@@ -436,13 +446,13 @@ const ApplicationManager = ({ target }) => {
               ) : (
                 <>
                   <div style={{ marginBottom: '10px', color: '#888', fontSize: '13px', lineHeight: 1.5 }}>
-                    Yeni HTTPS erişim linkini önce DNS ve çakışma denetiminden geçirin. Kontrol etmek çalışan uygulamayı değiştirmez.
+                    Yeni HTTPS linkini yazın. Önce domain sağlayıcınızda A kaydını bu sunucunun public IPv4 adresine yönlendirin; yalnız sunucuda IPv6 kullanıyorsanız AAAA kaydı da ekleyin. FoxOS DNS hesabınızı değiştirmez. Kontrol etmek çalışan uygulamayı değiştirmez.
                   </div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center' }}>
                     <input
                       type="text"
                       value={domainInput}
-                      onChange={(event) => { setDomainInput(event.target.value); setDomainPlan(null); }}
+                      onChange={(event) => { setDomainInput(event.target.value); setDomainPlan(null); setDomainMessage(null); }}
                       disabled={domainApplying}
                       placeholder="uygulama.ornek.com"
                       autoComplete="off"
@@ -453,6 +463,12 @@ const ApplicationManager = ({ target }) => {
                       {domainLoading ? <Loader2 size={15} className="spin" /> : <Search size={15} />} Kontrol Et
                     </button>
                   </div>
+
+                  {domainMessage && (
+                    <div aria-live="polite" style={{ marginTop: '12px', padding: '10px 12px', borderRadius: '8px', background: domainMessage.type === 'error' ? 'rgba(255,95,86,0.12)' : 'rgba(39,201,63,0.12)', border: `1px solid ${domainMessage.type === 'error' ? 'rgba(255,95,86,0.35)' : 'rgba(39,201,63,0.35)'}`, color: domainMessage.type === 'error' ? '#ff8a84' : '#75da85', fontSize: '13px', lineHeight: 1.5 }}>
+                      {domainMessage.text}
+                    </div>
+                  )}
 
                   {domainPlan && (
                     <div style={{ marginTop: '12px', padding: '10px 12px', borderRadius: '8px', background: 'rgba(39,201,63,0.12)', border: '1px solid rgba(39,201,63,0.35)', color: '#75da85', fontSize: '13px', lineHeight: 1.5 }}>
@@ -504,7 +520,7 @@ const ApplicationManager = ({ target }) => {
           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 160px) minmax(0, 1fr)', rowGap: '10px', columnGap: '16px', fontSize: '13px', wordBreak: 'break-word' }}>
             <div style={{ color: '#888' }}>Instance</div><div>{selectedApplication.instanceName || selectedApplication.runtime.containerName}</div>
             <div style={{ color: '#888' }}>Container</div><div>{selectedApplication.runtime.containerName}</div>
-            <div style={{ color: '#888' }}>Yönetim</div><div>{selectedApplication.managedByServer ? 'Sunucu' : 'Yalnız keşfedildi'}</div>
+            <div style={{ color: '#888' }}>Yönetim</div><div>{selectedApplication.managedByServer ? 'Sunucu tarafından yönetiliyor' : 'Mevcut kurulumundan çalışıyor'}</div>
             <div style={{ color: '#888' }}>Durum</div><div>{selectedApplication.runtime.status || selectedApplication.runtime.state}</div>
             {containerSettings && containerSettings.ports.length > 0 && (
               <><div style={{ color: '#888' }}>Portlar</div><div>{containerSettings.ports.map((port) => `${port.hostIp}:${port.hostPort} → ${port.privatePort}`).join(', ')}</div></>

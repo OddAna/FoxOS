@@ -380,7 +380,7 @@ function createApplicationDomainManager({
       addresses = await dnsLookup(domain);
     } catch {
       throw new ApplicationDomainError(
-        'Alan adı DNS üzerinde henüz çözümlenmiyor. Önce A/AAAA kaydını bu sunucuya yönlendirin.',
+        '"' + domain + '" için DNS kaydı bulunamadı. Domain sağlayıcınızda bu hostname için A kaydını sunucunun public IPv4 adresine yönlendirin; yalnız sunucuda IPv6 kullanıyorsanız AAAA kaydını da ekleyin. DNS yayıldıktan sonra tekrar Kontrol Et\'e basın.',
         409,
         'domain-dns-unresolved'
       );
