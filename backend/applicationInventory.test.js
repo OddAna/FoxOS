@@ -108,6 +108,58 @@ test('a migrated source and active candidate become one server-owned application
   assert.equal(applications[0].logoUrl, '/api/apps/discovered-custom-source/icon');
 });
 
+test('a verified server domain preference changes the primary URL without changing application identity', () => {
+  const sourceId = 'a'.repeat(64);
+  const candidateId = 'b'.repeat(64);
+  const resourceId = 'res_' + '9'.repeat(32);
+  const applications = buildApplicationInventory({
+    appStates: [{
+      id: 'source-app',
+      installed: true,
+      canManage: true,
+      name: 'Old Name',
+      externalUrl: 'https://old.example.com',
+      containerId: sourceId,
+      containerName: 'source-app',
+      state: 'exited',
+      status: 'Exited (137)'
+    }, {
+      id: 'candidate-app',
+      installed: true,
+      canManage: true,
+      managedByFoxOS: true,
+      name: 'Candidate',
+      containerId: candidateId,
+      containerName: 'candidate-app',
+      state: 'running',
+      status: 'Up 1 hour'
+    }],
+    containers: [
+      { Id: sourceId, Names: ['/source-app'], State: 'exited', Status: 'Exited (137)' },
+      { Id: candidateId, Names: ['/candidate-app'], State: 'running', Status: 'Up 1 hour' }
+    ],
+    resources: [{
+      id: resourceId,
+      provider: 'docker',
+      ownership: 'observed',
+      runtime: { containerId: sourceId },
+      management: {
+        owner: 'foxos',
+        state: 'active',
+        candidateContainerId: candidateId,
+        domains: ['old.example.com'],
+        authorityActive: true
+      }
+    }],
+    domainPreferences: { [resourceId]: 'new.example.com' }
+  });
+
+  assert.equal(applications.length, 1);
+  assert.equal(applications[0].id, resourceId);
+  assert.equal(applications[0].externalUrl, 'https://new.example.com');
+  assert.equal(applications[0].name, 'new.example.com');
+});
+
 test('multiple instances retain separate stable resource identities', () => {
   const firstContainer = 'c'.repeat(64);
   const secondContainer = 'd'.repeat(64);

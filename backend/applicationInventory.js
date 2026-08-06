@@ -49,7 +49,10 @@ function fallbackApplicationId(app) {
   return 'app_' + crypto.createHash('sha256').update(identity).digest('hex').slice(0, 32);
 }
 
-function managedExternalUrl(appStates, management) {
+function managedExternalUrl(appStates, management, primaryDomain = null) {
+  if (primaryDomain && /^[a-z0-9.-]+$/i.test(String(primaryDomain))) {
+    return 'https://' + String(primaryDomain).toLowerCase();
+  }
   const domains = management && Array.isArray(management.domains) ? management.domains : [];
   const domain = domains.find((candidate) => /^[a-z0-9.-]+$/i.test(String(candidate || '')));
   if (domain) return 'https://' + String(domain).toLowerCase();
@@ -173,7 +176,7 @@ function disambiguateDuplicateNames(applications) {
   });
 }
 
-function buildApplicationInventory({ appStates = [], containers = [], resources = [] } = {}) {
+function buildApplicationInventory({ appStates = [], containers = [], resources = [], domainPreferences = {} } = {}) {
   const installedApps = appStates.filter((app) => app && app.installed && app.containerId);
   const containerById = new Map(containers.filter(Boolean).map((container) => [container.Id, container]));
   const resourceByContainerId = new Map(resources
@@ -200,7 +203,7 @@ function buildApplicationInventory({ appStates = [], containers = [], resources 
     const sourceContainer = containerById.get(sourceContainerId);
     const runtimeContainer = candidateContainer || sourceContainer || null;
     const runtimeResource = resourceByContainerId.get(runtimeContainer && runtimeContainer.Id) || sourceResource;
-    const externalUrl = managedExternalUrl(groupStates, management);
+    const externalUrl = managedExternalUrl(groupStates, management, domainPreferences[sourceResource.id]);
 
     applications.push(applicationProjection({
       app: metadata,

@@ -77,6 +77,10 @@ const {
   APPLICATION_INVENTORY_SCHEMA_VERSION,
   buildApplicationInventory
 } = require('./applicationInventory');
+const {
+  ApplicationDomainError,
+  createApplicationDomainManager
+} = require('./applicationDomainManager');
 const { SCHEMA_VERSION: RESOURCE_SCHEMA_VERSION, createResourceRegistry } = require('./resourceRegistry');
 const {
   catalogContainerForApp,
@@ -526,6 +530,13 @@ const ingressAuthorityManager = createIngressAuthorityManager({
   ingressHttpPort: Number.parseInt(process.env.FOXOS_INGRESS_HTTP_PORT || '9080', 10),
   ingressHttpsPort: Number.parseInt(process.env.FOXOS_INGRESS_HTTPS_PORT || '9443', 10)
 });
+const applicationDomainManager = createApplicationDomainManager({
+  dataRoot: DATA_ROOT,
+  ingressAuthority: ingressAuthorityManager,
+  resourceRegistry,
+  getApplicationInventory,
+  panelBaseUrl: process.env.FOXOS_ROUTE_BASE_URL || null
+});
 const productionStatelessMigrationAdapter = createProductionStatelessMigrationAdapter({
   dataRoot: DATA_ROOT,
   dockerRequest,
@@ -672,6 +683,17 @@ function sendAdoptionError(res, error, action) {
   res.status(status).json({
     error: status >= 500 && !(error instanceof AdoptionError) ? 'Adoption operation failed' : error.message,
     code: error.code || 'adoption-error'
+  });
+}
+
+function sendApplicationDomainError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof ApplicationDomainError)
+      ? 'Alan adı işlemi tamamlanamadı'
+      : error.message,
+    code: error.code || 'application-domain-error'
   });
 }
 
@@ -930,7 +952,8 @@ async function getApplicationInventory() {
     applications: buildApplicationInventory({
       appStates: context.apps,
       containers: context.containers,
-      resources: snapshot && snapshot.resources || []
+      resources: snapshot && snapshot.resources || [],
+      domainPreferences: applicationDomainManager.primaryDomains()
     })
   };
 }
@@ -1928,6 +1951,47 @@ app.get('/api/applications', async (req, res) => {
   } catch (error) {
     console.error('Could not build the server application inventory:', error.message);
     res.status(503).json({ error: 'Sunucu uygulamaları okunamadı' });
+  }
+});
+
+app.get('/api/applications/:applicationId/domain', async (req, res) => {
+  try {
+    res.json(await applicationDomainManager.getStatus(req.params.applicationId));
+  } catch (error) {
+    sendApplicationDomainError(res, error, 'Could not read application domain status');
+  }
+});
+
+app.post('/api/applications/:applicationId/domain/plans', async (req, res) => {
+  try {
+    const plan = await applicationDomainManager.createPlan(req.params.applicationId, req.body || {});
+    res.status(201).json({ plan });
+  } catch (error) {
+    sendApplicationDomainError(res, error, 'Could not plan application domain change');
+  }
+});
+
+app.post('/api/application-domain-plans/:planId/apply', async (req, res) => {
+  try {
+    const operation = await applicationDomainManager.applyPlan(
+      req.params.planId,
+      req.body && req.body.confirmation
+    );
+    res.status(201).json({ operation });
+  } catch (error) {
+    sendApplicationDomainError(res, error, 'Could not apply application domain change');
+  }
+});
+
+app.post('/api/application-domain-operations/:operationId/rollback', async (req, res) => {
+  try {
+    const operation = await applicationDomainManager.rollbackOperation(
+      req.params.operationId,
+      req.body && req.body.confirmation
+    );
+    res.json({ operation });
+  } catch (error) {
+    sendApplicationDomainError(res, error, 'Could not roll back application domain change');
   }
 });
 

@@ -371,10 +371,14 @@ target blocks only adoption/migration operations that require restore proof.
   do not create a popup or a second window. Desktop and Settings share the same
   canonical inventory, pending lifecycle state and Docker action path; desktop
   and Store settings links target the exact application/container record.
-- [ ] Make the first editable setting the primary application domain. Reject a
-  domain already assigned to another resource, persist the desired mapping on
-  the server, apply it through server-owned routing/TLS and verify health with
-  automatic rollback.
+- [x] Make the first editable setting the primary application domain. The
+  owner-only transaction rejects panel/resource/pending-plan collisions and
+  private or unresolved DNS before mutation, rechecks drift under a persistent
+  lock, keeps the previous route live, uses server-owned Caddy ACME and ingress,
+  verifies the exact route internally and through a pinned public DNS address,
+  and removes only the new route on failed TLS/health proof. A completed change
+  keeps the old address as a reversible alias and exposes verified rollback in
+  the same Settings page.
 - [ ] Add reviewed environment/secret editing, logs, health history, resource
   limits, deployment/update and backup/restore controls from the same canonical
   application record as their safety contracts become complete.

@@ -61,6 +61,11 @@ const ApplicationManager = ({ target }) => {
   const [settingsLoading, setSettingsLoading] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [restartPolicy, setRestartPolicy] = useState('no');
+  const [domainStatus, setDomainStatus] = useState(null);
+  const [domainInput, setDomainInput] = useState('');
+  const [domainPlan, setDomainPlan] = useState(null);
+  const [domainLoading, setDomainLoading] = useState(false);
+  const [domainApplying, setDomainApplying] = useState(false);
   const [message, setMessage] = useState(null);
 
   useEffect(() => {
@@ -88,6 +93,10 @@ const ApplicationManager = ({ target }) => {
     ? applications.find((application) => application.id === selectedApplicationId) || null
     : null;
   const selectedContainerId = selectedApplication && selectedApplication.runtime.containerId || null;
+  const selectedDomainApplicationId = selectedApplication && selectedApplication.id || null;
+  const canEditSelectedDomain = Boolean(
+    selectedApplication && selectedApplication.capabilities.editDomain
+  );
 
   useEffect(() => {
     if (!selectedContainerId) {
@@ -115,6 +124,35 @@ const ApplicationManager = ({ target }) => {
 
     return () => { active = false; };
   }, [selectedContainerId]);
+
+  useEffect(() => {
+    if (!selectedDomainApplicationId || !canEditSelectedDomain) {
+      setDomainStatus(null);
+      setDomainInput('');
+      setDomainPlan(null);
+      setDomainLoading(false);
+      return undefined;
+    }
+
+    let active = true;
+    setDomainLoading(true);
+    setDomainPlan(null);
+    apiFetch(`/api/applications/${selectedDomainApplicationId}/domain`)
+      .then((response) => response.json())
+      .then((payload) => {
+        if (!active) return;
+        setDomainStatus(payload);
+        setDomainInput(payload.currentDomain || '');
+      })
+      .catch((domainError) => {
+        if (active) setMessage({ type: 'error', text: domainError.message });
+      })
+      .finally(() => {
+        if (active) setDomainLoading(false);
+      });
+
+    return () => { active = false; };
+  }, [selectedDomainApplicationId, canEditSelectedDomain]);
 
   const displayedApplications = useMemo(() => {
     const query = searchQuery.trim().toLocaleLowerCase('tr-TR');
@@ -199,10 +237,111 @@ const ApplicationManager = ({ target }) => {
     }
   };
 
+  const checkDomain = async () => {
+    if (!selectedApplication || !domainInput.trim()) return;
+    setDomainLoading(true);
+    setDomainPlan(null);
+    setMessage(null);
+    try {
+      const response = await apiFetch(`/api/applications/${selectedApplication.id}/domain/plans`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ domain: domainInput })
+      });
+      const payload = await response.json();
+      setDomainPlan(payload.plan);
+      setDomainInput(payload.plan.domain);
+    } catch (domainError) {
+      setMessage({ type: 'error', text: domainError.message });
+    } finally {
+      setDomainLoading(false);
+    }
+  };
+
+  const refreshDomainStatus = async (applicationId) => {
+    const response = await apiFetch(`/api/applications/${applicationId}/domain`);
+    const payload = await response.json();
+    setDomainStatus(payload);
+    setDomainInput(payload.currentDomain || '');
+    return payload;
+  };
+
+  const applyDomainPlan = async (plan) => {
+    if (!selectedApplication || !plan) return;
+    const applicationId = selectedApplication.id;
+    setDomainApplying(true);
+    setMessage(null);
+    try {
+      await apiFetch(`/api/application-domain-plans/${plan.planId}/apply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirmation: plan.confirmation })
+      });
+      await refreshApplications();
+      await refreshDomainStatus(applicationId);
+      setDomainPlan(null);
+      setMessage({
+        type: 'success',
+        text: `Birincil erişim adresi https://${plan.domain} olarak değiştirildi. Önceki adres açık bırakıldı.`
+      });
+    } catch (domainError) {
+      setMessage({ type: 'error', text: domainError.message });
+    } finally {
+      setDomainApplying(false);
+    }
+  };
+
+  const confirmDomainChange = () => {
+    if (!domainPlan) return;
+    showDialog({
+      title: 'Erişim Adresini Değiştir',
+      message: `https://${domainPlan.domain} sunucu yönlendirmesi, TLS ve uygulama sağlığıyla doğrulanacak. Mevcut adres işlem boyunca açık kalacak; doğrulama başarısız olursa yalnız yeni rota geri alınacak.`,
+      type: 'confirm',
+      confirmText: 'Değiştir',
+      cancelText: 'Vazgeç',
+      onConfirm: () => applyDomainPlan(domainPlan)
+    });
+  };
+
+  const rollbackDomain = () => {
+    const operation = domainStatus && domainStatus.latestOperation;
+    if (!selectedApplication || !operation || !domainStatus.rollbackConfirmation) return;
+    const applicationId = selectedApplication.id;
+    showDialog({
+      title: 'Önceki Adrese Dön',
+      message: `Birincil erişim adresi yeniden https://${operation.previousDomain} olacak. Sonradan eklenen ${operation.primaryDomain} rotası güvenle kaldırılacak.`,
+      type: 'confirm',
+      confirmText: 'Geri Dön',
+      cancelText: 'Vazgeç',
+      onConfirm: async () => {
+        setDomainApplying(true);
+        setMessage(null);
+        try {
+          await apiFetch(`/api/application-domain-operations/${operation.operationId}/rollback`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ confirmation: domainStatus.rollbackConfirmation })
+          });
+          await refreshApplications();
+          await refreshDomainStatus(applicationId);
+          setDomainPlan(null);
+          setMessage({ type: 'success', text: `Birincil erişim adresi https://${operation.previousDomain} olarak geri alındı.` });
+        } catch (domainError) {
+          setMessage({ type: 'error', text: domainError.message });
+        } finally {
+          setDomainApplying(false);
+        }
+      }
+    });
+  };
+
   const closeApplication = () => {
     setSelectedApplicationId(null);
     setTargetContainerId(null);
     setContainerSettings(null);
+    setDomainStatus(null);
+    setDomainInput('');
+    setDomainPlan(null);
     setMessage(null);
   };
 
@@ -285,6 +424,57 @@ const ApplicationManager = ({ target }) => {
           ) : (
             <div style={{ color: '#888', fontSize: '13px' }}>Bu uygulama için yayınlanmış bir web adresi bulunamadı.</div>
           )}
+
+          <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+            <div style={{ marginBottom: '8px', color: '#ccc', fontSize: '13px', fontWeight: 'bold' }}>Birincil Alan Adı</div>
+            {selectedApplication.capabilities.editDomain ? (
+              domainLoading && !domainStatus ? (
+                <div style={{ color: '#888', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}><Loader2 size={15} className="spin" /> Alan adı ayarları okunuyor...</div>
+              ) : (
+                <>
+                  <div style={{ marginBottom: '10px', color: '#888', fontSize: '13px', lineHeight: 1.5 }}>
+                    Yeni adresi önce DNS ve çakışma denetiminden geçirin. Kontrol etmek hiçbir canlı rotayı değiştirmez.
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center' }}>
+                    <input
+                      type="text"
+                      value={domainInput}
+                      onChange={(event) => { setDomainInput(event.target.value); setDomainPlan(null); }}
+                      disabled={domainApplying}
+                      placeholder="uygulama.ornek.com"
+                      autoComplete="off"
+                      spellCheck={false}
+                      style={{ flex: '1 1 280px', minWidth: 0, background: '#24242a', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 12px', borderRadius: '8px', outline: 'none', fontSize: '13px' }}
+                    />
+                    <button type="button" onClick={checkDomain} disabled={domainLoading || domainApplying || !domainInput.trim()} style={{ background: 'rgba(255,255,255,0.08)', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 14px', borderRadius: '8px', cursor: domainLoading || domainApplying || !domainInput.trim() ? 'not-allowed' : 'pointer', opacity: domainLoading || domainApplying || !domainInput.trim() ? 0.5 : 1, display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px' }}>
+                      {domainLoading ? <Loader2 size={15} className="spin" /> : <Search size={15} />} Kontrol Et
+                    </button>
+                  </div>
+
+                  {domainPlan && (
+                    <div style={{ marginTop: '12px', padding: '10px 12px', borderRadius: '8px', background: 'rgba(39,201,63,0.12)', border: '1px solid rgba(39,201,63,0.35)', color: '#75da85', fontSize: '13px', lineHeight: 1.5 }}>
+                      <div>https://{domainPlan.domain} kullanılabilir ve genel DNS üzerinde çözümleniyor.</div>
+                      <div style={{ marginTop: '10px' }}>
+                        <button type="button" onClick={confirmDomainChange} disabled={domainApplying} style={{ background: '#0ea5e9', color: '#fff', border: 'none', padding: '9px 14px', borderRadius: '8px', cursor: domainApplying ? 'wait' : 'pointer', opacity: domainApplying ? 0.5 : 1, display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px', fontWeight: 'bold' }}>
+                          {domainApplying ? <Loader2 size={15} className="spin" /> : <Save size={15} />} Bu Adrese Geç
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {domainStatus && domainStatus.latestOperation && domainStatus.latestOperation.rollbackAvailable && (
+                    <button type="button" onClick={rollbackDomain} disabled={domainApplying} style={{ marginTop: '12px', background: 'transparent', color: '#aaa', border: 'none', padding: 0, cursor: domainApplying ? 'wait' : 'pointer', textDecoration: 'underline', fontSize: '12px' }}>
+                      Önceki adrese dön: {domainStatus.latestOperation.previousDomain}
+                    </button>
+                  )}
+                </>
+              )
+            ) : (
+              <div style={{ color: '#888', fontSize: '13px', lineHeight: 1.5 }}>
+                Bu uygulama yalnız keşfedildi. Alan adı, sunucu yönetimine güvenli geçiş tamamlandıktan sonra buradan değiştirilebilir.
+              </div>
+            )}
+          </div>
         </section>
 
         <section style={{ padding: '26px 0', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
