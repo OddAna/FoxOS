@@ -127,3 +127,57 @@ test('legacy readiness waits for a browser-trusted response before traffic autho
   assert.equal(requests, 2);
   fs.rmSync(dataRoot, { recursive: true, force: true });
 });
+
+test('legacy bridge overrides the agent healthcheck with its own listening ports', async () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-ingress-bridge-health-'));
+  const proxyId = 'c'.repeat(64);
+  const agentId = 'd'.repeat(64);
+  const bridgeId = 'e'.repeat(64);
+  let createPayload = null;
+  const manager = createIngressAuthorityManager({
+    dataRoot,
+    dockerRequest: async (method, requestPath, payload) => {
+      if (method === 'GET' && requestPath === '/containers/' + proxyId + '/json') {
+        return {
+          Id: proxyId,
+          Name: '/legacy-proxy',
+          State: { Running: true },
+          NetworkSettings: { Networks: { legacy: {} } }
+        };
+      }
+      if (method === 'GET' && requestPath === '/containers/foxos/json') return { Id: agentId, Image: 'sha256:' + 'f'.repeat(64) };
+      if (method === 'GET' && requestPath === '/containers/foxos-legacy-ingress-bridge/json') {
+        throw new Error('No such container');
+      }
+      if (method === 'POST' && requestPath.startsWith('/containers/create?name=')) {
+        createPayload = payload;
+        return { Id: bridgeId };
+      }
+      if (method === 'GET' && requestPath === '/containers/' + bridgeId + '/json') {
+        return {
+          Id: bridgeId,
+          State: { Running: true },
+          Config: {
+            Labels: {
+              'com.foxos.migration.bridge': 'true',
+              'com.foxos.legacy.proxy': proxyId,
+              'com.foxos.legacy.network': 'legacy'
+            }
+          },
+          NetworkSettings: { Networks: { legacy: {}, 'foxos-routing': {} } }
+        };
+      }
+      if (method === 'POST' && requestPath === '/networks/foxos-routing/connect') return {};
+      if (method === 'POST' && requestPath === '/containers/' + bridgeId + '/start') return {};
+      throw new Error('Unexpected Docker request: ' + method + ' ' + requestPath);
+    },
+    dockerExec: async () => ({ exitCode: 0 }),
+    hostCommand: async () => ({ success: true })
+  });
+  const bridge = await manager.ensureLegacyBridge({ proxyContainerId: proxyId, legacyNetwork: 'legacy' });
+  assert.equal(bridge.containerId, bridgeId);
+  assert.deepEqual(createPayload.Healthcheck.Test.slice(0, 3), ['CMD', 'node', '-e']);
+  assert.match(createPayload.Healthcheck.Test[3], /Promise\.all\(\[80,443\]/);
+  assert.equal(createPayload.Healthcheck.Timeout, 3000000000);
+  fs.rmSync(dataRoot, { recursive: true, force: true });
+});

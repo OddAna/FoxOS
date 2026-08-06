@@ -183,6 +183,16 @@ function createIngressAuthorityManager({
           Entrypoint: ['node', '/app/legacyProxyBridge.js'],
           Cmd: [],
           Env: ['TARGET_HOST=' + proxyName],
+          Healthcheck: {
+            Test: [
+              'CMD', 'node', '-e',
+              "const net=require('node:net');const probe=(port)=>new Promise((resolve,reject)=>{const socket=net.connect({host:'127.0.0.1',port},()=>{socket.destroy();resolve()});socket.setTimeout(1000,()=>socket.destroy(new Error('timeout')));socket.on('error',reject)});Promise.all([80,443].map(probe)).then(()=>process.exit(0)).catch(()=>process.exit(1))"
+            ],
+            Interval: 30000000000,
+            Timeout: 3000000000,
+            StartPeriod: 5000000000,
+            Retries: 3
+          },
           Labels: {
             'com.foxos.managed': 'true',
             'com.foxos.temporary': 'legacy-ingress-bridge',
