@@ -213,6 +213,34 @@ test('domain aliases sharing one path and port compile to one executable health 
   assert.equal(contract.uiReview.healthTargetSelectionRequired, false);
 });
 
+test('a safe Docker HTTP health target overrides the public route path without changing routes', () => {
+  const resource = observedResource({
+    runtime: {
+      ...observedResource().runtime,
+      health: {
+        configured: true,
+        status: 'healthy',
+        httpTarget: {
+          protocol: 'http',
+          privatePort: 8080,
+          path: '/healthz',
+          source: 'docker-http-healthcheck'
+        }
+      }
+    },
+    ports: [{ privatePort: 8080, protocol: 'tcp', hostIp: null, hostPort: null }],
+    routes: [{ domain: 'app.example.test', path: '/', tls: true, privatePort: 8080 }]
+  });
+  const contract = harness({ resource, manifest: applicationManifest(resource) }).compile();
+
+  assert.equal(contract.readiness.status, 'backend-contract-ready-ui-configuration-required');
+  assert.equal(contract.candidate.health.privatePort, 8080);
+  assert.equal(contract.candidate.health.path, '/healthz');
+  assert.equal(contract.candidate.health.source, 'docker-http-healthcheck');
+  assert.equal(contract.candidate.health.selectionRequired, false);
+  assert.equal(contract.routes[0].path, '/');
+});
+
 test('exact local Docker image ID compiles without inventing a registry digest', () => {
   const resource = observedResource({
     ports: [{ privatePort: 8080, protocol: 'tcp', hostIp: null, hostPort: null }],

@@ -72,6 +72,21 @@ function observedPrivatePorts(resource) {
     .map((port) => port.privatePort))).sort((left, right) => left - right);
 }
 
+function observedDockerHealthTarget(resource, routes) {
+  const target = resource && resource.runtime && resource.runtime.health && resource.runtime.health.httpTarget;
+  if (
+    !target || target.source !== 'docker-http-healthcheck' || target.protocol !== 'http' ||
+    !Number.isInteger(target.privatePort) || target.privatePort < 1 || target.privatePort > 65535 ||
+    !ROUTE_PATH_PATTERN.test(String(target.path || '')) || String(target.path).includes(':redacted-') ||
+    !routes.some((route) => route.upstreamPrivatePort === target.privatePort)
+  ) return null;
+  return {
+    privatePort: target.privatePort,
+    path: String(target.path),
+    source: 'docker-http-healthcheck'
+  };
+}
+
 function normalizedRoutes(resource, blockers) {
   const ports = observedPrivatePorts(resource);
   const values = [];
@@ -330,14 +345,15 @@ function createStatelessMigrationManifestCompiler({
     const routes = normalizedRoutes(resource, blockers);
     const environment = safeEnvironment(manifest.desired && manifest.desired.environment, blockers, resource.id);
     const ingressPorts = Array.from(new Set(routes.map((route) => route.upstreamPrivatePort))).sort((left, right) => left - right);
-    const healthTargets = Array.from(new Map(routes.map((route) => [
+    const routeHealthTargets = Array.from(new Map(routes.map((route) => [
       canonicalJson({ privatePort: route.upstreamPrivatePort, path: route.path }),
-      { privatePort: route.upstreamPrivatePort, path: route.path }
+      { privatePort: route.upstreamPrivatePort, path: route.path, source: 'observed-route' }
     ])).values()).sort((left, right) => (
       left.privatePort - right.privatePort || left.path.localeCompare(right.path)
     ));
-    const healthSelectionRequired = healthTargets.length !== 1;
-    const healthTarget = healthTargets.length === 1 ? healthTargets[0] : null;
+    const dockerHealthTarget = observedDockerHealthTarget(resource, routes);
+    const healthSelectionRequired = !dockerHealthTarget && routeHealthTargets.length !== 1;
+    const healthTarget = dockerHealthTarget || (routeHealthTargets.length === 1 ? routeHealthTargets[0] : null);
     if (routes.length > 0 && healthSelectionRequired) {
       blockers.push(blocker(
         'multiple-health-targets-not-executable',
@@ -394,6 +410,7 @@ function createStatelessMigrationManifestCompiler({
           protocol: 'http',
           privatePort: healthTarget ? healthTarget.privatePort : null,
           path: healthTarget ? healthTarget.path : null,
+          source: healthTarget ? healthTarget.source : null,
           acceptedStatusMinimum: 200,
           acceptedStatusMaximum: 399,
           reviewRequired: true,

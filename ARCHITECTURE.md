@@ -685,14 +685,19 @@ environment, persistence, dependency and classification failures still block.
 The contract is fingerprinted into the stateless review plan and cannot be
 changed after UI approval without invalidating that approval.
 
-Production construction also exposes a Settings review interface. It
-selects one observed route as the bounded HTTP health target, displays and
-confirms the complete compiler-owned candidate runtime specification, and
-requires separate confirmation plus a replaceable certificate adapter choice
-for every compiled route. The browser is not authority: the allowlisted record
-is owner-only on the server and is bound to the stateless plan, whole-server
-plan, registry snapshot, resource, manifest revision, evidence fingerprint and
-execution contract. Registry or contract drift makes it stale.
+Production construction also exposes a Settings review interface. The Registry
+may extract only a credential-free local HTTP port and path from an existing
+Docker health check; it never stores or replays the health command. When that
+bounded target matches an observed route port, the compiler prefers it over the
+public route path and the review binds a route exposing the same port. Otherwise
+an unambiguous observed route remains the fallback health target. The interface
+displays and confirms the complete compiler-owned candidate runtime
+specification and requires separate confirmation plus a replaceable certificate
+adapter choice for every compiled route. The browser is not authority: the
+allowlisted record is owner-only on the server and is bound to the stateless
+plan, whole-server plan, registry snapshot, resource, manifest revision,
+evidence fingerprint and execution contract. Registry or contract drift makes
+it stale.
 
 The one-click run may populate the same allowlisted review automatically from
 unambiguous observed routes and compiler-owned runtime defaults. This is not a

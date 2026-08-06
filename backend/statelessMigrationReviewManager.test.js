@@ -36,6 +36,10 @@ function executionContract(overrides = {}) {
         writableMounts: 0
       },
       health: {
+        protocol: 'http',
+        privatePort: 8080,
+        path: '/',
+        source: 'observed-route',
         acceptedStatusMinimum: 200,
         acceptedStatusMaximum: 399
       }
@@ -146,6 +150,20 @@ test('persists a complete plan-bound review without opening the execution gate',
   )).mode & 0o777, 0o600);
 });
 
+test('review binds the compiler-owned Docker health path instead of replacing it with the route path', () => {
+  const contract = executionContract();
+  contract.candidate.health.path = '/healthz';
+  contract.candidate.health.source = 'docker-http-healthcheck';
+  const context = harness(contract);
+  const record = context.manager.save(completeInput());
+
+  assert.equal(record.configuration.healthTarget.routeId, ROUTE_A);
+  assert.equal(record.configuration.healthTarget.privatePort, 8080);
+  assert.equal(record.configuration.healthTarget.path, '/healthz');
+  assert.equal(record.configuration.healthTarget.source, 'docker-http-healthcheck');
+  assert.equal(record.configuration.routes[0].path, '/');
+});
+
 test('saves an incomplete review and returns exact missing review blockers', () => {
   const context = harness();
   assert.equal(context.manager.status(STATELESS_PLAN_ID).defaults.healthRouteId, null);
@@ -176,6 +194,10 @@ test('rejects configuration tampering and blocked execution contracts', () => {
     ...completeInput(),
     healthRouteId: 'smroute_' + '9'.repeat(24)
   }), (error) => error.code === 'health-target-not-in-contract');
+  assert.throws(() => context.manager.save({
+    ...completeInput(),
+    healthRouteId: ROUTE_B
+  }), (error) => error.code === 'health-route-port-mismatch');
   assert.throws(() => context.manager.save({
     ...completeInput(),
     routes: [{ routeId: ROUTE_A, confirmed: true, certificateAdapter: 'vendor-account' }]

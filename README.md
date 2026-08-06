@@ -643,7 +643,9 @@ or drifted resources remain blocked before traffic changes.
 One authenticated `Geçişi Başlat` action performs the complete transaction:
 
 1. Revalidate the Registry snapshot, source container identity, image,
-   environment, route, proxy and current public health.
+   environment, route, proxy and current health. When Docker already defines a
+   credential-free local HTTP health target, FoxOS uses that exact port and path
+   instead of assuming the public route path is also a health endpoint.
 2. Keep the source running and create a separate constrained candidate on
    FoxOS-owned routing and egress networks, with no host port or writable mount.
 3. Bridge discovered server-local URL dependencies through operation-scoped
@@ -673,6 +675,11 @@ window instead of treating the first connection race as an application
 failure. The first response status is checked against the reviewed `200-399`
 contract; attempt count, status and container exit/OOM state are retained as
 value-free diagnostics, and the migration run retains the exact operation ID.
+Resource discovery stores only the normalized local health protocol, private
+port and path. It does not copy the Docker health command, headers, credentials,
+query strings or non-local hosts. The public domain/path route remains unchanged
+when a distinct endpoint such as `/healthz` is used for source, candidate,
+staged-route, cutover and rollback health proofs.
 
 The transaction has no method that can stop or recreate the source, detach the
 provider, delete provider state or perform destructive source cleanup. A

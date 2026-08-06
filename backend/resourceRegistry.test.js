@@ -7,6 +7,7 @@ const {
   createResourceRegistry,
   detectConflicts,
   identityAliases,
+  parseDockerHttpHealthTarget,
   parseTraefikRoutes,
   readFoxosMigrationManagement,
   resolveResourceId,
@@ -319,6 +320,38 @@ test('route and label normalization keeps only migration-safe fields', () => {
   });
   assert.equal(secretPathRoutes[0].path.startsWith('/webhook/:redacted-'), true);
   assert.equal(secretPathRoutes[0].path.includes('abcdefghijklmnopqrstuvwxyz123456'), false);
+});
+
+test('Docker health discovery retains only a credential-free local HTTP target', () => {
+  const ports = [{ privatePort: 8080, protocol: 'tcp' }];
+  assert.deepEqual(parseDockerHttpHealthTarget({
+    Test: ['CMD-SHELL', 'curl --fail --silent http://localhost:8080/healthz || exit 1']
+  }, ports), {
+    protocol: 'http',
+    privatePort: 8080,
+    path: '/healthz',
+    source: 'docker-http-healthcheck'
+  });
+  assert.deepEqual(parseDockerHttpHealthTarget({
+    Test: ['CMD', 'wget', '--spider', 'http://127.0.0.1:8080/ready']
+  }, ports), {
+    protocol: 'http',
+    privatePort: 8080,
+    path: '/ready',
+    source: 'docker-http-healthcheck'
+  });
+  assert.equal(parseDockerHttpHealthTarget({
+    Test: ['CMD-SHELL', 'curl -H "Authorization: secret" http://localhost:8080/healthz']
+  }, ports), null);
+  assert.equal(parseDockerHttpHealthTarget({
+    Test: ['CMD-SHELL', 'curl http://localhost:8080/healthz?token=secret']
+  }, ports), null);
+  assert.equal(parseDockerHttpHealthTarget({
+    Test: ['CMD-SHELL', 'curl http://metadata.example:8080/healthz']
+  }, ports), null);
+  assert.equal(parseDockerHttpHealthTarget({
+    Test: ['CMD-SHELL', 'curl http://localhost:9090/healthz']
+  }, ports), null);
 });
 
 test('FoxOS gateway stays protected while being classified as the FoxOS proxy', () => {

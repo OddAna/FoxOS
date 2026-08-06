@@ -173,6 +173,18 @@ function createStatelessMigrationReviewManager({
         'health-target-not-in-contract'
       );
     }
+    const contractHealth = contract.candidate.health;
+    const selectedHealthRoute = healthRouteId ? routeById.get(healthRouteId) : null;
+    if (
+      selectedHealthRoute &&
+      selectedHealthRoute.upstreamPrivatePort !== contractHealth.privatePort
+    ) {
+      throw new StatelessMigrationReviewError(
+        'The selected health route does not expose the reviewed health port',
+        409,
+        'health-route-port-mismatch'
+      );
+    }
 
     const suppliedRoutes = Array.isArray(input.routes) ? input.routes : [];
     const suppliedById = new Map();
@@ -211,7 +223,7 @@ function createStatelessMigrationReviewManager({
       blockers.push(reviewBlocker(
         'health-target-not-reviewed',
         'health',
-        'Select and review one observed route as the candidate health target.'
+        'Select and review one observed route that exposes the candidate health port.'
       ));
     }
     const runtimeConfirmed = input.runtimeConfirmed === true;
@@ -258,8 +270,9 @@ function createStatelessMigrationReviewManager({
       healthTarget: healthRoute ? {
         routeId: healthRoute.routeId,
         protocol: 'http',
-        privatePort: healthRoute.upstreamPrivatePort,
-        path: healthRoute.path,
+        privatePort: contractHealth.privatePort,
+        path: contractHealth.path,
+        source: contractHealth.source || 'observed-route',
         acceptedStatusMinimum: contract.candidate.health.acceptedStatusMinimum,
         acceptedStatusMaximum: contract.candidate.health.acceptedStatusMaximum
       } : null,
