@@ -9,6 +9,7 @@ const RESOURCE_ID_PATTERN = /^res_[a-f0-9]{32}$/;
 const CONTAINER_ID_PATTERN = /^[a-f0-9]{12,64}$/;
 const IMAGE_ID_PATTERN = /^sha256:[a-f0-9]{64}$/;
 const HOSTNAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,252}$/;
+const APPLICATION_DOMAIN_PATTERN = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const EXECUTABLE_PATTERN = /^(?:\/[a-zA-Z0-9._+/@-]+|[a-zA-Z0-9._+-]+)$/;
 const DEFAULT_CANDIDATE_HEALTH_ATTEMPTS = 60;
 const DEFAULT_CANDIDATE_HEALTH_INTERVAL_MS = 500;
@@ -31,6 +32,67 @@ class ProductionStatelessMigrationError extends Error {
     this.statusCode = statusCode;
     this.code = code;
   }
+}
+
+function applicationSlug(value) {
+  return String(value || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/-{2,}/g, '-')
+    .slice(0, 53)
+    .replace(/-+$/g, '');
+}
+
+function isTemporaryApplicationDomain(domain) {
+  return domain === 'localhost' || domain.endsWith('.localhost') ||
+    domain.endsWith('.sslip.io') || domain.endsWith('.nip.io') || domain.endsWith('.invalid');
+}
+
+function cleanApplicationFallback(value) {
+  return String(value || '')
+    .trim()
+    .replace(/-[a-z0-9]{20,32}$/i, '')
+    .replace(/(?:^|[-_.])main$/i, '')
+    .replace(/[-_.]+$/g, '');
+}
+
+function applicationRuntimeIdentity(resource, routes = []) {
+  const candidates = (routes || []).map((route) => ({
+    domain: String(route && route.domain || '').trim().toLowerCase().replace(/\.$/, ''),
+    path: String(route && route.path || '/')
+  })).filter((route) => (
+    APPLICATION_DOMAIN_PATTERN.test(route.domain) && !isTemporaryApplicationDomain(route.domain)
+  )).sort((left, right) => (
+    Number(left.domain.startsWith('www.')) - Number(right.domain.startsWith('www.')) ||
+    left.domain.split('.').length - right.domain.split('.').length ||
+    left.domain.length - right.domain.length ||
+    left.domain.localeCompare(right.domain) ||
+    left.path.localeCompare(right.path)
+  ));
+  const canonicalRoute = candidates[0] || null;
+  const safeLabels = resource && resource.provenance && resource.provenance.safeLabels || {};
+  const fallback = cleanApplicationFallback(
+    safeLabels['com.foxos.app.name'] ||
+    resource && resource.provenance && resource.provenance.service ||
+    resource && resource.name
+  );
+  const routePath = canonicalRoute && canonicalRoute.path !== '/'
+    ? applicationSlug(canonicalRoute.path)
+    : '';
+  const displayName = canonicalRoute ? canonicalRoute.domain : fallback;
+  const slug = applicationSlug([displayName, routePath].filter(Boolean).join('-'));
+  if (!slug) {
+    throw new ProductionStatelessMigrationError(
+      'A clear application name could not be derived from the reviewed route or service identity',
+      409,
+      'application-runtime-name-unavailable'
+    );
+  }
+  const name = 'foxos-app-' + slug;
+  return { appId: slug, displayName, name, alias: name };
 }
 
 function ensureDirectory(directory) {
@@ -641,8 +703,8 @@ function createProductionStatelessMigrationAdapter({
           'candidate-startup-contract-unsupported'
         );
       }
-      const alias = 'foxos-sm-' + operationId.slice(-24);
-      const name = 'foxos-stateless-' + operationId.slice(-20);
+      const application = applicationRuntimeIdentity(resource, plan.executionContract.routes);
+      const { alias, name } = application;
       const exposedPorts = Object.fromEntries(contract.ingressPorts.map((port) => [port + '/tcp', {}]));
       const candidateEnvironment = environmentForStartup(
         rewriteEnvironmentDependencies(environment.resolved, adapterState.dependencies),
@@ -662,6 +724,8 @@ function createProductionStatelessMigrationAdapter({
         Env: candidateEnvironment,
         Labels: {
           'com.foxos.managed': 'true',
+          'com.foxos.app.id': application.appId,
+          'com.foxos.app.name': application.displayName,
           'com.foxos.temporary': 'stateless-migration-candidate',
           'com.foxos.migration.source-resource-id': resource.id,
           'com.foxos.stateless-migration.id': operationId,
@@ -707,7 +771,10 @@ function createProductionStatelessMigrationAdapter({
       }
       adapterState.candidate = {
         containerId: candidate.Id,
+        name,
         alias,
+        appId: application.appId,
+        displayName: application.displayName,
         imageId: candidate.Image,
         privatePort: contract.health.privatePort,
         startupKind: startup.kind,
@@ -718,6 +785,8 @@ function createProductionStatelessMigrationAdapter({
       return {
         candidateId: operationId,
         containerId: candidate.Id,
+        containerName: name,
+        applicationName: application.displayName,
         networkId: routingNetwork,
         networkName: routingNetwork,
         revisionId: plan.executionContract.contractId,
@@ -1200,6 +1269,7 @@ function createProductionStatelessMigrationAdapter({
 module.exports = {
   PRODUCTION_STATELESS_ADAPTER_SCHEMA_VERSION,
   ProductionStatelessMigrationError,
+  applicationRuntimeIdentity,
   createProductionStatelessMigrationAdapter,
   capabilityProfileForStartup,
   dependencyBridgeHealthcheck,

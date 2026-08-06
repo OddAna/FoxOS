@@ -5,6 +5,7 @@ const path = require('node:path');
 const test = require('node:test');
 const { adapterStatus } = require('./statelessMigrationManager');
 const {
+  applicationRuntimeIdentity,
   capabilityProfileForStartup,
   createProductionStatelessMigrationAdapter,
   dependencyBridgeHealthcheck,
@@ -17,6 +18,34 @@ const {
   startupContractFromObservation,
   rewriteEnvironmentDependencies
 } = require('./productionStatelessMigrationAdapter');
+
+test('application runtime names use the clearest public route instead of migration jargon', () => {
+  assert.deepEqual(applicationRuntimeIdentity({
+    name: 'firas-daas-site',
+    provenance: { service: 'firas-daas-site', safeLabels: {} }
+  }, [
+    { domain: 'firas.esenburak.com', path: '/' },
+    { domain: 'www.firasdaas.com', path: '/' },
+    { domain: 'firasdaas.com', path: '/' }
+  ]), {
+    appId: 'firasdaas-com',
+    displayName: 'firasdaas.com',
+    name: 'foxos-app-firasdaas-com',
+    alias: 'foxos-app-firasdaas-com'
+  });
+});
+
+test('temporary preview domains fall back to the understandable application service name', () => {
+  assert.deepEqual(applicationRuntimeIdentity({
+    name: 'provider-generated-name',
+    provenance: { service: 'minilauncher-update-channel', safeLabels: {} }
+  }, [{ domain: 'preview.46.224.223.157.sslip.io', path: '/' }]), {
+    appId: 'minilauncher-update-channel',
+    displayName: 'minilauncher-update-channel',
+    name: 'foxos-app-minilauncher-update-channel',
+    alias: 'foxos-app-minilauncher-update-channel'
+  });
+});
 
 test('health routing uses the reviewed private port while Docker health remains the source gate', () => {
   const health = { privatePort: 8080, path: '/healthz' };
@@ -265,6 +294,7 @@ test('candidate creation falls back to matching immutable image defaults with en
     User: ''
   };
   let createPayload = null;
+  let createPath = null;
   const source = {
     Id: sourceId,
     Image: imageId,
@@ -280,6 +310,7 @@ test('candidate creation falls back to matching immutable image defaults with en
     }
     if (method === 'POST' && requestPath.startsWith('/images/')) return {};
     if (method === 'POST' && requestPath.startsWith('/containers/create?name=')) {
+      createPath = requestPath;
       createPayload = payload;
       return { Id: candidateId };
     }
@@ -297,7 +328,12 @@ test('candidate creation falls back to matching immutable image defaults with en
     resourceRegistry: {
       getLatest: () => ({
         snapshotId,
-        resources: [{ id: resourceId, runtime: { containerId: sourceId, imageId } }]
+        resources: [{
+          id: resourceId,
+          name: 'provider-generated-name',
+          provenance: { service: 'app-service', safeLabels: {} },
+          runtime: { containerId: sourceId, imageId }
+        }]
       })
     },
     secretManager: {
@@ -328,6 +364,7 @@ test('candidate creation falls back to matching immutable image defaults with en
       resource: { resourceId },
       executionContract: {
         contractId: 'smcontract_' + '4'.repeat(32),
+        routes: [{ domain: 'app.example.com', path: '/' }],
         candidate: {
           environment: { revision: environmentRevision },
           runtime: {
@@ -346,6 +383,11 @@ test('candidate creation falls back to matching immutable image defaults with en
     }
   });
   assert.equal(candidate.owned, true);
+  assert.equal(candidate.containerName, 'foxos-app-app-example-com');
+  assert.equal(candidate.applicationName, 'app.example.com');
+  assert.equal(createPath, '/containers/create?name=foxos-app-app-example-com');
+  assert.equal(createPayload.Labels['com.foxos.app.id'], 'app-example-com');
+  assert.equal(createPayload.Labels['com.foxos.app.name'], 'app.example.com');
   assert.deepEqual(createPayload.Entrypoint, imageConfig.Entrypoint);
   assert.deepEqual(createPayload.Cmd, imageConfig.Cmd);
   assert.equal(createPayload.WorkingDir, '/app/');
@@ -412,7 +454,12 @@ test('candidate creation applies the reconstructed Next standalone contract', as
     resourceRegistry: {
       getLatest: () => ({
         snapshotId,
-        resources: [{ id: resourceId, runtime: { containerId: sourceId, imageId } }]
+        resources: [{
+          id: resourceId,
+          name: 'next-standalone-app',
+          provenance: { service: 'next-standalone-app', safeLabels: {} },
+          runtime: { containerId: sourceId, imageId }
+        }]
       })
     },
     secretManager: {
@@ -443,6 +490,7 @@ test('candidate creation applies the reconstructed Next standalone contract', as
       resource: { resourceId },
       executionContract: {
         contractId: 'smcontract_' + 'a'.repeat(32),
+        routes: [{ domain: 'next.example.com', path: '/' }],
         candidate: {
           environment: { revision: environmentRevision },
           runtime: {
