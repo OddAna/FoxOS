@@ -179,6 +179,26 @@ Registry drift fails closed instead of silently pointing the saved link at a
 different process. No Coolify API, proxy, network or metadata write is part of
 this path.
 
+An optional provider-neutral DNS automation boundary now backs the same access-
+link transaction. Its first adapter is Cloudflare and is configured only through
+the authenticated **Bağlantılar** page. The restricted API Token is encrypted
+with the server-local AES-256-GCM master key, stored with owner-only permissions
+and never included in a status, plan or operation response. The server keeps the
+desired hostname, address, route and exact prior-record snapshot as its own
+transaction state; Cloudflare is only the replaceable mechanism used to publish
+that state.
+
+Planning lists only the exact hostname records and performs no DNS write. Apply
+revalidates the token connection, zone, public IPv4 and record fingerprint before
+creating or updating one DNS-only A record and removing exact-hostname AAAA
+records. CNAME conflicts, multiple A records, inaccessible zones and record drift
+fail closed. A failed DNS, TLS, route or application proof restores the prior A
+and AAAA snapshot before removing the staged route; explicit rollback uses the
+same drift-checked DNS receipt. Disconnecting the adapter deletes only the local
+encrypted token/configuration and preserves published DNS records. Clean install,
+startup and ordinary host management still require no Cloudflare account, API
+token, network call or paid service.
+
 ### Implemented boundary: Disposable adoption, route and recovery cutover
 
 Disposable Adoption v1 adds the next import-draft and adoption-plan slice while

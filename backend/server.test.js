@@ -426,6 +426,8 @@ test('health is public while management APIs require a session', async () => {
   assert.equal(migrationSelectionSaveResponse.status, 401);
   const migrationRunsResponse = await fetch(baseUrl() + '/api/migration-runs');
   assert.equal(migrationRunsResponse.status, 401);
+  const connectionsResponse = await fetch(baseUrl() + '/api/connections');
+  assert.equal(connectionsResponse.status, 401);
   const migrationRunStartResponse = await fetch(baseUrl() + '/api/migration-runs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -484,6 +486,16 @@ test('setup creates an authenticated session and unlocks the workspace', async (
     authenticated: true,
     username: 'tester'
   });
+
+  const connectionsResponse = await fetch(baseUrl() + '/api/connections', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(connectionsResponse.status, 200);
+  const connections = (await connectionsResponse.json()).connections;
+  assert.equal(connections.length, 1);
+  assert.equal(connections[0].id, 'cloudflare');
+  assert.equal(connections[0].connected, false);
+  assert.equal(connections[0].tokenIncluded, false);
 
   const filesResponse = await fetch(baseUrl() + '/api/files?path=%2F', {
     headers: { Cookie: cookie }

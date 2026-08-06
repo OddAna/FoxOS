@@ -155,6 +155,7 @@ function createApplicationDomainManager({
   dockerRequest = null,
   routingNetwork = 'foxos-routing',
   panelBaseUrl = null,
+  dnsAutomation = null,
   dnsLookup = (hostname) => dns.lookup(hostname, { all: true, verbatim: true }),
   clock = () => new Date(),
   delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
@@ -168,7 +169,11 @@ function createApplicationDomainManager({
     typeof ingressAuthority.removeRoutes !== 'function' ||
     typeof ingressAuthority.httpsProbe !== 'function' ||
     !resourceRegistry || typeof resourceRegistry.getMigrationManagement !== 'function' ||
-    typeof getApplicationInventory !== 'function'
+    typeof getApplicationInventory !== 'function' ||
+    (dnsAutomation && [
+      'applyDnsPlan', 'assertPlanFresh', 'planDns', 'prepareRollback',
+      'publicDnsPlan', 'rollbackDnsChange', 'status'
+    ].some((method) => typeof dnsAutomation[method] !== 'function'))
   ) {
     throw new Error('Application domain manager requires inventory, registry and ingress adapters');
   }
@@ -380,7 +385,7 @@ function createApplicationDomainManager({
       addresses = await dnsLookup(domain);
     } catch {
       throw new ApplicationDomainError(
-        '"' + domain + '" için DNS kaydı bulunamadı. Domain sağlayıcınızda bu hostname için A kaydını sunucunun public IPv4 adresine yönlendirin; yalnız sunucuda IPv6 kullanıyorsanız AAAA kaydını da ekleyin. DNS yayıldıktan sonra tekrar Kontrol Et\'e basın.',
+        '"' + domain + '" için DNS kaydı bulunamadı. DNS’i otomatik yönetmek için Ayarlar > Bağlantılar bölümünden Cloudflare bağlayın veya bu hostname için A kaydını sunucunun public IPv4 adresine yönlendirin. DNS yayıldıktan sonra tekrar Kontrol Et\'e basın.',
         409,
         'domain-dns-unresolved'
       );
@@ -393,6 +398,69 @@ function createApplicationDomainManager({
       );
     }
     return publicDnsEvidence(addresses);
+  }
+
+  async function callDnsAutomation(method, ...args) {
+    try {
+      return await dnsAutomation[method](...args);
+    } catch (error) {
+      throw new ApplicationDomainError(
+        error.message || 'Bağlı DNS sağlayıcısı işlemi tamamlanamadı.',
+        Number.isInteger(error.statusCode) ? error.statusCode : 503,
+        error.code || 'dns-automation-failed'
+      );
+    }
+  }
+
+  async function planDns(domain) {
+    let automationStatus = null;
+    if (dnsAutomation) {
+      automationStatus = await callDnsAutomation('status');
+      const automation = await callDnsAutomation('planDns', domain);
+      if (automation) {
+        return {
+          evidence: [{ address: automation.desiredAddress, family: 4 }],
+          automation
+        };
+      }
+    }
+    try {
+      return { evidence: await resolvePublicDns(domain), automation: null };
+    } catch (error) {
+      if (automationStatus && automationStatus.connected && error.code === 'domain-dns-unresolved') {
+        throw new ApplicationDomainError(
+          `"${domain}" için DNS kaydı yok ve bağlı Cloudflare tokenı bu domainin DNS bölgesine erişemiyor. Tokena bu zone için Zone Read ve DNS Edit izni verip Bağlantılar bölümünde yeniden doğrulayın.`,
+          409,
+          'connected-dns-zone-unavailable'
+        );
+      }
+      throw error;
+    }
+  }
+
+  async function waitForExpectedDns(domain, expectedAddress) {
+    let lastFailure = null;
+    for (let attempt = 1; attempt <= probeAttempts; attempt += 1) {
+      try {
+        const evidence = await resolvePublicDns(domain);
+        if (
+          evidence.length > 0 && evidence.every((entry) => (
+            entry.family === 4 && entry.address === expectedAddress
+          ))
+        ) {
+          return evidence;
+        }
+        lastFailure = 'DNS henüz yalnız sunucunun public IPv4 adresini göstermiyor.';
+      } catch (error) {
+        lastFailure = error.message;
+      }
+      if (attempt < probeAttempts) await delay(probeIntervalMs);
+    }
+    throw new ApplicationDomainError(
+      lastFailure || 'DNS değişikliği genel resolverlar üzerinde doğrulanamadı.',
+      503,
+      'automated-dns-propagation-failed'
+    );
   }
 
   async function assertDomainAvailable(domain, applicationId, planId = null, routeOperationId = null) {
@@ -456,6 +524,9 @@ function createApplicationDomainManager({
       currentDomain: plan.currentDomain,
       domain: plan.domain,
       dns: plan.dns,
+      dnsAutomation: plan.dnsAutomation && dnsAutomation
+        ? dnsAutomation.publicDnsPlan(plan.dnsAutomation)
+        : null,
       existingAlias: plan.existingAlias,
       oldAddressPreserved: true,
       expiresAt: plan.expiresAt,
@@ -477,7 +548,8 @@ function createApplicationDomainManager({
       rollback: operation.rollback || null,
       startedAt: operation.startedAt,
       completedAt: operation.completedAt || null,
-      failure: operation.failure || null
+      failure: operation.failure || null,
+      dnsAutomation: operation.dnsAutomation || null
     };
   }
 
@@ -488,7 +560,7 @@ function createApplicationDomainManager({
       throw new ApplicationDomainError('Bu alan adı zaten uygulamanın birincil adresi.', 409, 'domain-unchanged');
     }
     await assertDomainAvailable(domain, applicationId, null, resolved.management.operationId);
-    const dnsEvidence = await resolvePublicDns(domain);
+    const dnsPlan = await planDns(domain);
     const matchingRoute = routeForDomain(resolved.authority, domain, resolved.management.operationId);
     if (matchingRoute && (
       matchingRoute.status !== 'active' || resolved.authority.domains[domain] !== 'foxos'
@@ -526,7 +598,8 @@ function createApplicationDomainManager({
       alias: resolved.route && resolved.route.alias || resolved.management.alias,
       privatePort: resolved.route && resolved.route.privatePort || resolved.management.privatePort,
       path: resolved.route && resolved.route.path || resolved.management.path || '/',
-      dns: dnsEvidence,
+      dns: dnsPlan.evidence,
+      dnsAutomation: dnsPlan.automation,
       previousPreferenceOperationId: resolved.preference && resolved.preference.operationId || null,
       status: 'ready',
       createdAt,
@@ -697,12 +770,19 @@ function createApplicationDomainManager({
     let staged = false;
     let switched = false;
     let networkAttached = false;
+    let dnsReceipt = null;
     let operation = null;
     try {
       const resolved = await resolveApplication(plan.applicationId);
       assertPlanFresh(plan, resolved);
       await assertDomainAvailable(plan.domain, plan.applicationId, plan.planId, plan.migrationOperationId);
-      const dnsEvidence = await resolvePublicDns(plan.domain);
+      let dnsEvidence;
+      if (plan.dnsAutomation) {
+        await callDnsAutomation('assertPlanFresh', plan.dnsAutomation);
+        dnsEvidence = [{ address: plan.dnsAutomation.desiredAddress, family: 4 }];
+      } else {
+        dnsEvidence = await resolvePublicDns(plan.domain);
+      }
       const existingRoute = routeForDomain(ingressAuthority.state(), plan.domain, plan.migrationOperationId);
       if (Boolean(existingRoute) !== plan.existingAlias || (existingRoute && existingRoute.routeId !== plan.routeId)) {
         throw new ApplicationDomainError('Alan adı rotası kontrolden sonra değişti.', 409, 'domain-plan-stale');
@@ -728,6 +808,10 @@ function createApplicationDomainManager({
         createdRoute: !plan.existingAlias,
         networkAttachedByOperation: false,
         dns: dnsEvidence,
+        dnsAutomation: plan.dnsAutomation && dnsAutomation
+          ? dnsAutomation.publicDnsPlan(plan.dnsAutomation)
+          : null,
+        dnsAutomationReceipt: null,
         status: 'applying',
         startedAt: now(),
         updatedAt: now()
@@ -745,6 +829,21 @@ function createApplicationDomainManager({
         connectHost: 'foxos-gateway',
         requestPath: plan.path
       }) : null;
+
+      if (plan.dnsAutomation) {
+        dnsReceipt = await callDnsAutomation('applyDnsPlan', plan.dnsAutomation);
+        if (dnsReceipt) {
+          current = state();
+          current.operations[operationId].dnsAutomationReceipt = dnsReceipt;
+          current.operations[operationId].updatedAt = now();
+          persist(current);
+        }
+        dnsEvidence = await waitForExpectedDns(plan.domain, plan.dnsAutomation.desiredAddress);
+        current = state();
+        current.operations[operationId].dns = dnsEvidence;
+        current.operations[operationId].updatedAt = now();
+        persist(current);
+      }
 
       if (plan.routeMode === 'observed-runtime') {
         networkAttached = await attachObservedTarget(plan);
@@ -812,9 +911,12 @@ function createApplicationDomainManager({
       persist(current);
       return publicOperation(operation);
     } catch (error) {
-      let rollback = { attempted: Boolean(staged || switched || networkAttached), completed: false, previousDomainPreserved: true };
-      if (staged || switched || networkAttached) {
+      let rollback = { attempted: Boolean(staged || switched || networkAttached || dnsReceipt), completed: false, previousDomainPreserved: true };
+      if (staged || switched || networkAttached || dnsReceipt) {
         try {
+          if (dnsReceipt) {
+            rollback.dns = await callDnsAutomation('rollbackDnsChange', dnsReceipt);
+          }
           const authority = ingressAuthority.state();
           const exactRoute = authority.routes && authority.routes[plan.routeId];
           if (exactRoute && exactRoute.operationId === plan.migrationOperationId && exactRoute.domain === plan.domain) {
@@ -856,21 +958,21 @@ function createApplicationDomainManager({
       persist(current);
       if (rollback.attempted && !rollback.completed) {
         throw new ApplicationDomainError(
-          'Yeni alan adı doğrulanamadı ve otomatik geri alma tamamlanamadı. Eski adres korunuyor; işlem kaydını inceleyin.',
+          'Yeni erişim linki doğrulanamadı ve otomatik DNS/rota geri alması tamamlanamadı. Eski adres korunuyor; işlem kaydını inceleyin.',
           503,
           'domain-rollback-attention-required'
         );
       }
       if (rollback.attempted && rollback.completed) {
         throw new ApplicationDomainError(
-          'Yeni alan adı doğrulanamadı. Yeni rota geri alındı; eski adres çalışmaya devam ediyor.',
+          'Yeni erişim linki doğrulanamadı. Yapılan DNS ve rota değişiklikleri geri alındı; eski adres çalışmaya devam ediyor.',
           503,
           'domain-apply-rolled-back'
         );
       }
       if (error instanceof ApplicationDomainError) throw error;
       throw new ApplicationDomainError(
-        'Yeni alan adı doğrulanamadı. Yeni rota geri alındı; eski adres çalışmaya devam ediyor.',
+        'Yeni erişim linki doğrulanamadı. Yapılan DNS ve rota değişiklikleri geri alındı; eski adres çalışmaya devam ediyor.',
         503,
         'domain-apply-rolled-back'
       );
@@ -922,20 +1024,29 @@ function createApplicationDomainManager({
       if (resolved.application.runtime.operationalState !== 'running') {
         throw new ApplicationDomainError('Uygulama çalışmadığı için geri alma doğrulanamadı.', 409, 'application-not-running');
       }
+      const exactRoute = operation.createdRoute
+        ? ingressAuthority.state().routes[operation.routeId]
+        : null;
+      if (operation.createdRoute && (
+        !exactRoute || exactRoute.domain !== operation.primaryDomain ||
+        exactRoute.operationId !== operation.migrationOperationId
+      )) {
+        throw new ApplicationDomainError('Yeni alan adı rotasının kimliği değişti.', 409, 'domain-rollback-route-stale');
+      }
+      if (operation.dnsAutomationReceipt) {
+        await callDnsAutomation('prepareRollback', operation.dnsAutomationReceipt);
+      }
 
       current = state();
       current.operations[operationId].status = 'rolling-back';
       current.operations[operationId].updatedAt = now();
       persist(current);
 
+      const dnsRollback = operation.dnsAutomationReceipt
+        ? await callDnsAutomation('rollbackDnsChange', operation.dnsAutomationReceipt)
+        : null;
+
       if (operation.createdRoute) {
-        const exactRoute = ingressAuthority.state().routes[operation.routeId];
-        if (
-          !exactRoute || exactRoute.domain !== operation.primaryDomain ||
-          exactRoute.operationId !== operation.migrationOperationId
-        ) {
-          throw new ApplicationDomainError('Yeni alan adı rotasının kimliği değişti.', 409, 'domain-rollback-route-stale');
-        }
         await ingressAuthority.switchDomain(operation.primaryDomain, 'legacy');
         await ingressAuthority.removeRoutes([operation.routeId]);
       }
@@ -983,6 +1094,7 @@ function createApplicationDomainManager({
         completed: true,
         previousDomainPreserved: true,
         previousDomainProof: restoredProof,
+        dns: dnsRollback,
         completedAt: now()
       };
       current.operations[operationId].updatedAt = now();
@@ -1025,7 +1137,8 @@ function createApplicationDomainManager({
           aliases: [],
           oldAddressPreservedDuringChange: true,
           latestOperation: null,
-          rollbackConfirmation: null
+          rollbackConfirmation: null,
+          dnsAutomation: dnsAutomation ? dnsAutomation.status() : null
         };
       }
       throw error;
@@ -1053,7 +1166,8 @@ function createApplicationDomainManager({
       latestOperation: latest ? publicOperation(latest) : null,
       rollbackConfirmation: latest && latest.status === 'completed'
         ? 'ROLL BACK APPLICATION DOMAIN ' + latest.operationId
-        : null
+        : null,
+      dnsAutomation: dnsAutomation ? dnsAutomation.status() : null
     };
   }
 

@@ -20,16 +20,19 @@ write to the host filesystem, and control the Docker daemon.
 When an HTTPS reverse proxy is in place, set `FOXOS_SECURE_COOKIE=true`.
 
 FoxOS also ships an optional, independently managed Caddy gateway. It keeps the
-direct agent port on loopback, stores certificate state and the DNS credential
-under `.foxos-data/gateway/`, and does not use a Coolify proxy, network, API,
-certificate, or container. The included first DNS adapter is Cloudflare DNS-01;
-the DNS record must remain **DNS only**, so application traffic connects
-directly to the FoxOS-owned gateway.
+direct agent port on loopback, stores certificate state under
+`.foxos-data/gateway/`, uses provider-neutral ACME HTTP-01 and does not use a
+Coolify proxy, network, API, certificate, or container. This optional gateway is
+not invoked by the base installer.
 
-The DNS credential must be limited to `Zone:Read` and `DNS:Edit` for the single
-FoxOS zone. `install-gateway.sh` writes it to an owner-only Docker secret file;
-never place it in Git, `.env`, the Caddyfile, command output, or issue reports.
-This optional gateway is not invoked by the base installer.
+The separate **Ayarlar > Bağlantılar** page can optionally connect Cloudflare
+for application access-link DNS automation. Use an API Token restricted to
+`Zone Read` and `DNS Edit` for only the required zones. FoxOS encrypts it with
+the local AES-256-GCM master key, stores it with owner-only permissions and
+never returns it through an API response. Never place the token in Git, `.env`,
+the Caddyfile, command output or issue reports. Disconnecting removes the local
+token but deliberately preserves published records so running applications do
+not lose DNS unexpectedly.
 
 ## App Store deployments
 

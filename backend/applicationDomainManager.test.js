@@ -121,8 +121,10 @@ function fixture(t, options = {}) {
     resourceRegistry,
     getApplicationInventory,
     panelBaseUrl: 'https://panel.example.com:8443',
+    dnsAutomation: options.dnsAutomation || null,
     dnsLookup: async (domain) => {
       calls.push({ kind: 'dns', domain });
+      if (options.dnsLookup) return options.dnsLookup(domain, calls);
       if (options.dnsError) throw options.dnsError;
       return options.dns || [{ address: '93.184.216.34', family: 4 }];
     },
@@ -131,6 +133,67 @@ function fixture(t, options = {}) {
     probeIntervalMs: 1
   });
   return { authority, calls, dataRoot, manager };
+}
+
+function dnsAutomation(calls, options = {}) {
+  const internalPlan = {
+    schemaVersion: 1,
+    provider: 'cloudflare',
+    connectionRevision: 'cfrev_' + '1'.repeat(32),
+    zoneId: 'a'.repeat(32),
+    zoneName: 'example.com',
+    domain: 'new.example.com',
+    desiredAddress: '93.184.216.34',
+    action: 'create',
+    mutationRequired: true,
+    removesIpv6: 1,
+    recordFingerprint: 'fingerprint'
+  };
+  const receipt = {
+    schemaVersion: 1,
+    provider: 'cloudflare',
+    connectionRevision: internalPlan.connectionRevision,
+    zoneId: internalPlan.zoneId,
+    zoneName: internalPlan.zoneName,
+    domain: internalPlan.domain,
+    desiredAddress: internalPlan.desiredAddress,
+    aAction: 'create',
+    removedAAAA: [{ id: 'b'.repeat(32), type: 'AAAA', name: internalPlan.domain }],
+    appliedA: { id: 'c'.repeat(32), type: 'A', name: internalPlan.domain, content: internalPlan.desiredAddress }
+  };
+  return {
+    planDns: async (domain) => {
+      calls.push({ kind: 'dns-provider-plan', domain });
+      return domain === internalPlan.domain ? { ...internalPlan } : null;
+    },
+    assertPlanFresh: async (plan) => {
+      calls.push({ kind: 'dns-provider-fresh', domain: plan.domain });
+      if (options.stale) throw Object.assign(new Error('DNS changed'), { code: 'cloudflare-dns-plan-stale', statusCode: 409 });
+      return plan;
+    },
+    applyDnsPlan: async (plan) => {
+      calls.push({ kind: 'dns-provider-apply', domain: plan.domain });
+      return options.noMutation ? null : { ...receipt };
+    },
+    prepareRollback: async (value) => {
+      calls.push({ kind: 'dns-provider-prepare-rollback', domain: value.domain });
+      return {};
+    },
+    rollbackDnsChange: async (value) => {
+      calls.push({ kind: 'dns-provider-rollback', domain: value.domain });
+      return { provider: 'cloudflare', domain: value.domain, restored: true };
+    },
+    publicDnsPlan: (plan) => ({
+      provider: 'cloudflare',
+      providerName: 'Cloudflare',
+      zone: plan.zoneName,
+      publicIpv4: plan.desiredAddress,
+      action: plan.action,
+      mutationRequired: plan.mutationRequired,
+      removesIpv6: plan.removesIpv6
+    }),
+    status: () => ({ id: 'cloudflare', connected: true, ready: true, publicIpv4: internalPlan.desiredAddress })
+  };
 }
 
 function observedFixture(t, options = {}) {
@@ -365,10 +428,81 @@ test('unresolved DNS returns the exact access-link record action', async (t) => 
     (error) => (
       error.code === 'domain-dns-unresolved' &&
       error.message.includes('"missing.example.com" için DNS kaydı bulunamadı') &&
+      error.message.includes('Ayarlar > Bağlantılar') &&
       error.message.includes('A kaydını sunucunun public IPv4 adresine yönlendirin') &&
       error.message.includes("tekrar Kontrol Et'e basın")
     )
   );
+});
+
+test('connected DNS automation keeps planning read-only and applies and rolls back DNS with the route', async (t) => {
+  const sharedCalls = [];
+  const automation = dnsAutomation(sharedCalls);
+  const result = fixture(t, { dnsAutomation: automation });
+  const calls = result.calls;
+  for (const call of sharedCalls) calls.push(call);
+  const originalPush = sharedCalls.push.bind(sharedCalls);
+  sharedCalls.push = (...entries) => {
+    calls.push(...entries);
+    return originalPush(...entries);
+  };
+
+  const plan = await result.manager.createPlan(RESOURCE_ID, { domain: 'new.example.com' });
+  assert.equal(plan.dnsAutomation.provider, 'cloudflare');
+  assert.equal(plan.dnsAutomation.mutationRequired, true);
+  assert.equal(plan.dnsAutomation.removesIpv6, 1);
+  assert.equal(calls.some((call) => call.kind === 'dns'), false);
+  assert.equal(calls.some((call) => call.kind === 'dns-provider-apply'), false);
+
+  const operation = await result.manager.applyPlan(plan.planId, plan.confirmation);
+  assert.equal(operation.status, 'completed');
+  assert.equal(operation.dnsAutomation.provider, 'cloudflare');
+  const dnsApplyIndex = calls.findIndex((call) => call.kind === 'dns-provider-apply');
+  const routeStageIndex = calls.findIndex((call) => call.kind === 'stage');
+  assert.ok(dnsApplyIndex >= 0 && dnsApplyIndex < routeStageIndex);
+
+  const status = await result.manager.getStatus(RESOURCE_ID);
+  assert.equal(status.dnsAutomation.connected, true);
+  await result.manager.rollbackOperation(operation.operationId, status.rollbackConfirmation);
+  const dnsPrepareIndex = calls.findIndex((call) => call.kind === 'dns-provider-prepare-rollback');
+  const dnsRollbackIndex = calls.findIndex((call) => call.kind === 'dns-provider-rollback');
+  const routeRemoveIndex = calls.findIndex((call) => call.kind === 'remove');
+  assert.ok(dnsPrepareIndex >= 0 && dnsPrepareIndex < dnsRollbackIndex);
+  assert.ok(dnsRollbackIndex >= 0 && dnsRollbackIndex < routeRemoveIndex);
+});
+
+test('a connected token that cannot access the requested zone returns the exact permission action', async (t) => {
+  const providerCalls = [];
+  const { manager } = fixture(t, {
+    dnsAutomation: dnsAutomation(providerCalls),
+    dnsError: new Error('ENOTFOUND')
+  });
+  await assert.rejects(
+    manager.createPlan(RESOURCE_ID, { domain: 'missing.other.net' }),
+    (error) => (
+      error.code === 'connected-dns-zone-unavailable' &&
+      error.message.includes('Zone Read') && error.message.includes('DNS Edit')
+    )
+  );
+});
+
+test('a failed automated access-link proof restores both Cloudflare DNS and the old route', async (t) => {
+  const calls = [];
+  const automation = dnsAutomation(calls);
+  const result = fixture(t, {
+    dnsAutomation: automation,
+    failProbe: (input) => input.hostname === 'new.example.com'
+  });
+  const plan = await result.manager.createPlan(RESOURCE_ID, { domain: 'new.example.com' });
+
+  await assert.rejects(
+    result.manager.applyPlan(plan.planId, plan.confirmation),
+    { code: 'domain-apply-rolled-back' }
+  );
+  assert.equal(calls.some((call) => call.kind === 'dns-provider-apply'), true);
+  assert.equal(calls.some((call) => call.kind === 'dns-provider-rollback'), true);
+  assert.equal(result.authority.domains['old.example.com'], 'foxos');
+  assert.equal(Object.values(result.authority.routes).some((route) => route.domain === 'new.example.com'), false);
 });
 
 test('a domain observed on another server resource is rejected even when not active in ingress', async (t) => {

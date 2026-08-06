@@ -203,25 +203,34 @@ to compromised root access.
 - Use an installed application's three-dot menu to open, start, stop, restart,
   or manage that exact instance. **Ayarlar** opens as a full page inside the
   same Store window; it is not a popup or a separate browser window.
-- Open **Ayarlar > Erişim > Erişim Linki** to check and change an application's
-  public HTTPS address. This also works for a discovered, running web
+- Open **Ayarlar > Bağlantılar** to optionally connect Cloudflare. Create a
+  restricted API Token with `Zone Read` and `DNS Edit`; FoxOS verifies the token
+  and accessible zones, detects the server's public IPv4 address, encrypts the
+  token with the server-local master key and never returns it through the API.
+  Cloudflare is the first connection in this provider-neutral section; future
+  API and account connections can be added without making them part of the core
+  installation.
+- Open **Ayarlar > Uygulama Yöneticisi > Erişim Linki** to check and change an
+  application's public HTTPS address. This also works for a discovered, running web
   application when its target container and private HTTP port are unambiguous;
   a full workload migration is not required. **Mevcut kurulumundan çalışıyor**
   is an ownership status, not an application error or an access-link lock: the
   workload is still running from its existing server configuration instead of
-  a finalized server-owned manifest. Create an `A` record for the new hostname
-  at your DNS provider and point it to the server's public IPv4 address first;
-  add `AAAA` only when the server actually publishes IPv6. FoxOS does not need
-  or modify a DNS-provider account. **Kontrol Et** performs DNS and ownership
-  checks without changing the running application, and its result is shown
-  beside this control. The separate confirmed change attaches only that exact
-  container to the internal routing network, keeps the previous address live,
-  obtains TLS through the server-owned Caddy gateway, verifies the exact route
-  internally and publicly, and removes both the new route and exact network
-  attachment if proof fails. The successful operation can be returned to the
-  previous address from the same page. Ambiguous multi-port services fail
-  closed with a concrete reason. No Cloudflare account, DNS API token or paid
-  certificate service is required.
+  a finalized server-owned manifest. When a connected Cloudflare zone covers
+  the requested hostname, **Kontrol Et** reads the current records and prepares
+  a plan without changing DNS or the running application. Only the separately
+  confirmed **Bu Adrese Geç** transaction creates or updates the exact DNS-only
+  `A` record to the detected server IPv4 and removes exact-hostname `AAAA`
+  records that would send traffic elsewhere. The prior DNS records are stored
+  in the operation receipt and restored if DNS, TLS, routing or health proof
+  fails. A CNAME conflict, multiple A records or post-check drift stops the
+  operation before an unsafe overwrite. The same transaction attaches only the
+  exact container to the internal routing network, keeps the previous address
+  live, obtains TLS through the server-owned Caddy gateway and verifies the exact
+  route internally and publicly. The successful operation can be returned to
+  the previous address from the same page, including its DNS state. Without a
+  connection, users can still point an `A` record to the server manually.
+  Cloudflare, a DNS API token and paid Cloudflare services remain optional.
 - Open **Terminal** to execute commands on the host.
 - Open **Dosyalar**, then **Sunucu**, to browse the host filesystem.
 - Use **Masaüstü** for FoxOS-only workspace files that should persist without
