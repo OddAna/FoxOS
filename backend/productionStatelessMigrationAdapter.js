@@ -61,6 +61,29 @@ function dependencyFromValue(value) {
   }
 }
 
+function dependencyBridgeHealthcheck(dependencyPort) {
+  if (!Number.isInteger(dependencyPort) || dependencyPort < 1 || dependencyPort > 65535) {
+    throw new ProductionStatelessMigrationError(
+      'Dependency bridge health port is invalid',
+      400,
+      'dependency-bridge-health-port-invalid'
+    );
+  }
+  const probeScript = [
+    "const fs=require('node:fs')",
+    "const port=Number(process.argv[1]).toString(16).padStart(4,'0').toUpperCase()",
+    "const listening=['/proc/net/tcp','/proc/net/tcp6'].some((file)=>{try{return fs.readFileSync(file,'utf8').trim().split('\\n').slice(1).some((line)=>{const fields=line.trim().split(/\\s+/);return fields[1].split(':').at(-1)===port&&fields[3]==='0A'})}catch{return false}})",
+    'process.exit(listening?0:1)'
+  ].join(';');
+  return {
+    Test: ['CMD', 'node', '-e', probeScript, String(dependencyPort)],
+    Interval: 30000000000,
+    Timeout: 3000000000,
+    StartPeriod: 5000000000,
+    Retries: 3
+  };
+}
+
 function rewriteEnvironmentDependencies(entries, dependencies) {
   const aliases = new Map((dependencies || []).map((dependency) => [
     dependency.hostname + ':' + dependency.port,
@@ -508,6 +531,7 @@ function createProductionStatelessMigrationAdapter({
         'com.foxos.temporary': 'stateless-dependency-bridge',
         'com.foxos.stateless-migration.id': operationId
       },
+      Healthcheck: dependencyBridgeHealthcheck(dependency.port),
       ExposedPorts: { [dependency.port + '/tcp']: {} },
       HostConfig: {
         NetworkMode: dependency.legacyNetwork,
@@ -1178,6 +1202,7 @@ module.exports = {
   ProductionStatelessMigrationError,
   createProductionStatelessMigrationAdapter,
   capabilityProfileForStartup,
+  dependencyBridgeHealthcheck,
   dependencyFromValue,
   environmentForStartup,
   immutableImageFallbackAllowed,
