@@ -660,7 +660,12 @@ One authenticated `Geçişi Başlat` action performs the complete transaction:
    temporary FoxOS-owned bridge to the existing proxy.
 6. Require eight successful public TLS, route-identity and candidate-identity
    samples with zero unavailable responses. Any failed post-switch proof routes
-   traffic back to the continuously running source and verifies rollback.
+   traffic back to the still-running source and verifies rollback.
+7. After the completed proof, verify the active candidate three more times and
+   stop — but do not delete or recreate — the old source as a cold rollback
+   target. A later rollback starts that exact container, proves it through the
+   preserved legacy proxy before switching traffic, and only then restores the
+   legacy route.
 
 Candidate startup uses the verified running-process contract, not a mutable
 process title or an unreviewed provider wrapper. Ordinary argv is accepted only
@@ -681,11 +686,13 @@ query strings or non-local hosts. The public domain/path route remains unchanged
 when a distinct endpoint such as `/healthz` is used for source, candidate,
 staged-route, cutover and rollback health proofs.
 
-The transaction has no method that can stop or recreate the source, detach the
-provider, delete provider state or perform destructive source cleanup. A
-successful cutover leaves the source available as the exact rollback target.
-Retiring the old proxy, provider networks, database runtime or source container
-is a later per-resource audit, never an automatic side effect of this step.
+The transaction cannot stop the source before or during traffic proof, recreate
+it, detach the provider, delete provider state or perform destructive cleanup.
+After verified completion it may park only the exact source container in a
+stopped cold-rollback state to avoid duplicate RAM use. Container metadata,
+image, provider network and rollback identity remain intact. Retiring the old
+proxy, provider networks, database runtime or source container record is a later
+per-resource audit, never an automatic side effect of this step.
 
 ```bash
 docker compose exec -T foxos node /app/statelessMigrationCli.js status

@@ -120,8 +120,12 @@
   FoxOS-owned TLS/route authority, zero-unavailable probes, source continuity
   and automatic rollback. Candidate startup must be reconstructed from a
   verified running executable contract; a process title or provider startup
-  wrapper must never be executed blindly. Keep source-stop, source-recreation,
-  provider-detach, destructive cleanup and separate approve endpoints absent.
+  wrapper must never be executed blindly. Keep source stop absent before and
+  during cutover proof. After verified zero-unavailable completion, FoxOS may
+  stop only the exact preserved source as a cold rollback target to avoid
+  indefinite duplicate RAM use; rollback must start and prove that exact source
+  through the legacy backend before switching traffic. Keep source recreation,
+  provider detach, destructive cleanup and separate approve endpoints absent.
 - Read `ARCHITECTURE.md` before changing discovery, deployment, domains,
   secrets, persistence, backup or migration behavior.
 

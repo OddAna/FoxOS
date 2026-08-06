@@ -563,6 +563,62 @@ function createIngressAuthorityManager({
     );
   }
 
+  async function verifyLegacyBackend({ hostname: rawHostname, requestPath = '/', attempts = 40 }) {
+    const hostname = String(rawHostname || '').toLowerCase();
+    if (
+      !DOMAIN_PATTERN.test(hostname) || !ROUTE_PATH_PATTERN.test(String(requestPath || '')) ||
+      !Number.isInteger(attempts) || attempts < 1 || attempts > 80
+    ) {
+      throw new IngressAuthorityError('Legacy backend proof input is invalid', 400, 'invalid-legacy-backend-proof');
+    }
+    const current = state();
+    const bridgeId = current.legacyBridge && current.legacyBridge.containerId;
+    if (!CONTAINER_ID_PATTERN.test(String(bridgeId || ''))) {
+      throw new IngressAuthorityError('Legacy bridge identity is unavailable', 503, 'legacy-bridge-unavailable');
+    }
+    const bridge = await dockerRequest('GET', '/containers/' + bridgeId + '/json');
+    const labels = bridge.Config && bridge.Config.Labels || {};
+    if (
+      !bridge.State || bridge.State.Running !== true ||
+      labels['com.foxos.migration.bridge'] !== 'true' ||
+      labels['com.foxos.legacy.proxy'] !== current.legacyBridge.proxyContainerId ||
+      labels['com.foxos.legacy.network'] !== current.legacyBridge.legacyNetwork
+    ) {
+      throw new IngressAuthorityError('Legacy bridge ownership proof failed', 503, 'legacy-bridge-unavailable');
+    }
+    const probeScript = [
+      "const https=require('node:https')",
+      "const hostname=process.argv[1]",
+      "const requestPath=process.argv[2]",
+      "const request=https.request({host:process.env.TARGET_HOST,port:443,servername:hostname,path:requestPath,method:'GET',headers:{Host:hostname},rejectUnauthorized:true,timeout:5000},(response)=>{const tlsValid=Boolean(response.socket&&response.socket.authorized);response.resume();response.on('end',()=>{process.stdout.write(JSON.stringify({statusCode:response.statusCode||0,tlsValid}));process.exit(tlsValid&&response.statusCode>=200&&response.statusCode<400?0:2)})})",
+      "request.on('timeout',()=>request.destroy(new Error('timeout')))",
+      "request.on('error',()=>process.exit(1))",
+      "request.end()"
+    ].join(';');
+    let lastCode = 'legacy-backend-not-ready';
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const result = await dockerExec(bridgeId, ['node', '-e', probeScript, hostname, requestPath], {
+        timeoutMs: 7000
+      });
+      if (result.exitCode === 0) {
+        try {
+          const proof = JSON.parse(String(result.output || '').trim());
+          if (proof.tlsValid === true && proof.statusCode >= 200 && proof.statusCode < 400) {
+            return { ...proof, legacyReady: true, attempts: attempt + 1 };
+          }
+        } catch {
+          lastCode = 'legacy-backend-proof-invalid';
+        }
+      }
+      if (attempt + 1 < attempts) await delay(250);
+    }
+    throw new IngressAuthorityError(
+      'Legacy backend did not become ready before rollback',
+      503,
+      lastCode
+    );
+  }
+
   ensureDirectory(root);
   ensureDirectory(caddyRuntimeRoot);
   if (!fs.existsSync(routeMapFile)) atomicWrite(routeMapFile, '');
@@ -581,6 +637,7 @@ function createIngressAuthorityManager({
     stageRoutes,
     state,
     switchDomain,
+    verifyLegacyBackend,
     verifyLegacyDomain
   };
 }

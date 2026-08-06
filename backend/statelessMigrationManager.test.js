@@ -95,7 +95,7 @@ function readyAdapter(options = {}) {
     if (options[name]) return options[name](input);
     return fallback;
   };
-  return {
+  const adapter = {
     events,
     capabilities: {
       candidateRuntime: true,
@@ -163,6 +163,17 @@ function readyAdapter(options = {}) {
     cleanupCandidate: (input) => call('cleanupCandidate', { cleaned: true }, input),
     cleanupStagedRoute: (input) => call('cleanupStagedRoute', { cleaned: true }, input)
   };
+  if (options.enableSourceParking) {
+    adapter.parkSourceForRollback = (input) => call('parkSourceForRollback', {
+      sourceStopped: true,
+      sourceContainerId: 'source-container-id',
+      candidateServing: true,
+      unavailableSamples: 0,
+      probes: 3,
+      stoppedAt: '2026-08-05T10:00:00.000Z'
+    }, input);
+  }
+  return adapter;
 }
 
 function approvalVerifier(secretValue = 'approval-secret-value') {
@@ -436,6 +447,22 @@ test('configured transaction keeps the source running and proves zero unavailabl
   assert.equal(persisted.includes('route-secret-must-not-persist'), false);
   assert.equal(persisted.includes('traffic-secret-must-not-persist'), false);
   assert.equal(operation.approval.rawApprovalPersisted, false);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('a verified production transaction parks the preserved source as cold rollback', async () => {
+  const adapter = readyAdapter({ enableSourceParking: true });
+  const { manager, root } = harness({ adapter });
+  const plan = prepare(manager);
+  const operation = await manager.execute(plan.planId, 'approval-secret-value');
+  assert.equal(operation.status, 'traffic-on-foxos-source-preserved');
+  assert.equal(operation.source.stopped, true);
+  assert.equal(operation.source.retainedForRollback, true);
+  assert.equal(operation.rollback.available, true);
+  assert.equal(operation.rollback.mode, 'cold-source');
+  assert.equal(operation.rollback.sourceParking.sourceStopped, true);
+  assert.equal(operation.rollback.sourceParking.unavailableSamples, 0);
+  assert.equal(adapter.events.at(-1), 'parkSourceForRollback');
   fs.rmSync(root, { recursive: true, force: true });
 });
 

@@ -716,6 +716,91 @@ test('traffic proof bypasses public DNS and verifies the direct host ingress pat
   fs.rmSync(dataRoot, { recursive: true, force: true });
 });
 
+test('completed traffic parks the old source and rollback warms it before switching', async () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-production-cold-rollback-'));
+  const operationId = 'smop_' + 'a'.repeat(32);
+  const sourceId = 'b'.repeat(64);
+  const sourceImageId = 'sha256:' + 'c'.repeat(64);
+  const routeId = 'smroute_' + 'd'.repeat(24);
+  let sourceRunning = true;
+  const events = [];
+  const dockerRequest = async (method, requestPath) => {
+    events.push(method + ' ' + requestPath);
+    if (method === 'GET' && requestPath === '/containers/' + sourceId + '/json') {
+      return { Id: sourceId, Image: sourceImageId, State: { Running: sourceRunning } };
+    }
+    if (method === 'POST' && requestPath === '/containers/' + sourceId + '/stop?t=10') {
+      sourceRunning = false;
+      return {};
+    }
+    if (method === 'POST' && requestPath === '/containers/' + sourceId + '/start') {
+      sourceRunning = true;
+      return {};
+    }
+    throw new Error('Unexpected Docker request: ' + method + ' ' + requestPath);
+  };
+  const switchedDomains = [];
+  const adapter = createProductionStatelessMigrationAdapter({
+    dataRoot,
+    dockerRequest,
+    dockerExec: async () => ({ exitCode: 0, output: '' }),
+    resourceRegistry: { getLatest: () => null },
+    secretManager: {
+      getEnvironmentRevision: () => null,
+      resolveEnvironment: () => []
+    },
+    certificateImporter: { importDomain: async () => ({}) },
+    ingressAuthority: {
+      hostIngressAddress: async () => '10.0.3.1',
+      httpsProbe: async () => ({
+        statusCode: 200,
+        tlsValid: true,
+        expectedRoute: true,
+        candidateIdentity: operationId
+      }),
+      stageRoutes: async () => [],
+      switchDomain: async (domain, target) => {
+        events.push('switch-domain');
+        switchedDomains.push([domain, target]);
+      },
+      verifyLegacyBackend: async () => {
+        events.push('legacy-backend-ready');
+        assert.equal(sourceRunning, true);
+        return { legacyReady: true, statusCode: 200, tlsValid: true };
+      },
+      verifyLegacyDomain: async () => ({ legacyReady: true })
+    }
+  });
+  fs.writeFileSync(path.join(adapter.paths.operationsRoot, operationId + '.json'), JSON.stringify({
+    schemaVersion: 1,
+    operationId,
+    source: { containerId: sourceId, imageId: sourceImageId, continuouslyRunning: true, stopped: false },
+    health: { privatePort: 8080, path: '/healthz' },
+    candidate: { containerId: 'e'.repeat(64) },
+    routes: [{ routeId, domain: 'app.example.com', path: '/', privatePort: 8080 }]
+  }));
+
+  const parked = await adapter.parkSourceForRollback({ operationId });
+  assert.equal(parked.sourceStopped, true);
+  assert.equal(parked.candidateServing, true);
+  assert.equal(sourceRunning, false);
+
+  const rollback = await adapter.rollbackTraffic({ operationId });
+  assert.equal(rollback.sourceStarted, true);
+  assert.equal(rollback.sourceWarmed, true);
+  assert.equal(sourceRunning, true);
+  assert.deepEqual(switchedDomains, [['app.example.com', 'legacy']]);
+  assert.ok(events.indexOf('POST /containers/' + sourceId + '/start') < events.indexOf('legacy-backend-ready'));
+  assert.ok(events.indexOf('legacy-backend-ready') < events.indexOf('switch-domain'));
+  const state = JSON.parse(fs.readFileSync(
+    path.join(adapter.paths.operationsRoot, operationId + '.json'),
+    'utf8'
+  ));
+  assert.equal(state.source.coldRollback, false);
+  assert.equal(state.source.startedForRollback, true);
+  fs.rmSync(dataRoot, { recursive: true, force: true });
+});
+
 test('production adapter exposes every safe transaction capability and no destructive methods', () => {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-production-adapter-'));
   const adapter = createProductionStatelessMigrationAdapter({
@@ -738,6 +823,8 @@ test('production adapter exposes every safe transaction capability and no destru
   const status = adapterStatus(adapter, async () => ({ approved: true }));
   assert.equal(status.ready, true);
   assert.deepEqual(status.unsafeCapabilities, []);
+  assert.equal(adapter.capabilities.sourceColdRollback, true);
+  assert.equal(typeof adapter.parkSourceForRollback, 'function');
   assert.equal(typeof adapter.stopSource, 'undefined');
   assert.equal(typeof adapter.detachProvider, 'undefined');
   fs.rmSync(dataRoot, { recursive: true, force: true });

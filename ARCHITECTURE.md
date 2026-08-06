@@ -455,10 +455,15 @@ Adapter proof objects are allowlisted before persistence so an unexpected
 credential, environment value or response header cannot leak into plans,
 operations, APIs or CLI output.
 
-The adapter contract deliberately contains no source stop, source recreation,
-provider mutation, provider detach or destructive source cleanup capability.
-The original container and legacy proxy remain running. Startup never replays
-an interrupted operation; recovery requires a new explicit UI action.
+The adapter contract deliberately contains no pre-cutover source stop, source
+recreation, provider mutation, provider detach or destructive source cleanup
+capability. The original container remains continuously running through the
+zero-unavailable traffic proof. After that proof, FoxOS may park only that exact
+container as a stopped cold rollback target while retaining its image, metadata,
+provider network and identity. Rollback starts and warms the exact source
+through the preserved legacy proxy before switching traffic. The legacy proxy
+remains running for unselected routes. Startup never replays an interrupted
+operation; recovery requires a new explicit UI action.
 
 The independent disposable Docker lab remains a regression adapter. It pulls
 one reviewed immutable image digest, creates a separately
@@ -731,4 +736,6 @@ The production Docker/route/TLS adapter is injected into this server path.
 Evidence-incomplete or unsupported resources still finish preflight as
 `blocked`, with zero candidate, route or traffic mutation. Eligible stateless
 resources continue into the verified transaction. There is no separate approve
-endpoint, source-stop, provider-detach or destructive-cleanup path.
+endpoint, pre-proof source stop, provider-detach or destructive-cleanup path.
+After successful proof the exact source may be parked as a stopped cold rollback
+target under the rules above.
