@@ -600,6 +600,24 @@ function createProductionStatelessMigrationAdapter({
   async function probeCandidate(plan, adapterState) {
     const health = plan.executionContract.candidate.health;
     const url = 'http://' + adapterState.candidate.alias + ':' + health.privatePort + health.path;
+    let gatewayContainerId = null;
+    try {
+      const infrastructure = await ingressAuthority.inspectOwnedInfrastructure();
+      gatewayContainerId = infrastructure && infrastructure.gateway && infrastructure.gateway.Id;
+    } catch (error) {
+      throw new ProductionStatelessMigrationError(
+        'FoxOS routing gateway could not be inspected before candidate health',
+        503,
+        error && error.code || 'foxos-gateway-inspection-failed'
+      );
+    }
+    if (!CONTAINER_ID_PATTERN.test(String(gatewayContainerId || ''))) {
+      throw new ProductionStatelessMigrationError(
+        'FoxOS routing gateway did not resolve to an exact container identity',
+        503,
+        'foxos-gateway-identity-invalid'
+      );
+    }
     const attempts = Number.isInteger(candidateHealthAttempts) && candidateHealthAttempts > 0
       ? Math.min(candidateHealthAttempts, 120)
       : DEFAULT_CANDIDATE_HEALTH_ATTEMPTS;
@@ -617,7 +635,7 @@ function createProductionStatelessMigrationAdapter({
       let result = null;
       let probeUnavailable = false;
       try {
-        result = await dockerExec(gatewayContainer, [
+        result = await dockerExec(gatewayContainerId, [
           'wget', '--server-response', '--output-document=/dev/null',
           '--timeout=' + Math.max(1, Math.min(2, Math.ceil(remainingMs / 1000))), url
         ], {
@@ -665,12 +683,14 @@ function createProductionStatelessMigrationAdapter({
     let proof;
     try {
       proof = await probeCandidate(plan, adapterState);
-    } catch {
-      const failure = new ProductionStatelessMigrationError(
-        'Candidate HTTP health probe could not be completed',
-        503,
-        'candidate-health-probe-failed'
-      );
+    } catch (error) {
+      const failure = error instanceof ProductionStatelessMigrationError
+        ? error
+        : new ProductionStatelessMigrationError(
+          'Candidate HTTP health probe could not be completed',
+          503,
+          'candidate-health-probe-failed'
+        );
       adapterState.failure = {
         phase: 'candidate-health',
         code: failure.code,
