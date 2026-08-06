@@ -260,9 +260,16 @@ target blocks only adoption/migration operations that require restore proof.
   migration identifiers only as internal evidence. Supporting bridges follow
   `<app>-<service>-bridge`; neither application nor helper name carries a FoxOS
   or provider prefix.
+- [x] Keep immutable image IDs as internal execution proof while assigning each
+  managed application and supporting bridge a controller-neutral readable
+  Docker reference such as `local/example-com:current`. Reconcile already
+  migrated runtimes through health and public-route proof instead of leaving
+  `sha256:...` as their user-visible image name.
 - [x] Reconcile public ingress against the firewall backend that owns Docker's
   active NAT chain so a provider restart cannot silently put migrated domains
   back behind the legacy proxy; reassert recorded authority on agent startup.
+  Resolve every managed route to the exact running Docker container and refresh
+  that address atomically before a health-gated replacement retires the old runtime.
 - [ ] Expand the implemented disposable dry-run, conflict detection, verified
   cutover and reversible rollback to real application classes one safety gate at
   a time.

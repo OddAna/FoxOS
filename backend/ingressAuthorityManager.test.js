@@ -28,6 +28,9 @@ test('staged routes switch through owned ingress and remove host authority on ro
   const hostCalls = [];
   const gatewayId = 'a'.repeat(64);
   const ingressId = 'b'.repeat(64);
+  const candidateId = 'c'.repeat(64);
+  const replacementId = 'd'.repeat(64);
+  let replacementVisible = false;
   const execContainerIds = [];
   const execCommands = [];
   const manager = createIngressAuthorityManager({
@@ -35,13 +38,38 @@ test('staged routes switch through owned ingress and remove host authority on ro
     dockerRequest: async (method, requestPath) => {
       assert.equal(method, 'GET');
       if (requestPath === '/networks/foxos-routing') {
-        return { Internal: true, Labels: { 'com.foxos.routing': 'true', 'com.foxos.core': 'true' } };
+        return {
+          Internal: true,
+          Labels: { 'com.foxos.routing': 'true', 'com.foxos.core': 'true' },
+          Containers: {
+            [candidateId]: {},
+            ...(replacementVisible ? { [replacementId]: {} } : {})
+          }
+        };
       }
       if (requestPath === '/containers/foxos-gateway/json') {
         return { Id: gatewayId, State: { Running: true }, Config: { Labels: { 'com.foxos.gateway': 'true' } } };
       }
       if (requestPath === '/containers/foxos-ingress/json') {
         return { Id: ingressId, State: { Running: true }, Config: { Labels: { 'com.foxos.ingress': 'true' } } };
+      }
+      if (requestPath === '/containers/' + candidateId + '/json') {
+        return {
+          Id: candidateId,
+          State: { Running: true },
+          NetworkSettings: {
+            Networks: { 'foxos-routing': { Aliases: ['foxos-sm-candidate'], IPAddress: '10.0.10.42' } }
+          }
+        };
+      }
+      if (requestPath === '/containers/' + replacementId + '/json') {
+        return {
+          Id: replacementId,
+          State: { Running: true },
+          NetworkSettings: {
+            Networks: { 'foxos-routing': { Aliases: ['foxos-sm-candidate'], IPAddress: '10.0.10.84' } }
+          }
+        };
       }
       throw new Error('Unexpected Docker request: ' + requestPath);
     },
@@ -73,7 +101,9 @@ test('staged routes switch through owned ingress and remove host authority on ro
   };
   const staged = await manager.stageRoutes([route]);
   assert.equal(staged[0].status, 'staged');
-  assert.match(fs.readFileSync(manager.paths.caddyRoutesFile, 'utf8'), /reverse_proxy foxos-sm-candidate:3000/);
+  const renderedRoutes = fs.readFileSync(manager.paths.caddyRoutesFile, 'utf8');
+  assert.match(renderedRoutes, /reverse_proxy 10\.0\.10\.42:3000/);
+  assert.match(renderedRoutes, new RegExp('X-FoxOS-Runtime "' + candidateId.slice(0, 12) + '"'));
 
   await manager.switchDomain(route.domain, 'foxos');
   assert.equal(manager.state().publicAuthorityActive, true);
@@ -87,6 +117,11 @@ test('staged routes switch through owned ingress and remove host authority on ro
   assert.deepEqual(reconciliation.backends, { ipv4: 'iptables', ipv6: 'ip6tables' });
   assert.deepEqual([...firewallRules].sort(), ['ip6tables:public', 'iptables:public']);
 
+  replacementVisible = true;
+  const refreshed = await manager.refreshOperationRuntime(route.operationId, replacementId);
+  assert.equal(refreshed[0].runtimeContainerId, replacementId);
+  assert.match(fs.readFileSync(manager.paths.caddyRoutesFile, 'utf8'), /reverse_proxy 10\.0\.10\.84:3000/);
+
   await manager.switchDomain(route.domain, 'legacy');
   assert.equal(manager.state().publicAuthorityActive, false);
   assert.equal(manager.state().domains[route.domain], 'legacy');
@@ -94,7 +129,7 @@ test('staged routes switch through owned ingress and remove host authority on ro
   assert.equal(adminCommands.includes('set map /runtime/routes.map app.example.com foxos'), true);
   assert.equal(adminCommands.includes('set map /runtime/routes.map app.example.com legacy'), true);
   assert.equal(hostCalls.some((call) => call.includes('--to-ports') && call.includes('9443')), true);
-  assert.deepEqual(execContainerIds, [gatewayId, gatewayId]);
+  assert.deepEqual(execContainerIds, [gatewayId, gatewayId, gatewayId, gatewayId, gatewayId, gatewayId]);
   assert.deepEqual(execCommands[1].slice(-2), ['--address', '127.0.0.1:2019']);
   assert.equal(execCommands[1].includes('http://127.0.0.1:2019'), false);
   fs.rmSync(dataRoot, { recursive: true, force: true });

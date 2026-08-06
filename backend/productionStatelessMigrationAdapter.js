@@ -103,6 +103,18 @@ function dependencyBridgeRuntimeName(application, dependency, ordinal = 1) {
   return slug + '-bridge';
 }
 
+function localRuntimeImageReference(applicationId) {
+  const slug = applicationSlug(applicationId);
+  if (!slug) {
+    throw new ProductionStatelessMigrationError(
+      'A readable local image reference could not be derived from the application identity',
+      409,
+      'runtime-image-reference-unavailable'
+    );
+  }
+  return 'local/' + slug + ':current';
+}
+
 function ensureDirectory(directory) {
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   fs.chmodSync(directory, 0o700);
@@ -586,8 +598,14 @@ function createProductionStatelessMigrationAdapter({
     const bridgeAlias = 'foxos-dep-' + operationId.slice(-12) + '-' + crypto.createHash('sha256')
       .update(dependency.hostname + ':' + dependency.port).digest('hex').slice(0, 8);
     const name = dependencyBridgeRuntimeName(application, dependency, ordinal);
+    const imageReference = localRuntimeImageReference(name);
+    await dockerRequest(
+      'POST',
+      '/images/' + encodeURIComponent(agentImageId) + '/tag?repo=' +
+        encodeURIComponent('local/' + applicationSlug(name)) + '&tag=current'
+    );
     const created = await dockerRequest('POST', '/containers/create?name=' + encodeURIComponent(name), {
-      Image: agentImageId,
+      Image: imageReference,
       Entrypoint: ['node', '/app/tcpBridge.js'],
       Cmd: [],
       Env: [
@@ -599,6 +617,7 @@ function createProductionStatelessMigrationAdapter({
         'com.foxos.managed': 'true',
         'com.foxos.app.id': application.appId,
         'com.foxos.app.name': application.displayName,
+        'com.foxos.image.reference': imageReference,
         'com.foxos.temporary': 'stateless-dependency-bridge',
         'com.foxos.stateless-migration.id': operationId
       },
@@ -625,7 +644,14 @@ function createProductionStatelessMigrationAdapter({
     if (!details.State || details.State.Running !== true) {
       throw new ProductionStatelessMigrationError('Dependency bridge did not start', 503, 'dependency-bridge-start-failed');
     }
-    return { containerId: created.Id, bridgeAlias };
+    if (details.Image !== agentImageId || !details.Config || details.Config.Image !== imageReference) {
+      throw new ProductionStatelessMigrationError(
+        'Dependency bridge image identity proof failed',
+        503,
+        'dependency-bridge-image-proof-failed'
+      );
+    }
+    return { containerId: created.Id, bridgeAlias, imageReference };
   }
 
   async function observedProcessContract(containerId) {
@@ -684,11 +710,11 @@ function createProductionStatelessMigrationAdapter({
         createdBridges.push(dependency.bridgeContainerId);
         persist(adapterState);
       }
-      const localTag = 'foxos.local/' + resource.id;
+      const imageReference = localRuntimeImageReference(application.appId);
       await dockerRequest(
         'POST',
         '/images/' + encodeURIComponent(resource.runtime.imageId) + '/tag?repo=' +
-          encodeURIComponent(localTag) + '&tag=' + resource.runtime.imageId.slice(7, 19)
+          encodeURIComponent('local/' + application.appId) + '&tag=current'
       );
       const contract = plan.executionContract.candidate;
       let startup = await observedProcessContract(resource.runtime.containerId);
@@ -730,7 +756,7 @@ function createProductionStatelessMigrationAdapter({
         privatePort: contract.health.privatePort
       });
       const created = await dockerRequest('POST', '/containers/create?name=' + encodeURIComponent(name), {
-        Image: resource.runtime.imageId,
+        Image: imageReference,
         Entrypoint: startup.entrypoint,
         Cmd: startup.cmd,
         WorkingDir: startup.workingDirectory,
@@ -740,6 +766,7 @@ function createProductionStatelessMigrationAdapter({
           'com.foxos.managed': 'true',
           'com.foxos.app.id': application.appId,
           'com.foxos.app.name': application.displayName,
+          'com.foxos.image.reference': imageReference,
           'com.foxos.temporary': 'stateless-migration-candidate',
           'com.foxos.migration.source-resource-id': resource.id,
           'com.foxos.stateless-migration.id': operationId,
@@ -769,7 +796,10 @@ function createProductionStatelessMigrationAdapter({
       });
       await dockerRequest('POST', '/containers/' + created.Id + '/start');
       const candidate = await dockerRequest('GET', '/containers/' + created.Id + '/json');
-      if (!candidate.State || candidate.State.Running !== true || candidate.Image !== resource.runtime.imageId) {
+      if (
+        !candidate.State || candidate.State.Running !== true || candidate.Image !== resource.runtime.imageId ||
+        !candidate.Config || candidate.Config.Image !== imageReference
+      ) {
         adapterState.candidateAttempt = {
           startupKind: startup.kind,
           exitCode: candidate.State && Number.isInteger(candidate.State.ExitCode) ? candidate.State.ExitCode : null,
@@ -790,6 +820,7 @@ function createProductionStatelessMigrationAdapter({
         appId: application.appId,
         displayName: application.displayName,
         imageId: candidate.Image,
+        imageReference,
         privatePort: contract.health.privatePort,
         startupKind: startup.kind,
         capabilityProfile: capabilityProfile.name,
@@ -806,6 +837,7 @@ function createProductionStatelessMigrationAdapter({
         revisionId: plan.executionContract.contractId,
         imageId: candidate.Image,
         imageDigest: resource.runtime.imageId,
+        imageReference,
         privatePort: contract.health.privatePort,
         owned: true,
         separateFromSource: candidate.Id !== resource.runtime.containerId,
@@ -1291,6 +1323,7 @@ module.exports = {
   dependencyFromValue,
   environmentForStartup,
   immutableImageFallbackAllowed,
+  localRuntimeImageReference,
   routeForHealth,
   sourceHealthAccepted,
   startupContractFromObservation,
