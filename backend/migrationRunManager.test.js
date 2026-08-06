@@ -33,7 +33,7 @@ function resource(resourceId, name, dependencies = []) {
   };
 }
 
-function harness({ blockedResource = null, reviewComplete = true, executeFailure = null } = {}) {
+function harness({ blockedResource = null, reviewComplete = true, executeFailure = null, managedResource = null } = {}) {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-migration-run-'));
   let snapshot = { snapshotId: SNAPSHOT_ID };
   const plan = {
@@ -52,6 +52,9 @@ function harness({ blockedResource = null, reviewComplete = true, executeFailure
     dataRoot,
     getServerMigrationPlan: () => plan,
     getLatestRegistrySnapshot: () => snapshot,
+    getMigrationManagement: (resourceId) => resourceId === managedResource
+      ? { owner: 'foxos', state: 'active', automaticMigrationAllowed: false }
+      : null,
     saveSelection: (input) => {
       savedSelections.push(input);
       return { selectionId: 'msel_' + '3'.repeat(32) };
@@ -135,6 +138,17 @@ test('one start action persists the exact selection internally and executes expl
   assert.equal(JSON.stringify(completed).includes('session-secret'), false);
   assert.equal(fs.statSync(context.manager.paths.runsRoot).mode & 0o777, 0o700);
   assert.equal(fs.statSync(path.join(context.manager.paths.runsRoot, queued.runId + '.json')).mode & 0o777, 0o600);
+  fs.rmSync(context.dataRoot, { recursive: true, force: true });
+});
+
+test('an already FoxOS-managed resource is rejected before selection persistence or runtime work', () => {
+  const context = harness({ managedResource: RESOURCE_A });
+  assert.throws(
+    () => context.start(),
+    (error) => error.code === 'resource-already-foxos-managed' && error.statusCode === 409
+  );
+  assert.equal(context.savedSelections.length, 0);
+  assert.equal(context.executions.length, 0);
   fs.rmSync(context.dataRoot, { recursive: true, force: true });
 });
 

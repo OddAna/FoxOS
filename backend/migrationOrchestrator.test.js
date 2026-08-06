@@ -151,7 +151,16 @@ function harness() {
     compileApplicationManifest,
     clock: () => new Date('2026-08-05T12:30:00.000Z')
   });
-  return { database, managed, manager, protectedCore, root, secretValue, stateful, stateless };
+  return {
+    database,
+    managed,
+    manager,
+    protectedCore,
+    root,
+    secretValue,
+    stateful,
+    stateless: resources.find((entry) => entry.id === stateless.id)
+  };
 }
 
 test('whole-server planning is deterministic, class-aware, redacted and plan-only', () => {
@@ -240,6 +249,36 @@ test('planning requires exact confirmation and an existing registry snapshot', (
       () => empty.createPlan({ confirmation: PLAN_SERVER_MIGRATION_CONFIRMATION }),
       (error) => error.code === 'registry-not-scanned'
     );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a verified FoxOS migration projection is managed and cannot re-enter migration selection', () => {
+  const { manager, stateless, root } = harness();
+  try {
+    const current = manager.createPlan({ confirmation: PLAN_SERVER_MIGRATION_CONFIRMATION });
+    const source = current.resources.find((entry) => entry.resourceId === stateless.id);
+    assert.equal(source.migrationRequired, true);
+
+    stateless.management = {
+      owner: 'foxos',
+      state: 'active',
+      operationId: 'smop_' + '9'.repeat(32),
+      sourceProvider: 'coolify',
+      sourcePreserved: true,
+      automaticMigrationAllowed: false
+    };
+    const projected = manager.createPlan({ confirmation: PLAN_SERVER_MIGRATION_CONFIRMATION });
+    const managed = projected.resources.find((entry) => entry.resourceId === stateless.id);
+    assert.equal(managed.currentProvider, 'foxos');
+    assert.equal(managed.currentAuthorityClass, 'foxos-owned');
+    assert.equal(managed.migrationRequired, false);
+    assert.equal(managed.strategy, 'already-foxos-managed');
+    assert.equal(managed.readiness.planningStatus, 'already-foxos-managed');
+    assert.equal(managed.readiness.reviewEligible, false);
+    assert.deepEqual(managed.blockers.authority, []);
+    assert.deepEqual(managed.blockers.evidence, []);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

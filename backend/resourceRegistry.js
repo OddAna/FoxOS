@@ -9,6 +9,7 @@ const {
 const SCHEMA_VERSION = 1;
 const INSPECT_CONCURRENCY = 6;
 const MAX_REVISIONS = 100;
+const VERIFIED_STATELESS_MIGRATION_STATUS = 'traffic-on-foxos-source-preserved';
 
 const SAFE_LABEL_KEYS = new Set([
   'com.foxos.managed',
@@ -101,6 +102,87 @@ function readJson(target, fallback = null) {
     }
     throw error;
   }
+}
+
+function listJson(directory) {
+  try {
+    return fs.readdirSync(directory)
+      .filter((file) => file.endsWith('.json'))
+      .sort()
+      .map((file) => readJson(path.join(directory, file)))
+      .filter(Boolean);
+  } catch (error) {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  }
+}
+
+function readFoxosMigrationManagement(dataRoot, resources = []) {
+  const authority = readJson(path.join(dataRoot, 'ingress', 'authority.json'), null);
+  const operations = listJson(path.join(dataRoot, 'stateless-migrations', 'operations'));
+  const resourcesByContainerId = new Map((resources || [])
+    .filter((resource) => resource && resource.runtime && resource.runtime.containerId)
+    .map((resource) => [resource.runtime.containerId, resource]));
+  const managementByResourceId = new Map();
+
+  for (const operation of operations) {
+    if (
+      operation.status !== VERIFIED_STATELESS_MIGRATION_STATUS ||
+      !/^res_[a-f0-9]{32}$/.test(String(operation.resourceId || '')) ||
+      !/^smop_[a-f0-9]{32}$/.test(String(operation.operationId || ''))
+    ) continue;
+
+    const routeId = operation.route && operation.route.routeId || null;
+    const authorityRoute = routeId && authority && authority.routes && authority.routes[routeId] || null;
+    const domain = operation.route && operation.route.domain || authorityRoute && authorityRoute.domain || null;
+    const authorityActive = Boolean(
+      authority && authority.owner === 'foxos' && authority.publicAuthorityActive === true &&
+      authorityRoute && authorityRoute.operationId === operation.operationId && authorityRoute.status === 'active' &&
+      domain && authority.domains && authority.domains[domain] === 'foxos'
+    );
+    const candidateContainerId = operation.candidate && operation.candidate.containerId || null;
+    const candidateResource = candidateContainerId ? resourcesByContainerId.get(candidateContainerId) : null;
+    const candidateRunning = Boolean(
+      candidateResource && candidateResource.runtime && candidateResource.runtime.state === 'running'
+    );
+    const trafficVerified = Boolean(
+      operation.trafficProof && operation.trafficProof.healthy === true &&
+      operation.trafficProof.candidateServing === true && operation.trafficProof.tlsValid === true
+    );
+    const sourcePreserved = Boolean(
+      operation.source && operation.source.retainedForRollback === true &&
+      operation.trafficProof && operation.trafficProof.sourceContinuouslyRunning === true
+    );
+    const state = authorityActive && candidateRunning && trafficVerified && sourcePreserved
+      ? 'active'
+      : 'attention-required';
+    const management = {
+      owner: 'foxos',
+      state,
+      lifecycle: 'stateless-blue-green',
+      operationId: operation.operationId,
+      routeId,
+      domains: domain ? [domain] : [],
+      candidateContainerId,
+      candidateResourceId: candidateResource && candidateResource.id || null,
+      authorityActive,
+      candidateRunning,
+      trafficVerified,
+      sourcePreserved,
+      automaticMigrationAllowed: false,
+      completedAt: operation.completedAt || null
+    };
+    const current = managementByResourceId.get(operation.resourceId);
+    const currentPriority = current && current.state === 'active' ? 1 : 0;
+    const nextPriority = management.state === 'active' ? 1 : 0;
+    if (
+      !current || nextPriority > currentPriority ||
+      (nextPriority === currentPriority && String(management.completedAt).localeCompare(String(current.completedAt)) > 0)
+    ) {
+      managementByResourceId.set(operation.resourceId, management);
+    }
+  }
+  return managementByResourceId;
 }
 
 function dockerName(container) {
@@ -673,6 +755,17 @@ function createResourceRegistry({
       );
       return normalizeResource(container, inspection.details, resourceId, inspection.failed);
     }).sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
+    const migrationManagement = readFoxosMigrationManagement(dataRoot, resources);
+    for (const resource of resources) {
+      const management = migrationManagement.get(resource.id);
+      if (management) {
+        resource.management = {
+          ...management,
+          sourceProvider: resource.provider,
+          sourceOwnership: resource.ownership
+        };
+      }
+    }
 
     const inventory = normalizeInventory(images, networks, volumePayload && volumePayload.Volumes || [], resources);
     const conflicts = detectConflicts(resources);
@@ -693,6 +786,7 @@ function createResourceRegistry({
         statelessAuditCandidates: resources.filter((resource) => (
           resource.classification.independenceAudit.eligibleForReadOnlyAudit
         )).length,
+        foxosMigrated: resources.filter((resource) => resource.management && resource.management.owner === 'foxos').length,
         adoptionReady: resources.filter((resource) => resource.adoption.ready).length,
         relationships: relationships.length,
         blockingConflicts: conflicts.filter((conflict) => conflict.severity === 'blocking').length
@@ -711,6 +805,7 @@ function createResourceRegistry({
         classificationSchemaVersion: RESOURCE_CLASSIFICATION_SCHEMA_VERSION,
         classificationMethod: 'deterministic-local-evidence',
         classificationDoesNotImplyOwnership: true,
+        foxosManagementDerivedFromVerifiedLocalAuthority: true,
         statelessDoesNotProveApplicationDataFree: true
       },
       ...snapshotCore
@@ -750,8 +845,22 @@ function createResourceRegistry({
     };
   }
 
+  function getMigrationManagement(resourceId) {
+    if (!/^res_[a-f0-9]{32}$/.test(String(resourceId || ''))) return null;
+    const snapshot = getLatest();
+    const management = readFoxosMigrationManagement(dataRoot, snapshot && snapshot.resources || []).get(resourceId);
+    if (!management) return null;
+    const resource = snapshot && (snapshot.resources || []).find((entry) => entry.id === resourceId);
+    return {
+      ...management,
+      sourceProvider: resource && resource.provider || null,
+      sourceOwnership: resource && resource.ownership || null
+    };
+  }
+
   return {
     exportLatest,
+    getMigrationManagement,
     getLatest,
     paths: { identitiesFile, latestFile, registryRoot, revisionsRoot },
     scan
@@ -766,6 +875,7 @@ module.exports = {
   detectConflicts,
   identityAliases,
   parseTraefikRoutes,
+  readFoxosMigrationManagement,
   resolveResourceId,
   roleFor,
   safeLabels

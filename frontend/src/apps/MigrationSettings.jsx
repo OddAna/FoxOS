@@ -316,6 +316,8 @@ const MigrationSettings = () => {
         setLatestRun(payload.run);
         if (!ACTIVE_RUN_STATUSES.has(payload.run.status)) {
           if (payload.run.status === 'completed') {
+            await load();
+            if (!active) return;
             setMessage({
               type: 'success',
               text: `${payload.run.summary.completed} kaynak doğrulanmış olarak FoxOS trafiğine geçirildi.`
@@ -342,7 +344,7 @@ const MigrationSettings = () => {
       active = false;
       window.clearInterval(timer);
     };
-  }, [latestRunId, latestRunStatus]);
+  }, [latestRunId, latestRunStatus, load]);
 
   useEffect(() => {
     const scrollContainer = rootRef.current?.closest('[data-settings-content]');
@@ -573,11 +575,18 @@ const MigrationSettings = () => {
         <DetailSection title="Kaynak Bilgileri">
           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 160px) minmax(0, 1fr)', rowGap: '10px', columnGap: '16px', fontSize: '13px', wordBreak: 'break-word' }}>
             <DetailLine label="Sağlık">{observed.runtime?.health?.status || observed.runtime?.state}</DetailLine>
-            <DetailLine label="Mevcut kaynak">{detailResource.observedProvider || 'docker'}</DetailLine>
-            <DetailLine label="Yönetim">{CLASS_LABELS[classification.authorityClass] || classification.authorityClass}</DetailLine>
+            <DetailLine label="Mevcut yönetim">{detailResource.currentProvider || detailResource.observedProvider || 'docker'}</DetailLine>
+            {detailResource.management?.sourcePreserved && (
+              <DetailLine label="Korunan eski kaynak">{detailResource.observedProvider || 'docker'} · geri alma için çalışıyor</DetailLine>
+            )}
+            <DetailLine label="Yönetim">{CLASS_LABELS[detailResource.currentAuthorityClass || classification.authorityClass] || detailResource.currentAuthorityClass || classification.authorityClass}</DetailLine>
             <DetailLine label="Kaynak sınıfı">{CLASS_LABELS[classification.workloadRole] || classification.workloadRole} · {CLASS_LABELS[classification.stateClass] || classification.stateClass}</DetailLine>
             <DetailLine label="İnceleme stratejisi">{STRATEGY_LABELS[detailResource.strategy] || detailResource.strategy}</DetailLine>
-            <DetailLine label="Hazırlık durumu">{detailResource.readiness?.evidenceComplete ? 'Önkoşullar tamam' : 'Eksikler ayrıntılarda çözülecek'}</DetailLine>
+            <DetailLine label="Hazırlık durumu">
+              {state === 'managed'
+                ? detailResource.management?.state === 'active' ? 'Geçiş tamamlandı' : 'FoxOS yönetiminde · inceleme gerekli'
+                : detailResource.readiness?.evidenceComplete ? 'Önkoşullar tamam' : 'Eksikler ayrıntılarda çözülecek'}
+            </DetailLine>
             <DetailLine label="Erişilebilirlik">{AVAILABILITY_LABELS[detailResource.availability?.currentMode] || detailResource.availability?.currentMode}</DetailLine>
             <DetailLine label="İmaj" mono>{observed.runtime?.image}</DetailLine>
             <DetailLine label="Container" mono>{shortId(observed.runtime?.containerId)}</DetailLine>
@@ -765,6 +774,13 @@ const MigrationSettings = () => {
     .filter(([state]) => counts[state] > 0)
     .map(([state, label]) => `${counts[state]} ${label.toLocaleLowerCase('tr-TR')}`)
     .join(' · ');
+  const latestRunAlreadyManaged = Boolean(
+    latestRun && ['failed', 'blocked'].includes(latestRun.status) && latestRun.resources?.length &&
+    latestRun.resources.every((runResource) => {
+      const current = resources.find((resource) => resource.resourceId === runResource.resourceId);
+      return current?.management?.owner === 'foxos' && current.management.state === 'active';
+    })
+  );
 
   return (
     <div ref={rootRef}>
@@ -854,7 +870,7 @@ const MigrationSettings = () => {
                         {resource.protected && <ShieldCheck size={14} color="#38bdf8" />}
                       </div>
                       <div style={{ color: '#8b93a1', fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: '3px' }}>
-                        {resource.observedProvider || 'docker'} · {CLASS_LABELS[classification.workloadRole] || classification.workloadRole || 'Belirsiz'} · {observed.runtime?.health?.status || observed.runtime?.state || 'bilinmiyor'}
+                        {resource.currentProvider || resource.observedProvider || 'docker'} · {CLASS_LABELS[classification.workloadRole] || classification.workloadRole || 'Belirsiz'} · {observed.runtime?.health?.status || observed.runtime?.state || 'bilinmiyor'}
                         {routeDomains.length ? ` · ${routeDomains.join(', ')}` : ` · ${(observed.mounts || []).length} depolama bağı`}
                       </div>
                     </div>
@@ -879,7 +895,9 @@ const MigrationSettings = () => {
             </div>
             {latestRun && (
               <div style={{ marginBottom: '14px', color: '#888', fontSize: '12px' }}>
-                Son işlem: {RUN_STATUS_LABELS[latestRun.status] || latestRun.status} · {latestRun.summary?.completed || 0}/{latestRun.summary?.selected || 0} tamamlandı
+                {latestRunAlreadyManaged
+                  ? `Son durum: FoxOS yönetiminde · ${latestRun.resources.length}/${latestRun.resources.length} tamamlandı`
+                  : `Son işlem: ${RUN_STATUS_LABELS[latestRun.status] || latestRun.status} · ${latestRun.summary?.completed || 0}/${latestRun.summary?.selected || 0} tamamlandı`}
               </div>
             )}
             <button

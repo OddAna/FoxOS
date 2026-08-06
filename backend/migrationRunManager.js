@@ -80,11 +80,13 @@ function createMigrationRunManager({
   dataRoot,
   getServerMigrationPlan,
   getLatestRegistrySnapshot,
+  getMigrationManagement = null,
   saveSelection,
   prepareStatelessPlan,
   getStatelessReviewStatus,
   prepareResourceEvidence = null,
   refreshServerMigrationPlan = null,
+  reconcileCompletedMigrations = null,
   prepareStatelessReview = null,
   executeStatelessMigration,
   issueApproval,
@@ -258,6 +260,26 @@ function createMigrationRunManager({
         return run;
       }
 
+      if (typeof getMigrationManagement === 'function') {
+        const managedResource = run.executionOrder.find((resourceId) => {
+          const management = getMigrationManagement(resourceId);
+          return management && management.owner === 'foxos';
+        });
+        if (managedResource) {
+          run.blockers = [{
+            code: 'resource-already-foxos-managed',
+            message: 'Kaynak zaten FoxOS yönetiminde; yeniden geçiş çalıştırılmadı.',
+            section: 'ownership',
+            severity: 'blocking',
+            source: 'migration-run'
+          }];
+          run.completedAt = now();
+          setRunState(run, 'blocked', 'preflight-blocked');
+          prune();
+          return run;
+        }
+      }
+
       setRunState(run, 'preparing', 'immutable-preflight');
       let serverPlanId = run.serverPlanId;
       if (prepareResourceEvidence || refreshServerMigrationPlan) {
@@ -394,6 +416,17 @@ function createMigrationRunManager({
         run.summary = summarize(run);
         persist(run);
       }
+      if (typeof reconcileCompletedMigrations === 'function') {
+        try {
+          run.reconciliation = await reconcileCompletedMigrations();
+        } catch (error) {
+          run.reconciliation = {
+            status: 'warning',
+            code: 'post-migration-reconciliation-failed',
+            message: 'Geçiş tamamlandı; sunucu envanteri yeniden taranmalıdır.'
+          };
+        }
+      }
       run.completedAt = now();
       setRunState(run, 'completed', 'complete');
       prune();
@@ -433,6 +466,16 @@ function createMigrationRunManager({
     }
     const planResources = new Map((plan.resources || []).map((resource) => [resource.resourceId, resource]));
     const selectedResources = selectedResourceIds.map((resourceId) => {
+      const management = typeof getMigrationManagement === 'function'
+        ? getMigrationManagement(resourceId)
+        : null;
+      if (management && management.owner === 'foxos') {
+        throw new MigrationRunError(
+          'Kaynak zaten FoxOS yönetiminde; yeniden geçiş başlatılamaz.',
+          409,
+          'resource-already-foxos-managed'
+        );
+      }
       const resource = planResources.get(resourceId);
       if (!resource) throw new MigrationRunError('A selected resource is outside this server plan', 409, 'resource-not-in-plan');
       if (!isReviewSelectable(resource)) {
