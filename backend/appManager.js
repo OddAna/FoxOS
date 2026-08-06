@@ -360,6 +360,7 @@ function discoveredAppStates(containers, catalogApps) {
 
       return {
         id: appId,
+        profileId: profile ? profile.id : null,
         name: profile
           ? profile.name + (hasMultipleProfileInstances ? ' · ' + instanceName : '')
           : humanizeName(rawName),
@@ -403,6 +404,7 @@ function stateForCatalogApp(catalogApp, containers) {
   if (!container) {
     return {
       ...catalogApp,
+      profileId: catalogApp.id,
       installed: false,
       installable: true,
       managedByFoxOS: false,
@@ -428,6 +430,7 @@ function stateForCatalogApp(catalogApp, containers) {
 
   return {
     ...catalogApp,
+    profileId: catalogApp.id,
     installed: true,
     installable: true,
     managedByFoxOS,

@@ -55,6 +55,27 @@ function managedExternalUrl(appStates, management) {
   return appStates.map((app) => app && app.externalUrl).find(Boolean) || null;
 }
 
+function externalHostname(externalUrl) {
+  try {
+    return new URL(String(externalUrl || '')).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+function isTemporaryHostname(hostname) {
+  return hostname === 'localhost' || hostname.endsWith('.localhost') ||
+    hostname.endsWith('.sslip.io') || hostname.endsWith('.nip.io') ||
+    hostname.endsWith('.invalid') || hostname.endsWith('.test');
+}
+
+function canonicalApplicationName(app, externalUrl) {
+  const existingName = app.name || app.instanceName || app.containerName || 'Sunucu Uygulaması';
+  if (app.profileId) return existingName;
+  const hostname = externalHostname(externalUrl);
+  return hostname && !isTemporaryHostname(hostname) ? hostname : existingName;
+}
+
 function preferredMetadata(appStates, candidateContainerId) {
   const candidate = appStates.find((app) => app.containerId === candidateContainerId) || null;
   const fallback = appStates.find((app) => app.logoUrl || app.externalUrl) || appStates[0] || {};
@@ -89,7 +110,7 @@ function applicationProjection({
     schemaVersion: APPLICATION_INVENTORY_SCHEMA_VERSION,
     id,
     resourceId: canonicalResource && canonicalResource.id || null,
-    name: app.name || app.instanceName || app.containerName || 'Sunucu Uygulaması',
+    name: canonicalApplicationName(app, externalUrl),
     instanceName: app.instanceName || null,
     publisher: app.publisher || 'Sunucu',
     category: app.category || 'Web Apps',
@@ -220,6 +241,7 @@ function buildApplicationInventory({ appStates = [], containers = [], resources 
 module.exports = {
   APPLICATION_INVENTORY_SCHEMA_VERSION,
   buildApplicationInventory,
+  canonicalApplicationName,
   disambiguateDuplicateNames,
   exitCodeFromStatus,
   healthStatusFromRuntime,

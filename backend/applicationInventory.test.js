@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
   buildApplicationInventory,
+  canonicalApplicationName,
   operationalStateForRuntime
 } = require('./applicationInventory');
 
@@ -12,6 +13,21 @@ test('runtime state maps to the existing FoxOS desktop status contract', () => {
   assert.equal(operationalStateForRuntime({ state: 'exited', status: 'Exited (0) 1 minute ago', healthStatus: null }), 'stopped');
   assert.equal(operationalStateForRuntime({ state: 'exited', status: 'Exited (137) 1 minute ago', healthStatus: null }), 'stopped');
   assert.equal(operationalStateForRuntime({ state: 'exited', status: 'Exited (2) 1 minute ago', healthStatus: null }), 'error');
+});
+
+test('custom applications use a permanent domain while profiles and temporary previews keep their names', () => {
+  assert.equal(
+    canonicalApplicationName({ name: 'Provider Generated Name', profileId: null }, 'https://notes.example.com'),
+    'notes.example.com'
+  );
+  assert.equal(
+    canonicalApplicationName({ name: 'WordPress', profileId: 'wordpress' }, 'https://blog.example.com'),
+    'WordPress'
+  );
+  assert.equal(
+    canonicalApplicationName({ name: 'Preview Site', profileId: null }, 'https://preview.192.0.2.10.sslip.io'),
+    'Preview Site'
+  );
 });
 
 test('a migrated source and active candidate become one server-owned application', () => {
@@ -66,7 +82,7 @@ test('a migrated source and active candidate become one server-owned application
           state: 'active',
           lifecycle: 'stateless-blue-green',
           candidateContainerId: candidateId,
-          domains: ['defter.example.test'],
+          domains: ['defter.example.com'],
           authorityActive: true
         }
       },
@@ -83,7 +99,8 @@ test('a migrated source and active candidate become one server-owned application
   assert.equal(applications[0].id, resourceId);
   assert.equal(applications[0].runtime.containerId, candidateId);
   assert.equal(applications[0].runtime.operationalState, 'running');
-  assert.equal(applications[0].externalUrl, 'https://defter.example.test');
+  assert.equal(applications[0].name, 'defter.example.com');
+  assert.equal(applications[0].externalUrl, 'https://defter.example.com');
   assert.equal(applications[0].managedByServer, true);
   assert.equal(applications[0].authority, 'server');
   assert.equal(applications[0].provenance.importedFrom, 'coolify');
@@ -100,6 +117,7 @@ test('multiple instances retain separate stable resource identities', () => {
     managedByFoxOS: false,
     installationSource: 'docker',
     name: 'WordPress',
+    profileId: 'wordpress',
     instanceName: 'site-' + (index + 1) + '.example.test',
     containerId,
     containerName: 'wordpress-' + (index + 1),
