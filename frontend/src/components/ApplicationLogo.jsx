@@ -5,13 +5,15 @@ const DEFAULT_APP_LOGO = 'https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icon
 
 const ApplicationLogo = ({ app, size = 40 }) => {
   const [sourceIndex, setSourceIndex] = useState(0);
-  const logoSources = [app.logoUrl, DEFAULT_APP_LOGO].filter((source, index, sources) => (
+  const installationState = app.installation && app.installation.state;
+  const defaultLogo = installationState === 'host-service' ? null : DEFAULT_APP_LOGO;
+  const logoSources = [app.logoUrl, defaultLogo].filter((source, index, sources) => (
     source && sources.indexOf(source) === index
   ));
 
   useEffect(() => {
     setSourceIndex(0);
-  }, [app.logoUrl]);
+  }, [app.logoUrl, installationState]);
 
   if (logoSources[sourceIndex]) {
     return (

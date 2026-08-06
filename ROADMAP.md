@@ -412,6 +412,11 @@ target blocks only adoption/migration operations that require restore proof.
   explicit persistent shortcut; schema-v1 shortcut choices migrate without
   loss. Duplicate unnamed definitions receive deterministic visible ordinals
   instead of exposing provider UUIDs.
+- [x] Include discovered administrator-owned systemd units and WireGuard
+  interfaces in the same Application Manager inventory with their real unit and
+  active/failed/stopped state. Keep them off the desktop by default, allow an
+  explicit shortcut and expose no Docker lifecycle, update, Compose or route
+  action. Host-service management remains a separate adoption milestone below.
 - [x] Make the first editable setting the application **Erişim Linki**. The
   owner-only transaction works for both server-managed applications and
   discovered running web containers with one unambiguous private HTTP port; it

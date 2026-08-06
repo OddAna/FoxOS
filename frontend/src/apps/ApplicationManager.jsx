@@ -111,6 +111,7 @@ const ApplicationManager = ({ target }) => {
     ? applications.find((application) => application.id === selectedApplicationId) || null
     : null;
   const selectedContainerId = selectedApplication && selectedApplication.runtime.containerId || null;
+  const selectedInstallationState = selectedApplication && selectedApplication.installation.state || null;
   const selectedDomainApplicationId = selectedApplication && selectedApplication.id || null;
   const canEditSelectedDomain = Boolean(
     selectedApplication && (selectedApplication.capabilities.editAccessLink || selectedApplication.capabilities.editDomain)
@@ -196,7 +197,9 @@ const ApplicationManager = ({ target }) => {
       setComposeState({
         editable: false,
         files: [],
-        reason: 'Bu deaktif kurulumun çalışan container metadata’sı olmadığı için bağlı Compose kaynağı henüz doğrulanamıyor.'
+        reason: selectedInstallationState === 'host-service'
+          ? 'Bu servis doğrudan sunucuya kurulmuş; Docker Compose kaynağı bulunmuyor.'
+          : 'Bu deaktif kurulumun çalışan container metadata’sı olmadığı için bağlı Compose kaynağı henüz doğrulanamıyor.'
       });
       return undefined;
     }
@@ -228,7 +231,7 @@ const ApplicationManager = ({ target }) => {
       });
 
     return () => { active = false; };
-  }, [selectedApplicationId, canEditSelectedCompose]);
+  }, [selectedApplicationId, selectedInstallationState, canEditSelectedCompose]);
 
   const displayedApplications = useMemo(() => {
     const query = searchQuery.trim().toLocaleLowerCase('tr-TR');
@@ -697,9 +700,17 @@ const ApplicationManager = ({ target }) => {
 
         <section style={{ padding: '26px 0', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
           <h3 style={{ margin: '0 0 6px 0', fontSize: '16px' }}>Otomatik Başlatma</h3>
-          <div style={{ marginBottom: '14px', color: '#888', fontSize: '13px' }}>Sunucu veya Docker yeniden başladığında containerın davranışı.</div>
+          <div style={{ marginBottom: '14px', color: '#888', fontSize: '13px' }}>
+            {selectedInstallationState === 'host-service'
+              ? 'Sunucu yeniden başladığında systemd servisinin davranışı.'
+              : 'Sunucu veya Docker yeniden başladığında containerın davranışı.'}
+          </div>
           {!selectedContainerId ? (
-            <div style={{ color: '#888', fontSize: '13px', lineHeight: 1.5 }}>Çalışan container bulunmadığı için otomatik başlatma ayarı henüz kullanılamıyor.</div>
+            <div style={{ color: '#888', fontSize: '13px', lineHeight: 1.5 }}>
+              {selectedApplication.installation.state === 'host-service'
+                ? 'Host servis yönetimi henüz bu alandan kullanılamıyor.'
+                : 'Çalışan container bulunmadığı için otomatik başlatma ayarı henüz kullanılamıyor.'}
+            </div>
           ) : settingsLoading ? (
             <div style={{ color: '#888', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}><Loader2 size={15} className="spin" /> Ayarlar okunuyor...</div>
           ) : (
@@ -775,8 +786,8 @@ const ApplicationManager = ({ target }) => {
           <h3 style={{ margin: '0 0 14px 0', fontSize: '16px' }}>Uygulama</h3>
           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 160px) minmax(0, 1fr)', rowGap: '10px', columnGap: '16px', fontSize: '13px', wordBreak: 'break-word' }}>
             <div style={{ color: '#888' }}>Instance</div><div>{selectedApplication.instanceName || selectedApplication.runtime.containerName || 'Deaktif kurulum'}</div>
-            <div style={{ color: '#888' }}>Container</div><div>{selectedApplication.runtime.containerName || 'Çalışan container yok'}</div>
-            <div style={{ color: '#888' }}>Yönetim</div><div>{selectedApplication.installation && selectedApplication.installation.state === 'inactive-definition' ? 'Kurulum tanımı bulundu · şu anda çalışmıyor' : selectedApplication.managedByServer ? 'Sunucu tarafından yönetiliyor' : `${selectedApplication.provenance.source === 'coolify' ? 'Coolify' : 'Mevcut'} kurulumundan çalışıyor · geçiş tamamlanmadı`}</div>
+            <div style={{ color: '#888' }}>{selectedApplication.installation.state === 'host-service' ? 'Servis' : 'Container'}</div><div>{selectedApplication.installation.state === 'host-service' ? selectedApplication.runtime.serviceUnit || 'systemd servisi' : selectedApplication.runtime.containerName || 'Çalışan container yok'}</div>
+            <div style={{ color: '#888' }}>Yönetim</div><div>{selectedApplication.installation && selectedApplication.installation.state === 'inactive-definition' ? 'Kurulum tanımı bulundu · şu anda çalışmıyor' : selectedApplication.installation && selectedApplication.installation.state === 'host-service' ? 'Sunucuya doğrudan kurulu · yönetim desteği hazırlanıyor' : selectedApplication.managedByServer ? 'Sunucu tarafından yönetiliyor' : `${selectedApplication.provenance.source === 'coolify' ? 'Coolify' : 'Mevcut'} kurulumundan çalışıyor · geçiş tamamlanmadı`}</div>
             <div style={{ color: '#888' }}>Durum</div><div>{selectedApplication.runtime.status || selectedApplication.runtime.state}</div>
             {containerSettings && containerSettings.ports.length > 0 && (
               <><div style={{ color: '#888' }}>Portlar</div><div>{containerSettings.ports.map((port) => `${port.hostIp}:${port.hostPort} → ${port.privatePort}`).join(', ')}</div></>
@@ -794,7 +805,7 @@ const ApplicationManager = ({ target }) => {
     <div data-application-manager>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '16px', marginBottom: '20px' }}>
         <div style={{ color: '#888', fontSize: '13px', lineHeight: 1.5 }}>
-          Sunucuda keşfedilen kurulu uygulamalar. Çalışan ve deaktif her instance ayrı görünür.
+          Sunucuda keşfedilen kurulu uygulamalar ve servisler. Çalışan, deaktif ve doğrudan sunucuya kurulu her kayıt ayrı görünür.
         </div>
         <button type="button" onClick={() => refreshApplications().catch(() => {})} disabled={loading} style={{ background: 'rgba(255,255,255,0.1)', color: '#fff', border: '1px solid rgba(255,255,255,0.2)', padding: '8px 12px', borderRadius: '8px', cursor: loading ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 'bold' }}>
           <RotateCw size={14} className={loading ? 'spin' : ''} /> Yenile
@@ -838,7 +849,7 @@ const ApplicationManager = ({ target }) => {
                 </div>
               </div>
               <div style={{ margin: '0 0 20px 0', fontSize: '12px', color: '#888', lineHeight: '1.5', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {application.externalUrl || application.runtime.containerName || application.summary}
+                {application.externalUrl || application.runtime.containerName || application.runtime.serviceUnit || application.summary}
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '16px' }}>
                 <ApplicationStatus application={application} pendingAction={actions[application.id]} compact />

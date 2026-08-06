@@ -139,6 +139,11 @@
   until a verifiable runtime exists. An explicit shortcut override may expose
   the record on the desktop but must not create or imply a runtime. Never use a
   provider UUID as its visible primary name.
+- The same inventory includes discovered administrator-owned systemd and
+  WireGuard host-service records. Preserve the real unit and observed state,
+  keep them off the desktop by default and expose no Docker lifecycle, update,
+  Compose or access-link capability. Inventory visibility is not adoption or
+  permission to read service contents, WireGuard secrets or mutate the host.
 - Keep the disposable stateless lab separate from production. Preserve its
   reviewed image digest, `slab_*` identity, `.foxos.invalid` hostname,
   loopback-only ports, injected-fault rollback and exact run-labeled cleanup;

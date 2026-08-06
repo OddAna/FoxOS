@@ -243,6 +243,79 @@ function definitionApplicationProjection(resource) {
   };
 }
 
+function hostServiceOperationalState(resource) {
+  const runtime = resource && resource.runtime || {};
+  const state = String(runtime.state || '').toLowerCase();
+  const activeState = String(runtime.activeState || '').toLowerCase();
+  const subState = String(runtime.subState || '').toLowerCase();
+  const status = String(runtime.status || '').toLowerCase();
+
+  if (activeState === 'failed' || subState === 'failed' || status.includes('failed')) return 'error';
+  if (state === 'running' || activeState === 'active') return 'running';
+  if (['activating', 'deactivating', 'reloading'].includes(activeState)) return 'transitioning';
+  return 'stopped';
+}
+
+function hostServiceApplicationProjection(resource) {
+  const runtime = resource.runtime || {};
+  const role = resource.role || 'service';
+  const operationalState = hostServiceOperationalState(resource);
+
+  return {
+    schemaVersion: APPLICATION_INVENTORY_SCHEMA_VERSION,
+    id: resource.id,
+    resourceId: resource.id,
+    name: resource.name || runtime.unit || 'Sunucu servisi',
+    instanceName: runtime.unit || 'systemd servisi',
+    publisher: 'Sunucu Servisi',
+    category: ['network-service', 'proxy'].includes(role) ? 'Network' : 'Services',
+    summary: 'Sunucuya doğrudan kurulu systemd servisi.',
+    description: null,
+    image: null,
+    logoUrl: null,
+    externalUrl: null,
+    declaredUrls: [],
+    hostPort: null,
+    bindAddress: null,
+    authority: 'observed',
+    managedByServer: false,
+    provenance: {
+      source: resource.provider || 'linux-host',
+      importedFrom: null
+    },
+    runtime: {
+      present: true,
+      engine: 'systemd',
+      containerId: null,
+      containerName: null,
+      serviceUnit: runtime.unit || null,
+      state: runtime.state || 'stopped',
+      status: runtime.status || null,
+      healthStatus: runtime.activeState || null,
+      exitCode: null,
+      operationalState
+    },
+    capabilities: {
+      open: false,
+      start: false,
+      stop: false,
+      restart: false,
+      settings: true,
+      checkUpdates: false,
+      editCompose: false,
+      editAccessLink: false,
+      editDomain: false
+    },
+    desktopShortcutDefaultVisible: false,
+    installation: {
+      state: 'host-service',
+      definitionType: role,
+      sourceType: 'systemd'
+    },
+    management: null
+  };
+}
+
 function disambiguateDuplicateNames(applications) {
   const nameCounts = applications.reduce((counts, application) => {
     const key = String(application.name || '').trim().toLocaleLowerCase('tr');
@@ -344,6 +417,12 @@ function buildApplicationInventory({ appStates = [], containers = [], resources 
     applications.push(definitionApplicationProjection(resource));
   }
 
+  for (const resource of resources
+    .filter((candidate) => candidate && candidate.kind === 'host-service')
+    .sort((left, right) => left.id.localeCompare(right.id))) {
+    applications.push(hostServiceApplicationProjection(resource));
+  }
+
   const uniqueApplications = Array.from(
     new Map(applications.map((application) => [application.id, application])).values()
   );
@@ -359,5 +438,7 @@ module.exports = {
   disambiguateDuplicateNames,
   exitCodeFromStatus,
   healthStatusFromRuntime,
+  hostServiceApplicationProjection,
+  hostServiceOperationalState,
   operationalStateForRuntime
 };

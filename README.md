@@ -31,8 +31,9 @@ not use the host package manager for its own runtime.
 - **Desktop applications and Settings manager** — project every discovered
   installed application definition once with a stable local identity and the
   existing FoxOS icon/status language. Running and stopped containers expose
-  only their real capabilities; inactive provider definitions remain visible in
-  Settings > Uygulama Yöneticisi without pretending that a container exists.
+  only their real capabilities; inactive provider definitions and host-native
+  systemd/WireGuard services remain visible in Settings > Uygulama Yöneticisi
+  without pretending that a Docker container exists.
   Create or remove each persistent desktop shortcut and manage available
   lifecycle, access address, restart policy, ports and storage controls
 - **Application update checks** — compare a direct tagged image with its remote
@@ -337,7 +338,7 @@ The authenticated API exposes:
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /api/applications` | Read the canonical user-facing application inventory, including inactive installed definitions, with stable resource identity, truthful runtime state, access address and capability gates |
+| `GET /api/applications` | Read the canonical user-facing application inventory, including inactive installed definitions and host-native systemd/WireGuard services, with stable resource identity, truthful runtime state, access address and capability gates |
 | `POST /api/resources/scan` | Run a read-only inventory and atomically store a new snapshot |
 | `GET /api/resources` | Read the latest stored snapshot, ownership status, relationships, conflicts and adoption blockers |
 | `GET /api/resources/export` | Download a redacted provider-neutral migration plan |

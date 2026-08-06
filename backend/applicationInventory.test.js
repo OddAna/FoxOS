@@ -271,3 +271,66 @@ test('inactive provider definitions remain visible as non-running installed appl
     ['Unnamed service · 1', 'Unnamed service · 2']
   );
 });
+
+test('host-native services remain visible with their systemd state and no fake Docker controls', () => {
+  const applications = buildApplicationInventory({
+    resources: [{
+      id: 'res_' + 'a'.repeat(32),
+      kind: 'host-service',
+      name: 'WireGuard (wg0)',
+      role: 'network-service',
+      ownership: 'observed',
+      provider: 'linux-host',
+      runtime: {
+        engine: 'systemd',
+        containerId: null,
+        state: 'running',
+        status: 'active:exited',
+        unit: 'wg-quick@wg0.service',
+        activeState: 'active',
+        subState: 'exited',
+        inspection: 'complete'
+      }
+    }, {
+      id: 'res_' + 'b'.repeat(32),
+      kind: 'host-service',
+      name: 'clickup-hosts-refresh',
+      role: 'service',
+      ownership: 'observed',
+      provider: 'linux-host',
+      runtime: {
+        engine: 'systemd',
+        containerId: null,
+        state: 'stopped',
+        status: 'failed:failed',
+        unit: 'clickup-hosts-refresh.service',
+        activeState: 'failed',
+        subState: 'failed',
+        inspection: 'complete'
+      }
+    }]
+  });
+
+  assert.equal(applications.length, 2);
+  const wireGuard = applications.find((application) => application.name === 'WireGuard (wg0)');
+  assert.equal(wireGuard.installation.state, 'host-service');
+  assert.equal(wireGuard.runtime.present, true);
+  assert.equal(wireGuard.runtime.engine, 'systemd');
+  assert.equal(wireGuard.runtime.containerId, null);
+  assert.equal(wireGuard.runtime.serviceUnit, 'wg-quick@wg0.service');
+  assert.equal(wireGuard.runtime.operationalState, 'running');
+  assert.equal(wireGuard.desktopShortcutDefaultVisible, false);
+  assert.deepEqual(wireGuard.capabilities, {
+    open: false,
+    start: false,
+    stop: false,
+    restart: false,
+    settings: true,
+    checkUpdates: false,
+    editCompose: false,
+    editAccessLink: false,
+    editDomain: false
+  });
+  const failedService = applications.find((application) => application.name === 'clickup-hosts-refresh');
+  assert.equal(failedService.runtime.operationalState, 'error');
+});

@@ -371,6 +371,15 @@ An operator may explicitly create a desktop shortcut to the record. Duplicate
 metadata-less definitions use stable resource identity and readable ordinals;
 provider UUIDs never become their primary name.
 
+Host-native records discovered by the Linux reader are projected into the same
+Application Manager with their stable resource ID, systemd unit and observed
+active/failed/stopped state. They remain off the desktop by default and do not
+receive Docker lifecycle, update, Compose or route capabilities. This is an
+inventory projection only: it does not read unit contents, WireGuard
+configuration or key material and does not adopt or mutate a host service.
+Host-service management requires the dedicated manifest, continuity and exact
+rollback gates tracked in the roadmap.
+
 The application update check is deliberately separate from the disposable
 image-update apply transaction. It performs Docker and registry reads only. A
 direct tagged image is compared by repository digest. For a Compose-built
