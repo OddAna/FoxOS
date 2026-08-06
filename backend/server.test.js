@@ -8,6 +8,7 @@ const { APP_CATALOG, getCatalogApp } = require('./appCatalog');
 const { iconCandidatesFromHtml, safeHttpUrl } = require('./appIcon');
 const {
   catalogContainerForApp,
+  containerName,
   createContainerPayload,
   discoveredAppStates,
   externalUrlForContainer,
@@ -88,7 +89,7 @@ const dockerMock = http.createServer((req, res) => {
         Id: mockContainerId,
         Image: lastContainerPayload.Image,
         ImageID: 'sha256:' + '8'.repeat(64),
-        Names: ['/foxos-app-' + lastContainerPayload.Labels['com.foxos.app.id']],
+        Names: ['/' + lastContainerPayload.Labels['com.foxos.app.id']],
         State: 'created',
         Status: 'Created',
         Labels: lastContainerPayload.Labels,
@@ -177,10 +178,11 @@ test('catalog installations create real managed Docker container definitions', (
   assert.equal(payload.Image, 'louislam/uptime-kuma:2');
   assert.equal(payload.Labels['com.foxos.managed'], 'true');
   assert.equal(payload.Labels['com.foxos.app.id'], 'uptime-kuma');
+  assert.equal(containerName('uptime-kuma'), 'uptime-kuma');
   assert.deepEqual(payload.HostConfig.PortBindings['3001/tcp'], [
     { HostIp: '127.0.0.1', HostPort: '43001' }
   ]);
-  assert.ok(payload.HostConfig.Binds.includes('foxos-app-uptime-kuma-data:/app/data'));
+  assert.ok(payload.HostConfig.Binds.includes('uptime-kuma-data:/app/data'));
   assert.equal(payload.HostConfig.RestartPolicy.Name, 'unless-stopped');
   assert.equal(
     imagePullPath('docker.stirlingpdf.com/stirlingtools/stirling-pdf:latest'),

@@ -233,12 +233,13 @@ declared by their own web route and fall back to the Docker mark when they do no
 publish one. Coolify databases, workers, agents, reverse proxies, and other
 internal dependency containers are not presented as standalone store applications.
 
-Applications placed under FoxOS management use clear runtime names such as
-`foxos-app-example-com` or `foxos-app-wordpress`. Public domains are preferred;
+Applications placed under server management use clear runtime names such as
+`example-com` or `wordpress`. Public domains are preferred;
 temporary preview domains fall back to the application service name. Provider
 UUIDs, migration operation hashes and workload classifications are kept out of
-the user-visible application name. Supporting TCP helpers use names such as
-`foxos-bridge-example-com-postgres` rather than operation hashes.
+the user-visible application name. Controller brands are also excluded:
+supporting TCP helpers use names such as `example-com-postgres-bridge` rather
+than FoxOS/provider prefixes or operation hashes.
 
 ## Server-owned Resource Registry
 

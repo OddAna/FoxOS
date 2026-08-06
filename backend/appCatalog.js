@@ -16,7 +16,7 @@ const APP_CATALOG = Object.freeze([
     logoUrl: DASHBOARD_ICON_BASE + 'uptime-kuma.svg',
     docsUrl: 'https://github.com/louislam/uptime-kuma',
     volumes: Object.freeze([
-      Object.freeze({ name: 'foxos-app-uptime-kuma-data', target: '/app/data' })
+      Object.freeze({ name: 'uptime-kuma-data', target: '/app/data' })
     ]),
     binds: Object.freeze([]),
     environment: Object.freeze([]),

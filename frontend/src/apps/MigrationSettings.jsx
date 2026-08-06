@@ -72,7 +72,7 @@ const REVIEW_STATES = {
   ready: 'Geçiş hazırlığına uygun',
   blocked: 'Eksik bilgi',
   unsupported: 'Bu sürümde desteklenmiyor',
-  managed: 'FoxOS yönetiminde',
+  managed: 'Sunucu yönetiminde',
   protected: 'Korunan sistem kaynağı'
 };
 
@@ -82,7 +82,7 @@ const STRATEGY_LABELS = {
   'database-aware-replication-handoff': 'Veritabanına özel aktarım',
   'drain-and-replace': 'İşi boşalt ve değiştir',
   'provider-proxy-retirement-last': 'Sağlayıcı proxy’sini en son kaldır',
-  'already-foxos-managed': 'FoxOS yönetiminde',
+  'already-foxos-managed': 'Sunucu yönetiminde',
   'protected-skip': 'Korunan kaynak — atla',
   'dedicated-lifecycle-required': 'Kaynağa özel yaşam döngüsü gerekli',
   'manual-review-required': 'Elle inceleme gerekli'
@@ -100,7 +100,7 @@ const CLASS_LABELS = {
   stateful: 'Durumlu',
   unknown: 'Belirsiz',
   'provider-owned': 'Harici sağlayıcı yönetiminde',
-  'foxos-owned': 'FoxOS yönetiminde'
+  'foxos-owned': 'Sunucu yönetiminde'
 };
 
 const AVAILABILITY_LABELS = {
@@ -137,10 +137,10 @@ const BLOCKER_LABELS = {
   'immutable-source-evidence-missing': 'Değişmez kaynak sürümü kanıtı eksik.',
   'environment-evidence-missing': 'Ortam değişkenleri için güvenli kanıt eksik.',
   'immutable-image-missing': 'Bu imajı değişmez biçimde yeniden kuracak repository digest kanıtı eksik.',
-  'foxos-health-proof-missing': 'FoxOS tarafından üretilmiş güncel sağlık kanıtı eksik.',
-  'foxos-route-missing': 'Gözlenen sağlayıcı rotasının FoxOS yönetiminde etkin bir karşılığı yok.',
+  'foxos-health-proof-missing': 'Sunucu tarafından üretilmiş güncel sağlık kanıtı eksik.',
+  'foxos-route-missing': 'Gözlenen sağlayıcı rotasının sunucu yönetiminde etkin bir karşılığı yok.',
   'runtime-resource-limits-missing': 'CPU, bellek ve işlem sınırları açıkça belirlenmemiş.',
-  'update-rollback-proof-missing': 'Başarılı FoxOS güncelleme ve birebir geri alma kanıtı eksik.',
+  'update-rollback-proof-missing': 'Sunucuya ait başarılı güncelleme ve birebir geri alma kanıtı eksik.',
   'recovery-target-unavailable': 'Sunucu dışı kurtarma hedefi hazır değil.',
   'migration-apply-transaction-not-implemented': 'Gerçek geçiş işlemi bu sürümde henüz açılmadı.',
   'general-domain-route-cutover-not-implemented': 'Genel alan adı ve TLS yönlendirme geçişi henüz açılmadı.',
@@ -320,7 +320,7 @@ const MigrationSettings = () => {
             if (!active) return;
             setMessage({
               type: 'success',
-              text: `${payload.run.summary.completed} kaynak doğrulanmış olarak FoxOS trafiğine geçirildi.`
+              text: `${payload.run.summary.completed} kaynak doğrulanmış olarak sunucu yönetimine geçirildi.`
             });
           } else if (payload.run.status === 'blocked') {
             setMessage({
@@ -584,7 +584,7 @@ const MigrationSettings = () => {
             <DetailLine label="İnceleme stratejisi">{STRATEGY_LABELS[detailResource.strategy] || detailResource.strategy}</DetailLine>
             <DetailLine label="Hazırlık durumu">
               {state === 'managed'
-                ? detailResource.management?.state === 'active' ? 'Geçiş tamamlandı' : 'FoxOS yönetiminde · inceleme gerekli'
+                ? detailResource.management?.state === 'active' ? 'Geçiş tamamlandı' : 'Sunucu yönetiminde · inceleme gerekli'
                 : detailResource.readiness?.evidenceComplete ? 'Önkoşullar tamam' : 'Eksikler ayrıntılarda çözülecek'}
             </DetailLine>
             <DetailLine label="Erişilebilirlik">{AVAILABILITY_LABELS[detailResource.availability?.currentMode] || detailResource.availability?.currentMode}</DetailLine>
@@ -896,7 +896,7 @@ const MigrationSettings = () => {
             {latestRun && (
               <div style={{ marginBottom: '14px', color: '#888', fontSize: '12px' }}>
                 {latestRunAlreadyManaged
-                  ? `Son durum: FoxOS yönetiminde · ${latestRun.resources.length}/${latestRun.resources.length} tamamlandı`
+                ? `Son durum: Sunucu yönetiminde · ${latestRun.resources.length}/${latestRun.resources.length} tamamlandı`
                   : `Son işlem: ${RUN_STATUS_LABELS[latestRun.status] || latestRun.status} · ${latestRun.summary?.completed || 0}/${latestRun.summary?.selected || 0} tamamlandı`}
               </div>
             )}
