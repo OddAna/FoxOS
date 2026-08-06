@@ -193,6 +193,7 @@ test('candidate health waits through the initial connection race and accepts pla
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-production-health-retry-'));
   const operationId = 'smop_' + 'b'.repeat(32);
   const candidateId = 'c'.repeat(64);
+  const gatewayId = 'f'.repeat(64);
   let probeCalls = 0;
   let waitCalls = 0;
   const adapter = createProductionStatelessMigrationAdapter({
@@ -202,7 +203,8 @@ test('candidate health waits through the initial connection race and accepts pla
       assert.equal(requestPath, '/containers/' + candidateId + '/json');
       return { State: { Running: true, ExitCode: 0, OOMKilled: false } };
     },
-    dockerExec: async (_containerId, command) => {
+    dockerExec: async (containerId, command) => {
+      assert.equal(containerId, gatewayId);
       assert.equal(command[0], 'wget');
       probeCalls += 1;
       if (probeCalls === 1) return { exitCode: 1, output: 'connection refused' };
@@ -215,6 +217,7 @@ test('candidate health waits through the initial connection race and accepts pla
     },
     certificateImporter: { importDomain: async () => ({}) },
     ingressAuthority: {
+      inspectOwnedInfrastructure: async () => ({ gateway: { Id: gatewayId } }),
       stageRoutes: async () => [],
       verifyLegacyDomain: async () => ({ legacyReady: true })
     },
@@ -268,12 +271,16 @@ test('candidate health exhaustion persists bounded diagnostics before cleanup', 
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-production-health-failure-'));
   const operationId = 'smop_' + 'd'.repeat(32);
   const candidateId = 'e'.repeat(64);
+  const gatewayId = 'f'.repeat(64);
   const adapter = createProductionStatelessMigrationAdapter({
     dataRoot,
     dockerRequest: async () => ({
       State: { Running: true, ExitCode: 0, OOMKilled: false }
     }),
-    dockerExec: async () => ({ exitCode: 1, output: 'connection refused' }),
+    dockerExec: async (containerId) => {
+      assert.equal(containerId, gatewayId);
+      return { exitCode: 1, output: 'connection refused' };
+    },
     resourceRegistry: { getLatest: () => null },
     secretManager: {
       getEnvironmentRevision: () => null,
@@ -281,6 +288,7 @@ test('candidate health exhaustion persists bounded diagnostics before cleanup', 
     },
     certificateImporter: { importDomain: async () => ({}) },
     ingressAuthority: {
+      inspectOwnedInfrastructure: async () => ({ gateway: { Id: gatewayId } }),
       stageRoutes: async () => [],
       verifyLegacyDomain: async () => ({ legacyReady: true })
     },
@@ -327,6 +335,7 @@ test('candidate health polling stops at its bounded readiness deadline', async (
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-production-health-deadline-'));
   const operationId = 'smop_' + '6'.repeat(32);
   const candidateId = '7'.repeat(64);
+  const gatewayId = '8'.repeat(64);
   let elapsed = 0;
   let probeCalls = 0;
   const adapter = createProductionStatelessMigrationAdapter({
@@ -334,7 +343,8 @@ test('candidate health polling stops at its bounded readiness deadline', async (
     dockerRequest: async () => ({
       State: { Running: true, ExitCode: 0, OOMKilled: false }
     }),
-    dockerExec: async () => {
+    dockerExec: async (containerId) => {
+      assert.equal(containerId, gatewayId);
       probeCalls += 1;
       return { exitCode: 1, output: 'connection refused' };
     },
@@ -345,6 +355,7 @@ test('candidate health polling stops at its bounded readiness deadline', async (
     },
     certificateImporter: { importDomain: async () => ({}) },
     ingressAuthority: {
+      inspectOwnedInfrastructure: async () => ({ gateway: { Id: gatewayId } }),
       stageRoutes: async () => [],
       verifyLegacyDomain: async () => ({ legacyReady: true })
     },
@@ -401,7 +412,7 @@ test('production adapter exposes every safe transaction capability and no destru
     },
     certificateImporter: { importDomain: async () => ({}) },
     ingressAuthority: {
-      inspectOwnedInfrastructure: async () => ({}),
+      inspectOwnedInfrastructure: async () => ({ gateway: { Id: 'f'.repeat(64) } }),
       stageRoutes: async () => [],
       verifyLegacyDomain: async () => ({ legacyReady: true })
     }
@@ -411,5 +422,53 @@ test('production adapter exposes every safe transaction capability and no destru
   assert.deepEqual(status.unsafeCapabilities, []);
   assert.equal(typeof adapter.stopSource, 'undefined');
   assert.equal(typeof adapter.detachProvider, 'undefined');
+  fs.rmSync(dataRoot, { recursive: true, force: true });
+});
+
+test('candidate health fails closed before exec when gateway identity is not exact', async () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-production-health-gateway-'));
+  const operationId = 'smop_' + '9'.repeat(32);
+  let execCalls = 0;
+  const adapter = createProductionStatelessMigrationAdapter({
+    dataRoot,
+    dockerRequest: async () => ({ State: { Running: true, ExitCode: 0, OOMKilled: false } }),
+    dockerExec: async () => { execCalls += 1; return { exitCode: 0, output: '' }; },
+    resourceRegistry: { getLatest: () => null },
+    secretManager: {
+      getEnvironmentRevision: () => null,
+      resolveEnvironment: () => []
+    },
+    certificateImporter: { importDomain: async () => ({}) },
+    ingressAuthority: {
+      inspectOwnedInfrastructure: async () => ({ gateway: { Id: 'foxos-gateway' } }),
+      stageRoutes: async () => [],
+      verifyLegacyDomain: async () => ({ legacyReady: true })
+    }
+  });
+  fs.writeFileSync(path.join(adapter.paths.operationsRoot, operationId + '.json'), JSON.stringify({
+    schemaVersion: 1,
+    operationId,
+    candidate: {
+      containerId: 'a'.repeat(64),
+      alias: 'foxos-health-candidate',
+      privatePort: 3000
+    }
+  }));
+  await assert.rejects(adapter.verifyCandidateHealth({
+    operationId,
+    plan: {
+      executionContract: {
+        candidate: {
+          health: {
+            privatePort: 3000,
+            path: '/',
+            acceptedStatusMinimum: 200,
+            acceptedStatusMaximum: 399
+          }
+        }
+      }
+    }
+  }), (error) => error.code === 'foxos-gateway-identity-invalid');
+  assert.equal(execCalls, 0);
   fs.rmSync(dataRoot, { recursive: true, force: true });
 });

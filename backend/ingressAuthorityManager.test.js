@@ -26,6 +26,9 @@ test('staged routes switch through owned ingress and remove host authority on ro
   const adminCommands = [];
   const firewallRules = new Set();
   const hostCalls = [];
+  const gatewayId = 'a'.repeat(64);
+  const ingressId = 'b'.repeat(64);
+  const execContainerIds = [];
   const manager = createIngressAuthorityManager({
     dataRoot,
     dockerRequest: async (method, requestPath) => {
@@ -34,14 +37,17 @@ test('staged routes switch through owned ingress and remove host authority on ro
         return { Internal: true, Labels: { 'com.foxos.routing': 'true', 'com.foxos.core': 'true' } };
       }
       if (requestPath === '/containers/foxos-gateway/json') {
-        return { State: { Running: true }, Config: { Labels: { 'com.foxos.gateway': 'true' } } };
+        return { Id: gatewayId, State: { Running: true }, Config: { Labels: { 'com.foxos.gateway': 'true' } } };
       }
       if (requestPath === '/containers/foxos-ingress/json') {
-        return { State: { Running: true }, Config: { Labels: { 'com.foxos.ingress': 'true' } } };
+        return { Id: ingressId, State: { Running: true }, Config: { Labels: { 'com.foxos.ingress': 'true' } } };
       }
       throw new Error('Unexpected Docker request: ' + requestPath);
     },
-    dockerExec: async () => ({ exitCode: 0, output: '' }),
+    dockerExec: async (containerId) => {
+      execContainerIds.push(containerId);
+      return { exitCode: 0, output: '' };
+    },
     hostCommand: async (binary, args) => {
       hostCalls.push([binary, ...args]);
       const action = args.includes('-C') ? 'check' : args.includes('-I') ? 'insert' : args.includes('-D') ? 'delete' : 'other';
@@ -79,6 +85,7 @@ test('staged routes switch through owned ingress and remove host authority on ro
   assert.equal(adminCommands.includes('set map /runtime/routes.map app.example.com foxos'), true);
   assert.equal(adminCommands.includes('set map /runtime/routes.map app.example.com legacy'), true);
   assert.equal(hostCalls.some((call) => call.includes('--to-ports') && call.includes('9443')), true);
+  assert.deepEqual(execContainerIds, [gatewayId, gatewayId]);
   fs.rmSync(dataRoot, { recursive: true, force: true });
 });
 

@@ -126,6 +126,8 @@ function createIngressAuthorityManager({
       networkLabels['com.foxos.routing'] !== 'true' || networkLabels['com.foxos.core'] !== 'true' ||
       network.Internal !== true ||
       gatewayLabels['com.foxos.gateway'] !== 'true' || ingressLabels['com.foxos.ingress'] !== 'true' ||
+      !CONTAINER_ID_PATTERN.test(String(gateway.Id || '')) ||
+      !CONTAINER_ID_PATTERN.test(String(ingress.Id || '')) ||
       !gateway.State || gateway.State.Running !== true || !ingress.State || ingress.State.Running !== true
     ) {
       throw new IngressAuthorityError(
@@ -251,16 +253,21 @@ function createIngressAuthorityManager({
     return blocks.join('\n\n') + (blocks.length ? '\n' : '');
   }
 
-  async function reloadCaddy(routes) {
+  async function reloadCaddy(routes, gatewayContainerId = null) {
+    let exactGatewayContainerId = gatewayContainerId;
+    if (!CONTAINER_ID_PATTERN.test(String(exactGatewayContainerId || ''))) {
+      const infrastructure = await inspectOwnedInfrastructure();
+      exactGatewayContainerId = infrastructure.gateway.Id;
+    }
     ensureDirectory(caddyRuntimeRoot);
     atomicWrite(caddyRoutesFile, renderCaddyRoutes(routes));
-    const validate = await dockerExec(gatewayContainer, [
+    const validate = await dockerExec(exactGatewayContainerId, [
       'caddy', 'validate', '--config', '/etc/caddy/Caddyfile', '--adapter', 'caddyfile'
     ], { timeoutMs: 30000 });
     if (validate.exitCode !== 0) {
       throw new IngressAuthorityError('FoxOS route configuration validation failed', 503, 'caddy-route-validation-failed');
     }
-    const reload = await dockerExec(gatewayContainer, [
+    const reload = await dockerExec(exactGatewayContainerId, [
       'caddy', 'reload', '--config', '/etc/caddy/Caddyfile', '--adapter', 'caddyfile',
       '--address', 'http://127.0.0.1:2019'
     ], { timeoutMs: 30000 });
@@ -282,7 +289,7 @@ function createIngressAuthorityManager({
   }
 
   async function stageRoutes(routeInputs) {
-    await inspectOwnedInfrastructure();
+    const infrastructure = await inspectOwnedInfrastructure();
     if (!Array.isArray(routeInputs) || !routeInputs.length) {
       throw new IngressAuthorityError('At least one production route is required', 400, 'empty-production-routes');
     }
@@ -297,7 +304,7 @@ function createIngressAuthorityManager({
       current.routes[input.routeId] = { ...input, status: 'staged', stagedAt: now() };
       if (!current.domains[input.domain]) current.domains[input.domain] = 'legacy';
     }
-    await reloadCaddy(current.routes);
+    await reloadCaddy(current.routes, infrastructure.gateway.Id);
     persist(current);
     for (const domain of new Set(routeInputs.map((route) => route.domain))) {
       await setRuntimeMap(domain, current.domains[domain]);
