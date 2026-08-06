@@ -87,6 +87,7 @@ function createIngressAuthorityManager({
   const routeMapFile = path.join(root, 'routes.map');
   const caddyRuntimeRoot = path.join(dataRoot, 'gateway', 'runtime');
   const caddyRoutesFile = path.join(caddyRuntimeRoot, '50-stateless-routes.caddy');
+  const resolvedFirewallBinaries = new Map();
 
   function now() {
     return new Date(clock()).toISOString();
@@ -357,14 +358,31 @@ function createIngressAuthorityManager({
     return result && result.success === true;
   }
 
+  async function resolveFirewallBinary(binary) {
+    if (resolvedFirewallBinaries.has(binary)) return resolvedFirewallBinaries.get(binary);
+    const candidates = [binary, binary + '-legacy', binary + '-nft'];
+    for (const candidate of candidates) {
+      const available = await firewall(candidate, ['-w', '5', '-t', 'nat', '-L'], true);
+      if (!available) continue;
+      resolvedFirewallBinaries.set(binary, candidate);
+      return candidate;
+    }
+    throw new IngressAuthorityError(
+      'No compatible host firewall backend is available for FoxOS ingress',
+      503,
+      'host-firewall-unavailable'
+    );
+  }
+
   async function installFirewallFamily(binary) {
-    await firewall(binary, ['-w', '5', '-t', 'nat', '-N', 'FOXOS_INGRESS'], true);
-    await firewall(binary, ['-w', '5', '-t', 'nat', '-F', 'FOXOS_INGRESS']);
-    await firewall(binary, [
+    const executable = await resolveFirewallBinary(binary);
+    await firewall(executable, ['-w', '5', '-t', 'nat', '-N', 'FOXOS_INGRESS'], true);
+    await firewall(executable, ['-w', '5', '-t', 'nat', '-F', 'FOXOS_INGRESS']);
+    await firewall(executable, [
       '-w', '5', '-t', 'nat', '-A', 'FOXOS_INGRESS', '-p', 'tcp', '--dport', '80',
       '-j', 'REDIRECT', '--to-ports', String(ingressHttpPort)
     ]);
-    await firewall(binary, [
+    await firewall(executable, [
       '-w', '5', '-t', 'nat', '-A', 'FOXOS_INGRESS', '-p', 'tcp', '--dport', '443',
       '-j', 'REDIRECT', '--to-ports', String(ingressHttpsPort)
     ]);
@@ -372,19 +390,20 @@ function createIngressAuthorityManager({
       '-w', '5', '-t', 'nat', '-m', 'addrtype', '--dst-type', 'LOCAL', '-p', 'tcp',
       '-m', 'multiport', '--dports', '80,443', '-j', 'FOXOS_INGRESS'
     ];
-    const exists = await firewall(binary, ['-w', '5', '-t', 'nat', '-C', 'PREROUTING', ...jump.slice(4)], true);
+    const exists = await firewall(executable, ['-w', '5', '-t', 'nat', '-C', 'PREROUTING', ...jump.slice(4)], true);
     if (!exists) {
-      await firewall(binary, ['-w', '5', '-t', 'nat', '-I', 'PREROUTING', '1', ...jump.slice(4)]);
+      await firewall(executable, ['-w', '5', '-t', 'nat', '-I', 'PREROUTING', '1', ...jump.slice(4)]);
     }
   }
 
   async function removeFirewallFamily(binary) {
+    const executable = await resolveFirewallBinary(binary);
     const rule = [
       '-m', 'addrtype', '--dst-type', 'LOCAL', '-p', 'tcp', '-m', 'multiport',
       '--dports', '80,443', '-j', 'FOXOS_INGRESS'
     ];
-    while (await firewall(binary, ['-w', '5', '-t', 'nat', '-C', 'PREROUTING', ...rule], true)) {
-      await firewall(binary, ['-w', '5', '-t', 'nat', '-D', 'PREROUTING', ...rule]);
+    while (await firewall(executable, ['-w', '5', '-t', 'nat', '-C', 'PREROUTING', ...rule], true)) {
+      await firewall(executable, ['-w', '5', '-t', 'nat', '-D', 'PREROUTING', ...rule]);
     }
   }
 
