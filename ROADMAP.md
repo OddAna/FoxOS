@@ -260,6 +260,9 @@ target blocks only adoption/migration operations that require restore proof.
   migration identifiers only as internal evidence. Supporting bridges follow
   `<app>-<service>-bridge`; neither application nor helper name carries a FoxOS
   or provider prefix.
+- [x] Reconcile public ingress against the firewall backend that owns Docker's
+  active NAT chain so a provider restart cannot silently put migrated domains
+  back behind the legacy proxy; reassert recorded authority on agent startup.
 - [ ] Expand the implemented disposable dry-run, conflict detection, verified
   cutover and reversible rollback to real application classes one safety gate at
   a time.

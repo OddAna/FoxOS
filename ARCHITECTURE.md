@@ -440,6 +440,14 @@ runtime map. A temporary FoxOS TCP bridge carries unselected domains to the
 still-running legacy proxy. Reversible host `iptables`/`ip6tables` chains place
 HAProxy in front only at the traffic-switch phase.
 
+The host ingress rule follows the firewall backend that owns Docker's active
+`DOCKER` NAT chain instead of assuming that the system default, `legacy`, or
+`nft` frontend is authoritative. When server-owned public authority is already
+recorded, agent startup revalidates the owned gateway and ingress containers
+and reasserts the reversible IPv4/IPv6 redirect on that active backend. The
+resulting data path remains in the kernel and the separately running routing
+containers; stopping the management agent does not remove it.
+
 Execution proves candidate health before staging, validates TLS directly at
 Caddy, then requires eight public browser-trusted samples to contain both the
 expected FoxOS route identity and operation-bound candidate identity. One
