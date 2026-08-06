@@ -8,10 +8,71 @@ const {
   detectConflicts,
   identityAliases,
   parseTraefikRoutes,
+  readFoxosMigrationManagement,
   resolveResourceId,
   roleFor,
   safeLabels
 } = require('./resourceRegistry');
+
+test('verified FoxOS traffic authority projects a preserved provider source as FoxOS-managed', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-registry-management-'));
+  const resourceId = 'res_' + '1'.repeat(32);
+  const operationId = 'smop_' + '2'.repeat(32);
+  const routeId = 'smroute_' + '3'.repeat(24);
+  const candidateContainerId = '4'.repeat(64);
+  const domain = 'app.example.test';
+  try {
+    fs.mkdirSync(path.join(root, 'stateless-migrations', 'operations'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'ingress'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'stateless-migrations', 'operations', operationId + '.json'), JSON.stringify({
+      operationId,
+      resourceId,
+      status: 'traffic-on-foxos-source-preserved',
+      completedAt: '2026-08-06T02:07:55.522Z',
+      source: { retainedForRollback: true },
+      candidate: { containerId: candidateContainerId },
+      route: { routeId, domain },
+      trafficProof: {
+        healthy: true,
+        tlsValid: true,
+        candidateServing: true,
+        sourceContinuouslyRunning: true
+      }
+    }));
+    fs.writeFileSync(path.join(root, 'ingress', 'authority.json'), JSON.stringify({
+      owner: 'foxos',
+      publicAuthorityActive: true,
+      domains: { [domain]: 'foxos' },
+      routes: {
+        [routeId]: { routeId, operationId, domain, status: 'active' }
+      }
+    }));
+
+    const management = readFoxosMigrationManagement(root, [{
+      id: 'res_' + '5'.repeat(32),
+      runtime: { containerId: candidateContainerId, state: 'running' }
+    }]).get(resourceId);
+    assert.equal(management.owner, 'foxos');
+    assert.equal(management.state, 'active');
+    assert.equal(management.operationId, operationId);
+    assert.equal(management.authorityActive, true);
+    assert.equal(management.candidateRunning, true);
+    assert.equal(management.sourcePreserved, true);
+    assert.equal(management.automaticMigrationAllowed, false);
+
+    fs.writeFileSync(path.join(root, 'ingress', 'authority.json'), JSON.stringify({
+      owner: 'foxos',
+      publicAuthorityActive: true,
+      domains: { [domain]: 'legacy' },
+      routes: {
+        [routeId]: { routeId, operationId, domain, status: 'inactive' }
+      }
+    }));
+    assert.equal(readFoxosMigrationManagement(root, []).get(resourceId).state, 'attention-required');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 function container({ id, name, image, labels, port }) {
   return {

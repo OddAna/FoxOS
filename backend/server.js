@@ -610,6 +610,7 @@ const migrationRunManager = createMigrationRunManager({
   dataRoot: DATA_ROOT,
   getServerMigrationPlan: (planId) => migrationOrchestrator.getPlan(planId),
   getLatestRegistrySnapshot: () => resourceRegistry.getLatest(),
+  getMigrationManagement: (resourceId) => resourceRegistry.getMigrationManagement(resourceId),
   saveSelection: (input) => migrationSelectionManager.save(input),
   prepareStatelessPlan: (input) => statelessMigrationManager.createPlan(input),
   getStatelessReviewStatus: (planId) => statelessMigrationReviewManager.status(planId),
@@ -626,6 +627,15 @@ const migrationRunManager = createMigrationRunManager({
   refreshServerMigrationPlan: () => migrationOrchestrator.createPlan({
     confirmation: PLAN_SERVER_MIGRATION_CONFIRMATION
   }),
+  reconcileCompletedMigrations: async () => {
+    const snapshot = await resourceRegistry.scan();
+    const plan = migrationOrchestrator.createPlan({ confirmation: PLAN_SERVER_MIGRATION_CONFIRMATION });
+    return {
+      status: 'reconciled',
+      snapshotId: snapshot.snapshotId,
+      serverPlanId: plan.planId
+    };
+  },
   prepareStatelessReview: (plan) => {
     const routes = plan.executionContract.routes || [];
     if (!routes.length) throw new MigrationRunError('No production route is available for review', 409, 'production-route-missing');
@@ -2115,6 +2125,8 @@ if (require.main === module) {
               'Resource Registry snapshot ' + snapshot.snapshotId +
               ' recorded ' + snapshot.summary.resources + ' resources using Docker GET requests only'
             );
+            const plan = migrationOrchestrator.createPlan({ confirmation: PLAN_SERVER_MIGRATION_CONFIRMATION });
+            console.log('Server migration plan ' + plan.planId + ' reconciled from the startup scan');
           })
           .catch((error) => {
             console.error('Initial Resource Registry scan failed:', error.message);

@@ -84,6 +84,7 @@ function countBy(items, selector) {
 function migrationStrategy(resource) {
   const classification = resource.classification || {};
   if (resource.protected) return 'protected-skip';
+  if (resource.management && resource.management.owner === 'foxos') return 'already-foxos-managed';
   if (classification.authorityClass === 'foxos-owned') return 'already-foxos-managed';
   if (classification.status !== 'classified') return 'manual-review-required';
   if (classification.workloadRole === 'proxy') return 'provider-proxy-retirement-last';
@@ -264,8 +265,9 @@ function createMigrationOrchestrator({
   function planResource(currentSnapshot, resource) {
     const strategy = migrationStrategy(resource);
     const classification = resource.classification || null;
+    const foxosManaged = Boolean(resource.management && resource.management.owner === 'foxos');
     const migrationRequired = Boolean(
-      !resource.protected && classification && classification.authorityClass === 'provider-owned'
+      !resource.protected && !foxosManaged && classification && classification.authorityClass === 'provider-owned'
     );
     const reviewEligible = Boolean(
       migrationRequired && strategy === 'blue-green-atomic-route' &&
@@ -293,7 +295,7 @@ function createMigrationOrchestrator({
       );
     }
 
-    const manifestBlockers = manifest && manifest.gates && manifest.gates.blockers || [];
+    const manifestBlockers = migrationRequired && manifest && manifest.gates && manifest.gates.blockers || [];
     const transactionAcquiredBlockers = strategy === 'blue-green-atomic-route'
       ? uniqueBlockers(manifestBlockers.filter((entry) => (
         TRANSACTION_PROVEN_MANIFEST_BLOCKERS.has(entry.code)
@@ -328,9 +330,12 @@ function createMigrationOrchestrator({
       name: resource.name,
       observedProvider: resource.provider,
       observedOwnership: resource.ownership,
+      currentProvider: foxosManaged ? 'foxos' : resource.provider,
+      currentAuthorityClass: foxosManaged ? 'foxos-owned' : classification && classification.authorityClass || null,
+      management: resource.management || null,
       protected: Boolean(resource.protected),
       migrationRequired,
-      targetLifecycle: migrationRequired ? 'independent' : resource.ownership,
+      targetLifecycle: migrationRequired ? 'independent' : foxosManaged ? 'foxos-managed' : resource.ownership,
       classification,
       strategy,
       availability: availabilityPolicy(resource, strategy),
