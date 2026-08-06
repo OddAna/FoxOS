@@ -30,13 +30,22 @@ not use the host package manager for its own runtime.
   server and discover usable applications that already exist on that server
 - **Desktop applications and Settings manager** — project each usable server
   application once with a stable local identity, live status and existing FoxOS
-  icon language; open it from the desktop or manage lifecycle, access address,
-  restart policy, ports and storage inside Settings > Uygulama Yöneticisi
+  icon language; create or remove its persistent desktop shortcut, open it from
+  the desktop or manage lifecycle, access address, restart policy, ports and
+  storage inside Settings > Uygulama Yöneticisi
+- **Application update checks** — compare a direct tagged image with its remote
+  registry digest without pulling it; Compose-built applications also follow the
+  final Dockerfile base and compare public Docker Hub version metadata when the
+  running build exposes a version, as n8n does
+- **Compose source editor** — open only the real Compose files proven by Docker
+  project metadata, reject stale or invalid YAML writes, encrypt the previous
+  revision and save atomically without silently recreating the running service
 - **Host terminal** — commands run directly in the Linux host namespaces
 - **Host file access** — the Files app contains a `Sunucu` entry linked to
   the host root filesystem
-- **Persistent FoxOS workspace** — desktop positions and trash data live under
-  `.foxos-data/` and survive rebuilds
+- **Persistent FoxOS workspace** — desktop positions, shortcut visibility and
+  trash data survive rebuilds; owner-only control state lives under
+  `.foxos-data/`
 - **Server-side authentication** — salted scrypt password hashing, HTTP-only
   session cookies, protected management APIs, and basic login rate limiting
 - **Independent HTTPS gateway** — the optional FoxOS-owned Caddy service issues

@@ -117,10 +117,21 @@
   `traefik/whoami:v1.10.3` and `v1.11.0` tag/digest set, registry revalidation,
   immutable digest pull, non-root/read-only/capability-free runtime, fresh
   dedicated bridge, loopback-only port, health-before-cutover, process lock,
-  retained previous revision and exact rollback. Do not widen it to Store apps,
-  imported containers, arbitrary registries, credentials, persistence, secrets,
-  routes or real workloads without Burak's explicit approval and the missing
-  safety gates in `ROADMAP.md`.
+  retained previous revision and exact rollback. Do not widen its **apply** path
+  to Store apps, imported containers, arbitrary registries, credentials,
+  persistence, secrets, routes or real workloads without Burak's explicit
+  approval and the missing safety gates in `ROADMAP.md`. The separate
+  application update-check path may read tagged registry metadata but must not
+  pull, build, restart, recreate or imply that an unknown result is current.
+- The application Compose editor is a source-file editor, not a deployment or
+  adoption shortcut. Resolve files only from the exact selected container's
+  `com.docker.compose.*` labels; reject client-supplied paths, symlinks,
+  oversized/non-YAML files, stale revisions, invalid YAML, selected-service
+  removal, FoxOS core and `/opt/foxos`. Encrypt the prior content before atomic
+  replacement and never persist Compose plaintext in operation records. Saving
+  must not run Compose, pull/build an image, recreate/restart a service, detach a
+  provider or claim server ownership; warn that an external provider can
+  overwrite its file until migration completes.
 - Keep the disposable stateless lab separate from production. Preserve its
   reviewed image digest, `slab_*` identity, `.foxos.invalid` hostname,
   loopback-only ports, injected-fault rollback and exact run-labeled cleanup;

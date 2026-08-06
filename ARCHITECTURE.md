@@ -354,6 +354,38 @@ FoxOS state is the update and rollback authority. This fixed lab is not approval
 for arbitrary image repositories, credentials, persistent applications, routes,
 production workloads or Store update controls.
 
+### Implemented boundary: Application shortcuts, update checks and Compose source editing
+
+The canonical application inventory now carries one server-persisted desktop
+shortcut preference per stable application ID. Hiding a shortcut changes only
+that projection. It creates or deletes no host file, image, container, volume,
+route or application and remains stable across browsers and agent rebuilds.
+
+The application update check is deliberately separate from the disposable
+image-update apply transaction. It performs Docker and registry reads only. A
+direct tagged image is compared by repository digest. For a Compose-built
+service, FoxOS resolves only the exact Compose files and service recorded in the
+container labels, follows the final external Dockerfile base, and may compare
+the running image's OCI version with anonymous public Docker Hub metadata. It
+does not pull an image, populate the image cache, build, restart, recreate,
+change desired state or claim that an ambiguous source is current.
+
+The Compose editor is an authenticated source-file operation, not deployment or
+ownership adoption. File paths come only from `com.docker.compose.*` metadata;
+the client cannot supply a path. Sources must be bounded regular YAML files
+under the mounted host root. FoxOS core containers and `/opt/foxos` are blocked.
+Every write requires the last-read content digest, bounded YAML parsing, a
+surviving selected service and explicit UI confirmation. The previous plaintext
+is encrypted with the server master key into owner-only FoxOS state before an
+atomic replacement preserving the original owner and mode. The operation record
+contains fingerprints and metadata, never Compose content.
+
+Saving a Compose source does not run `docker compose`, pull, build, restart or
+recreate a service. An external-provider path remains externally authoritative
+and is marked as overwrite-prone until migration produces a server-owned
+manifest/source. General update apply, Compose reconciliation and rollback of a
+running production application remain separate incomplete safety contracts.
+
 ### Implemented boundary: Application Manifest
 
 Application Manifest joins the previously separate resource, environment,

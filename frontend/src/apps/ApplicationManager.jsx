@@ -3,13 +3,16 @@ import {
   ArrowLeft,
   Copy,
   ExternalLink,
+  FileText,
   Loader2,
   Play,
+  Plus,
   RotateCw,
   Save,
   Search,
   Settings,
-  Square
+  Square,
+  X
 } from 'lucide-react';
 import { apiFetch } from '../api';
 import ApplicationLogo from '../components/ApplicationLogo';
@@ -51,7 +54,8 @@ const ApplicationManager = ({ target }) => {
     error,
     loading,
     refreshApplications,
-    runApplicationAction
+    runApplicationAction,
+    setDesktopShortcut
   } = useApplicationInventory();
   const { showDialog } = useDialog();
   const [selectedApplicationId, setSelectedApplicationId] = useState(target && target.applicationId || null);
@@ -66,6 +70,16 @@ const ApplicationManager = ({ target }) => {
   const [domainLoading, setDomainLoading] = useState(false);
   const [domainApplying, setDomainApplying] = useState(false);
   const [domainMessage, setDomainMessage] = useState(null);
+  const [shortcutSaving, setShortcutSaving] = useState(false);
+  const [updateChecking, setUpdateChecking] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState(null);
+  const [composeState, setComposeState] = useState(null);
+  const [composeLoading, setComposeLoading] = useState(false);
+  const [composeSaving, setComposeSaving] = useState(false);
+  const [composeError, setComposeError] = useState(null);
+  const [composeMessage, setComposeMessage] = useState(null);
+  const [selectedComposeFileId, setSelectedComposeFileId] = useState(null);
+  const [composeContent, setComposeContent] = useState('');
   const [message, setMessage] = useState(null);
 
   useEffect(() => {
@@ -73,6 +87,7 @@ const ApplicationManager = ({ target }) => {
       setSelectedApplicationId(null);
       setTargetContainerId(null);
       setDomainMessage(null);
+      setUpdateStatus(null);
       setMessage(null);
       return;
     }
@@ -80,6 +95,7 @@ const ApplicationManager = ({ target }) => {
     setTargetContainerId(target.containerId || null);
     setSearchQuery('');
     setDomainMessage(null);
+    setUpdateStatus(null);
     setMessage(null);
   }, [target]);
 
@@ -156,6 +172,45 @@ const ApplicationManager = ({ target }) => {
 
     return () => { active = false; };
   }, [selectedDomainApplicationId, canEditSelectedDomain]);
+
+  useEffect(() => {
+    if (!selectedApplicationId) {
+      setComposeState(null);
+      setComposeError(null);
+      setComposeMessage(null);
+      setSelectedComposeFileId(null);
+      setComposeContent('');
+      return undefined;
+    }
+
+    let active = true;
+    setComposeLoading(true);
+    setComposeState(null);
+    setComposeError(null);
+    setComposeMessage(null);
+    setSelectedComposeFileId(null);
+    setComposeContent('');
+    apiFetch(`/api/applications/${selectedApplicationId}/compose-files`)
+      .then((response) => response.json())
+      .then((payload) => {
+        if (!active) return;
+        const compose = payload.compose;
+        setComposeState(compose);
+        const firstFile = compose && compose.files && compose.files[0];
+        if (firstFile) {
+          setSelectedComposeFileId(firstFile.fileId);
+          setComposeContent(firstFile.content);
+        }
+      })
+      .catch((composeLoadError) => {
+        if (active) setComposeError(composeLoadError.message);
+      })
+      .finally(() => {
+        if (active) setComposeLoading(false);
+      });
+
+    return () => { active = false; };
+  }, [selectedApplicationId]);
 
   const displayedApplications = useMemo(() => {
     const query = searchQuery.trim().toLocaleLowerCase('tr-TR');
@@ -238,6 +293,93 @@ const ApplicationManager = ({ target }) => {
     } finally {
       setSettingsSaving(false);
     }
+  };
+
+  const changeDesktopShortcut = async () => {
+    if (!selectedApplication) return;
+    const visible = selectedApplication.desktopShortcutVisible === false;
+    setShortcutSaving(true);
+    setMessage(null);
+    try {
+      await setDesktopShortcut(selectedApplication, visible);
+      setMessage({
+        type: 'success',
+        text: visible ? 'Masaüstü kısayolu oluşturuldu.' : 'Masaüstü kısayolu kaldırıldı.'
+      });
+    } catch (shortcutError) {
+      setMessage({ type: 'error', text: shortcutError.message });
+    } finally {
+      setShortcutSaving(false);
+    }
+  };
+
+  const checkForUpdates = async () => {
+    if (!selectedApplication) return;
+    setUpdateChecking(true);
+    setUpdateStatus(null);
+    setMessage(null);
+    try {
+      const response = await apiFetch(`/api/applications/${selectedApplication.id}/update-check`);
+      const payload = await response.json();
+      setUpdateStatus(payload.update);
+    } catch (updateError) {
+      setMessage({ type: 'error', text: updateError.message });
+    } finally {
+      setUpdateChecking(false);
+    }
+  };
+
+  const selectComposeFile = (file) => {
+    setSelectedComposeFileId(file.fileId);
+    setComposeContent(file.content);
+    setComposeError(null);
+    setComposeMessage(null);
+  };
+
+  const saveComposeFile = async (file) => {
+    if (!selectedApplication || !file) return;
+    setComposeSaving(true);
+    setComposeError(null);
+    setComposeMessage(null);
+    try {
+      const response = await apiFetch(
+        `/api/applications/${selectedApplication.id}/compose-files/${file.fileId}`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            confirmation: 'COMPOSE DOSYASINI KAYDET',
+            content: composeContent,
+            revision: file.revision
+          })
+        }
+      );
+      const payload = await response.json();
+      const result = payload.result;
+      setComposeState((current) => ({
+        ...current,
+        files: current.files.map((candidate) => (
+          candidate.fileId === result.file.fileId ? result.file : candidate
+        ))
+      }));
+      setComposeContent(result.file.content);
+      setComposeMessage(result.message);
+    } catch (composeSaveError) {
+      setComposeError(composeSaveError.message);
+    } finally {
+      setComposeSaving(false);
+    }
+  };
+
+  const confirmComposeSave = (file) => {
+    showDialog({
+      title: 'Compose Dosyasını Kaydet',
+      message: 'YAML doğrulanacak, mevcut revision şifreli yedeklenecek ve gerçek sunucu dosyası atomik olarak değiştirilecek. Çalışan servis otomatik yeniden oluşturulmayacak.',
+      type: 'confirm',
+      confirmText: 'Kaydet',
+      cancelText: 'Vazgeç',
+      onConfirm: () => saveComposeFile(file)
+    });
   };
 
   const addDomain = async () => {
@@ -347,6 +489,11 @@ const ApplicationManager = ({ target }) => {
     setDomainStatus(null);
     setDomainInput('');
     setDomainMessage(null);
+    setUpdateStatus(null);
+    setComposeState(null);
+    setComposeError(null);
+    setSelectedComposeFileId(null);
+    setComposeContent('');
     setMessage(null);
   };
 
@@ -356,6 +503,9 @@ const ApplicationManager = ({ target }) => {
     const canStart = selectedApplication.capabilities.start;
     const canStop = selectedApplication.capabilities.stop;
     const canRestart = selectedApplication.capabilities.restart;
+    const selectedComposeFile = composeState && composeState.files
+      ? composeState.files.find((file) => file.fileId === selectedComposeFileId) || null
+      : null;
     const activeAccessUrls = domainStatus && domainStatus.editable
       ? [...new Set([domainStatus.currentDomain, ...(domainStatus.aliases || [])].filter(Boolean))]
         .sort((left, right) => (
@@ -409,7 +559,24 @@ const ApplicationManager = ({ target }) => {
             <button type="button" onClick={() => runAction(selectedApplication, 'restart')} disabled={Boolean(pendingAction) || !canRestart} style={{ background: 'rgba(255,255,255,0.08)', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 14px', borderRadius: '8px', cursor: pendingAction || !canRestart ? 'not-allowed' : 'pointer', opacity: canRestart ? 1 : 0.5, display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px' }}>
               {pendingAction === 'restart' ? <Loader2 size={15} className="spin" /> : <RotateCw size={15} />} Yeniden Başlat
             </button>
+            <button type="button" onClick={checkForUpdates} disabled={updateChecking} style={{ background: 'rgba(255,255,255,0.08)', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 14px', borderRadius: '8px', cursor: updateChecking ? 'wait' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px' }}>
+              {updateChecking ? <Loader2 size={15} className="spin" /> : <RotateCw size={15} />} Güncellemeleri Denetle
+            </button>
+            <button type="button" onClick={changeDesktopShortcut} disabled={shortcutSaving} style={{ background: 'rgba(255,255,255,0.08)', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 14px', borderRadius: '8px', cursor: shortcutSaving ? 'wait' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px' }}>
+              {shortcutSaving ? <Loader2 size={15} className="spin" /> : selectedApplication.desktopShortcutVisible === false ? <Plus size={15} /> : <X size={15} />}
+              {selectedApplication.desktopShortcutVisible === false ? 'Masaüstüne Kısayol Oluştur' : 'Masaüstü Kısayolunu Kaldır'}
+            </button>
           </div>
+          {updateStatus && (
+            <div aria-live="polite" style={{ marginTop: '14px', padding: '10px 12px', borderRadius: '8px', background: updateStatus.status === 'update-available' ? 'rgba(245,158,11,0.12)' : updateStatus.status === 'up-to-date' ? 'rgba(39,201,63,0.12)' : 'rgba(255,255,255,0.05)', border: `1px solid ${updateStatus.status === 'update-available' ? 'rgba(245,158,11,0.35)' : updateStatus.status === 'up-to-date' ? 'rgba(39,201,63,0.35)' : 'rgba(255,255,255,0.12)'}`, color: updateStatus.status === 'update-available' ? '#fbbf24' : updateStatus.status === 'up-to-date' ? '#75da85' : '#bbb', fontSize: '13px', lineHeight: 1.5 }}>
+              <div>{updateStatus.message}</div>
+              {(updateStatus.current && updateStatus.current.version || updateStatus.latest && updateStatus.latest.version) && (
+                <div style={{ marginTop: '4px', color: '#aaa', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '12px' }}>
+                  {updateStatus.current && updateStatus.current.version || 'bilinmiyor'} → {updateStatus.latest && updateStatus.latest.version || 'bilinmiyor'}
+                </div>
+              )}
+            </div>
+          )}
         </section>
 
         <section style={{ padding: '26px 0', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
@@ -516,6 +683,61 @@ const ApplicationManager = ({ target }) => {
                 {settingsSaving ? <Loader2 size={15} className="spin" /> : <Save size={15} />} Kaydet
               </button>
             </div>
+          )}
+        </section>
+
+        <section style={{ padding: '26px 0', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+          <h3 style={{ margin: '0 0 6px 0', fontSize: '16px' }}>Compose Dosyaları</h3>
+          <div style={{ marginBottom: '14px', color: '#888', fontSize: '13px', lineHeight: 1.5 }}>
+            Docker metadata’sında bu uygulamaya bağlı olduğu doğrulanan gerçek Compose kaynakları.
+          </div>
+          {composeLoading ? (
+            <div style={{ color: '#888', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}><Loader2 size={15} className="spin" /> Compose dosyaları okunuyor...</div>
+          ) : composeError && !composeState ? (
+            <div aria-live="polite" style={{ padding: '10px 12px', borderRadius: '8px', background: 'rgba(255,95,86,0.12)', border: '1px solid rgba(255,95,86,0.35)', color: '#ff8a84', fontSize: '13px', lineHeight: 1.5 }}>{composeError}</div>
+          ) : composeState && !composeState.editable ? (
+            <div style={{ color: '#888', fontSize: '13px', lineHeight: 1.5 }}>{composeState.reason}</div>
+          ) : composeState && selectedComposeFile ? (
+            <>
+              {composeState.providerMayOverwrite && (
+                <div style={{ marginBottom: '14px', padding: '10px 12px', borderRadius: '8px', background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.35)', color: '#fbbf24', fontSize: '13px', lineHeight: 1.5 }}>
+                  Geçiş tamamlanana kadar mevcut sağlayıcının sonraki dağıtımı bu dosyayı yeniden yazabilir.
+                </div>
+              )}
+              {composeState.files.length > 1 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' }}>
+                  {composeState.files.map((file) => (
+                    <button key={file.fileId} type="button" onClick={() => selectComposeFile(file)} style={{ background: file.fileId === selectedComposeFileId ? '#0ea5e9' : 'rgba(255,255,255,0.08)', color: '#fff', border: file.fileId === selectedComposeFileId ? '1px solid #0ea5e9' : '1px solid rgba(255,255,255,0.16)', padding: '7px 11px', borderRadius: '8px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '12px' }}>
+                      <FileText size={14} /> {file.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div style={{ marginBottom: '8px', color: '#888', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '12px', wordBreak: 'break-all' }}>{selectedComposeFile.path}</div>
+              <textarea
+                value={composeContent}
+                onChange={(event) => { setComposeContent(event.target.value); setComposeError(null); setComposeMessage(null); }}
+                disabled={composeSaving}
+                spellCheck={false}
+                style={{ width: '100%', minHeight: '320px', resize: 'vertical', boxSizing: 'border-box', background: '#17171b', color: '#e5e7eb', border: '1px solid rgba(255,255,255,0.16)', borderRadius: '8px', padding: '12px', outline: 'none', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '12px', lineHeight: 1.55 }}
+              />
+              <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '12px', marginTop: '10px' }}>
+                <div style={{ color: '#888', fontSize: '12px', lineHeight: 1.5, flex: '1 1 320px' }}>
+                  Kaydetme YAML’i doğrular ve önceki revision’ı şifreli yedekler. Çalışan servis kendiliğinden yeniden oluşturulmaz.
+                </div>
+                <button type="button" onClick={() => confirmComposeSave(selectedComposeFile)} disabled={composeSaving || composeContent === selectedComposeFile.content} style={{ background: '#0ea5e9', color: '#fff', border: 'none', padding: '9px 14px', borderRadius: '8px', cursor: composeSaving || composeContent === selectedComposeFile.content ? 'not-allowed' : 'pointer', opacity: composeSaving || composeContent === selectedComposeFile.content ? 0.5 : 1, display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px', fontWeight: 'bold' }}>
+                  {composeSaving ? <Loader2 size={15} className="spin" /> : <Save size={15} />} Dosyayı Kaydet
+                </button>
+              </div>
+              {composeMessage && (
+                <div aria-live="polite" style={{ marginTop: '12px', padding: '10px 12px', borderRadius: '8px', background: 'rgba(39,201,63,0.12)', border: '1px solid rgba(39,201,63,0.35)', color: '#75da85', fontSize: '13px', lineHeight: 1.5 }}>{composeMessage}</div>
+              )}
+              {composeError && (
+                <div aria-live="polite" style={{ marginTop: '12px', padding: '10px 12px', borderRadius: '8px', background: 'rgba(255,95,86,0.12)', border: '1px solid rgba(255,95,86,0.35)', color: '#ff8a84', fontSize: '13px', lineHeight: 1.5 }}>{composeError}</div>
+              )}
+            </>
+          ) : (
+            <div style={{ color: '#888', fontSize: '13px' }}>Compose kaynağı bulunamadı.</div>
           )}
         </section>
 

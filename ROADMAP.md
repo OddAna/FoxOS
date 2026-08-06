@@ -433,9 +433,28 @@ target blocks only adoption/migration operations that require restore proof.
   failure or explicit rollback. CNAME conflicts and ambiguous A records fail
   closed. The adapter requires neither Cloudflare proxying nor a paid plan and
   does not make Cloudflare the owner of application or route state.
+- [x] Persist per-application desktop shortcut visibility on the server. The
+  desktop context menu removes the projection without deleting a file,
+  container or application; the same application's Settings page can recreate
+  it. A browser refresh, agent rebuild or new browser session preserves the
+  choice through the stable application ID.
+- [x] Add mutation-free application update checks to both the desktop context
+  menu and Uygulama Yöneticisi. Direct tagged images compare local and remote
+  repository digests through Docker Engine. Compose-built services follow their
+  exact service source and final Dockerfile `FROM`; public Docker Hub version
+  metadata closes the otherwise invisible local-build case used by n8n. The
+  check performs no pull, build, restart, recreate or update apply.
+- [x] Add the authenticated Compose source editor to each application page. It
+  accepts only regular `.yml`/`.yaml` files named by the selected container's
+  Docker Compose labels, never a user-supplied path; protects FoxOS core paths,
+  binds writes to the last-read SHA-256 revision, validates bounded YAML and the
+  selected service, stores the prior content as an owner-only encrypted backup,
+  and replaces the file atomically while preserving owner/mode. Saving does not
+  redeploy the application. Provider-owned files explicitly warn that the
+  provider may overwrite them until migration is complete.
 - [ ] Add reviewed environment/secret editing, logs, health history, resource
-  limits, deployment/update and backup/restore controls from the same canonical
-  application record as their safety contracts become complete.
+  limits, update apply/rollback and backup/restore controls from the same
+  canonical application record as their safety contracts become complete.
 - [ ] On first installation, run the server scan before presenting applications,
   then offer the optional migration selection flow. Declining migration must
   still leave discovery, desktop shortcuts and management of safe observed

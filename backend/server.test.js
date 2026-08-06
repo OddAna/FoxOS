@@ -428,6 +428,12 @@ test('health is public while management APIs require a session', async () => {
   assert.equal(migrationRunsResponse.status, 401);
   const connectionsResponse = await fetch(baseUrl() + '/api/connections');
   assert.equal(connectionsResponse.status, 401);
+  const applicationOperationsId = 'res_' + '7'.repeat(32);
+  assert.equal((await fetch(baseUrl() + '/api/applications/' + applicationOperationsId + '/update-check')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/applications/' + applicationOperationsId + '/compose-files')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/applications/' + applicationOperationsId + '/desktop-shortcut', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{"visible":false}'
+  })).status, 401);
   const migrationRunStartResponse = await fetch(baseUrl() + '/api/migration-runs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -641,6 +647,29 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   assert.equal(applicationInventory.applications[0].authority, 'observed');
   assert.equal(applicationInventory.applications[0].capabilities.start, true);
   assert.equal(applicationInventory.applications[0].capabilities.stop, false);
+  assert.equal(applicationInventory.applications[0].desktopShortcutVisible, true);
+
+  const applicationId = applicationInventory.applications[0].id;
+  const hideShortcutResponse = await fetch(baseUrl() + '/api/applications/' + applicationId + '/desktop-shortcut', {
+    method: 'PUT',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ visible: false })
+  });
+  assert.equal(hideShortcutResponse.status, 200);
+  const hiddenInventoryResponse = await fetch(baseUrl() + '/api/applications', { headers: { Cookie: cookie } });
+  assert.equal((await hiddenInventoryResponse.json()).applications[0].desktopShortcutVisible, false);
+  const showShortcutResponse = await fetch(baseUrl() + '/api/applications/' + applicationId + '/desktop-shortcut', {
+    method: 'PUT',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ visible: true })
+  });
+  assert.equal(showShortcutResponse.status, 200);
+
+  const composeFilesResponse = await fetch(baseUrl() + '/api/applications/' + applicationId + '/compose-files', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(composeFilesResponse.status, 200);
+  assert.equal((await composeFilesResponse.json()).compose.editable, false);
 
   const settingsResponse = await fetch(baseUrl() + '/api/containers/' + mockContainer.Id + '/settings', {
     headers: { Cookie: cookie }

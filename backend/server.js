@@ -87,6 +87,18 @@ const {
   ApplicationDomainError,
   createApplicationDomainManager
 } = require('./applicationDomainManager');
+const {
+  ApplicationComposeError,
+  createApplicationComposeManager
+} = require('./applicationComposeManager');
+const {
+  ApplicationUpdateError,
+  createApplicationUpdateChecker
+} = require('./applicationUpdateChecker');
+const {
+  DesktopShortcutError,
+  createDesktopShortcutManager
+} = require('./desktopShortcutManager');
 const { SCHEMA_VERSION: RESOURCE_SCHEMA_VERSION, createResourceRegistry } = require('./resourceRegistry');
 const {
   catalogContainerForApp,
@@ -534,6 +546,7 @@ function runExactHostObservation(operation) {
 const dockerClient = createDockerClient(DOCKER_SOCKET);
 const dockerRequest = dockerClient.request;
 const encryptionStore = createEncryptionStore({ dataRoot: DATA_ROOT });
+const desktopShortcutManager = createDesktopShortcutManager({ dataRoot: DATA_ROOT });
 const coolifyMigrationReader = createCoolifyMigrationReader({
   dataRoot: DATA_ROOT,
   encryptionStore
@@ -612,6 +625,18 @@ const applicationDomainManager = createApplicationDomainManager({
   routingNetwork: process.env.FOXOS_ROUTE_NETWORK || 'foxos-routing',
   panelBaseUrl: process.env.FOXOS_ROUTE_BASE_URL || null,
   dnsAutomation: cloudflareConnectionManager
+});
+const applicationComposeManager = createApplicationComposeManager({
+  dataRoot: DATA_ROOT,
+  hostRoot: HOST_ROOT,
+  dockerRequest,
+  encryptionStore,
+  getApplicationInventory
+});
+const applicationUpdateChecker = createApplicationUpdateChecker({
+  hostRoot: HOST_ROOT,
+  dockerRequest,
+  getApplicationInventory
 });
 const productionStatelessMigrationAdapter = createProductionStatelessMigrationAdapter({
   dataRoot: DATA_ROOT,
@@ -770,6 +795,39 @@ function sendApplicationDomainError(res, error, action) {
       ? 'Alan adı işlemi tamamlanamadı'
       : error.message,
     code: error.code || 'application-domain-error'
+  });
+}
+
+function sendApplicationComposeError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof ApplicationComposeError)
+      ? 'Compose dosyası işlemi tamamlanamadı'
+      : error.message,
+    code: error.code || 'application-compose-error'
+  });
+}
+
+function sendApplicationUpdateError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof ApplicationUpdateError)
+      ? 'Güncelleme denetimi tamamlanamadı'
+      : error.message,
+    code: error.code || 'application-update-error'
+  });
+}
+
+function sendDesktopShortcutError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof DesktopShortcutError)
+      ? 'Masaüstü kısayolu kaydedilemedi'
+      : error.message,
+    code: error.code || 'desktop-shortcut-error'
   });
 }
 
@@ -1032,6 +1090,7 @@ async function getApplicationInventory() {
     snapshot = await resourceRegistry.scan();
   }
 
+  const hiddenApplicationIds = new Set(desktopShortcutManager.state().hiddenApplicationIds);
   return {
     schemaVersion: APPLICATION_INVENTORY_SCHEMA_VERSION,
     snapshotId: snapshot && snapshot.snapshotId || null,
@@ -1041,7 +1100,10 @@ async function getApplicationInventory() {
       containers: context.containers,
       resources: snapshot && snapshot.resources || [],
       domainPreferences: applicationDomainManager.primaryDomains()
-    })
+    }).map((application) => ({
+      ...application,
+      desktopShortcutVisible: !hiddenApplicationIds.has(application.id)
+    }))
   };
 }
 
@@ -2072,6 +2134,50 @@ app.get('/api/applications', async (req, res) => {
   } catch (error) {
     console.error('Could not build the server application inventory:', error.message);
     res.status(503).json({ error: 'Sunucu uygulamaları okunamadı' });
+  }
+});
+
+app.put('/api/applications/:applicationId/desktop-shortcut', async (req, res) => {
+  try {
+    const inventory = await getApplicationInventory();
+    const exists = inventory.applications.some((application) => application.id === req.params.applicationId);
+    if (!exists) {
+      throw new DesktopShortcutError('Uygulama artık sunucuda bulunamıyor.', 404, 'application-not-found');
+    }
+    res.json({ shortcut: desktopShortcutManager.setVisible(
+      req.params.applicationId,
+      req.body && req.body.visible
+    ) });
+  } catch (error) {
+    sendDesktopShortcutError(res, error, 'Could not update desktop shortcut visibility');
+  }
+});
+
+app.get('/api/applications/:applicationId/update-check', async (req, res) => {
+  try {
+    res.json({ update: await applicationUpdateChecker.check(req.params.applicationId) });
+  } catch (error) {
+    sendApplicationUpdateError(res, error, 'Could not check application image updates');
+  }
+});
+
+app.get('/api/applications/:applicationId/compose-files', async (req, res) => {
+  try {
+    res.json({ compose: await applicationComposeManager.describe(req.params.applicationId) });
+  } catch (error) {
+    sendApplicationComposeError(res, error, 'Could not read application Compose files');
+  }
+});
+
+app.put('/api/applications/:applicationId/compose-files/:fileId', async (req, res) => {
+  try {
+    res.json({ result: await applicationComposeManager.save(
+      req.params.applicationId,
+      req.params.fileId,
+      req.body || {}
+    ) });
+  } catch (error) {
+    sendApplicationComposeError(res, error, 'Could not save application Compose file');
   }
 });
 

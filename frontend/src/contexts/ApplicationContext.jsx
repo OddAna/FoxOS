@@ -63,6 +63,18 @@ export const ApplicationProvider = ({ children }) => {
     }
   }, [refreshApplications]);
 
+  const setDesktopShortcut = useCallback(async (application, visible) => {
+    if (!application || typeof visible !== 'boolean') {
+      throw new Error('Masaüstü kısayol işlemi geçersiz');
+    }
+    await apiFetch(`/api/applications/${application.id}/desktop-shortcut`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visible })
+    });
+    await refreshApplications({ quiet: true });
+  }, [refreshApplications]);
+
   useEffect(() => {
     refreshApplications().catch(() => {});
     const refreshTimer = window.setInterval(() => {
@@ -77,8 +89,9 @@ export const ApplicationProvider = ({ children }) => {
     error,
     loading,
     refreshApplications,
-    runApplicationAction
-  }), [actions, applications, error, loading, refreshApplications, runApplicationAction]);
+    runApplicationAction,
+    setDesktopShortcut
+  }), [actions, applications, error, loading, refreshApplications, runApplicationAction, setDesktopShortcut]);
 
   return <ApplicationContext.Provider value={value}>{children}</ApplicationContext.Provider>;
 };

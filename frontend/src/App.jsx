@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, RotateCw, Settings as SettingsIcon, Square } from 'lucide-react';
+import { Play, RotateCw, Settings as SettingsIcon, Square, X } from 'lucide-react';
 import './index.css';
 import { WindowProvider, useWindowManager } from './contexts/WindowContext';
 import { DialogProvider, useDialog } from './contexts/DialogContext';
@@ -28,10 +28,12 @@ const Desktop = () => {
   const { showDialog } = useDialog();
   const {
     actions: applicationActions,
-    applications: desktopApplications,
+    applications,
     refreshApplications,
-    runApplicationAction: executeApplicationAction
+    runApplicationAction: executeApplicationAction,
+    setDesktopShortcut
   } = useApplicationInventory();
+  const desktopApplications = applications.filter((application) => application.desktopShortcutVisible !== false);
   const [desktopMenu, setDesktopMenu] = useState(null);
   const [desktopFiles, setDesktopFiles] = useState([]);
   const [selectedIds, setSelectedIds] = useState([]);
@@ -552,6 +554,33 @@ const Desktop = () => {
     });
   };
 
+  const checkApplicationUpdate = async (application) => {
+    setDesktopMenu(null);
+    try {
+      const response = await apiFetch(`/api/applications/${application.id}/update-check`);
+      const payload = await response.json();
+      const result = payload.update;
+      showDialog({
+        title: result.status === 'update-available' ? 'Güncelleme Bulundu' : 'Güncelleme Denetimi',
+        message: result.message,
+        type: 'info',
+        confirmText: 'Tamam'
+      });
+    } catch (error) {
+      showDialog({ title: 'Güncelleme Denetimi', message: error.message, type: 'error' });
+    }
+  };
+
+  const removeDesktopShortcut = async (application) => {
+    setDesktopMenu(null);
+    try {
+      await setDesktopShortcut(application, false);
+      setSelectedIds((current) => current.filter((id) => id !== `application:${application.id}`));
+    } catch (error) {
+      showDialog({ title: 'Kısayol Kaldırılamadı', message: error.message, type: 'error' });
+    }
+  };
+
   const handleDesktopItemDoubleClick = (item) => {
     if (item.desktopKind === 'application') {
       handleOpenApplication(item.application);
@@ -865,6 +894,7 @@ const Desktop = () => {
             <>
               <div className="context-item" onClick={() => handleOpenApplication(desktopMenu.item.application)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>Aç</div>
               <div className="context-item" onClick={() => openApplicationSettings(desktopMenu.item.application)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><SettingsIcon size={14} /> Ayarlar'a Git</div>
+              <div className="context-item" onClick={() => checkApplicationUpdate(desktopMenu.item.application)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><RotateCw size={14} /> Güncellemeleri Denetle</div>
               <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '4px 0' }}></div>
               {desktopMenu.item.application.capabilities.stop ? (
                 <div className="context-item" onClick={() => runApplicationAction(desktopMenu.item.application, 'stop')} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><Square size={14} /> Durdur</div>
@@ -872,6 +902,8 @@ const Desktop = () => {
                 <div className="context-item" onClick={() => runApplicationAction(desktopMenu.item.application, 'start')} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><Play size={14} /> Başlat</div>
               )}
               <div className="context-item" onClick={() => runApplicationAction(desktopMenu.item.application, 'restart')} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><RotateCw size={14} /> Yeniden Başlat</div>
+              <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '4px 0' }}></div>
+              <div className="context-item" onClick={() => removeDesktopShortcut(desktopMenu.item.application)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', color: '#ff8a84', display: 'flex', alignItems: 'center', gap: '6px' }}><X size={14} /> Masaüstünden Kaldır</div>
             </>
           ) : desktopMenu.type === 'file' ? (
             <>
