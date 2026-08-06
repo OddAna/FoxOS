@@ -1,9 +1,18 @@
-import React, { useState } from 'react';
-import { Settings, Globe, Monitor, Shield, User, Bell, Server } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Settings, Globe, Monitor, Shield, User, Bell, Server, Box } from 'lucide-react';
 import MigrationSettings from './MigrationSettings';
+import ApplicationManager from './ApplicationManager';
 
-const SettingsApp = () => {
-  const [activeTab, setActiveTab] = useState('general');
+const SettingsApp = ({ target }) => {
+  const [activeTab, setActiveTab] = useState(target && target.tab || 'general');
+  const [applicationTarget, setApplicationTarget] = useState(target || null);
+
+  useEffect(() => {
+    if (target && target.tab) {
+      setActiveTab(target.tab);
+      setApplicationTarget(target);
+    }
+  }, [target]);
 
   const tabs = [
     { id: 'general', icon: <Settings size={18} />, label: 'Genel' },
@@ -12,6 +21,7 @@ const SettingsApp = () => {
     { id: 'security', icon: <Shield size={18} />, label: 'Güvenlik' },
     { id: 'notifications', icon: <Bell size={18} />, label: 'Bildirimler' },
     { id: 'users', icon: <User size={18} />, label: 'Kullanıcılar' },
+    { id: 'applications', icon: <Box size={18} />, label: 'Uygulama Yöneticisi' },
     { id: 'migration', icon: <Server size={18} />, label: 'Sunucu Geçişi' },
   ];
 
@@ -27,7 +37,10 @@ const SettingsApp = () => {
         {tabs.map(tab => (
           <div 
             key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
+            onClick={() => {
+              setActiveTab(tab.id);
+              if (tab.id === 'applications') setApplicationTarget(null);
+            }}
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -65,8 +78,9 @@ const SettingsApp = () => {
         )}
 
         {activeTab === 'migration' && <MigrationSettings />}
+        {activeTab === 'applications' && <ApplicationManager target={applicationTarget} />}
 
-        {activeTab !== 'general' && activeTab !== 'migration' && (
+        {activeTab !== 'general' && activeTab !== 'migration' && activeTab !== 'applications' && (
           <p style={{ color: '#888', fontSize: '14px' }}>Bu bölüm yakında eklenecek.</p>
         )}
       </div>

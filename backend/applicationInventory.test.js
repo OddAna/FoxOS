@@ -9,6 +9,7 @@ const {
 test('runtime state maps to the existing FoxOS desktop status contract', () => {
   assert.equal(operationalStateForRuntime({ state: 'running', status: 'Up 1 minute', healthStatus: 'healthy' }), 'running');
   assert.equal(operationalStateForRuntime({ state: 'running', status: 'Up 1 minute (unhealthy)', healthStatus: 'unhealthy' }), 'error');
+  assert.equal(operationalStateForRuntime({ state: 'created', status: 'Created', healthStatus: null }), 'stopped');
   assert.equal(operationalStateForRuntime({ state: 'restarting', status: 'Restarting (1)', healthStatus: null }), 'transitioning');
   assert.equal(operationalStateForRuntime({ state: 'exited', status: 'Exited (0) 1 minute ago', healthStatus: null }), 'stopped');
   assert.equal(operationalStateForRuntime({ state: 'exited', status: 'Exited (137) 1 minute ago', healthStatus: null }), 'stopped');

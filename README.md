@@ -27,13 +27,15 @@ not use the host package manager for its own runtime.
   memory, and disk usage
 - **Real Docker control** — list containers and start, stop, or restart them
 - **Real App Store** — install a reviewed catalog of Docker applications on the
-  server, discover usable applications that already exist on that server, and
-  manage their real lifecycle, access address, restart policy, ports, and
-  storage from the FoxOS store interface
+  server and discover usable applications that already exist on that server
+- **Desktop applications and Settings manager** — project each usable server
+  application once with a stable local identity, live status and existing FoxOS
+  icon language; open it from the desktop or manage lifecycle, access address,
+  restart policy, ports and storage inside Settings > Uygulama Yöneticisi
 - **Host terminal** — commands run directly in the Linux host namespaces
 - **Host file access** — the Files app contains a `Sunucu` entry linked to
   the host root filesystem
-- **Persistent FoxOS workspace** — desktop and trash data live under
+- **Persistent FoxOS workspace** — desktop positions and trash data live under
   `.foxos-data/` and survive rebuilds
 - **Server-side authentication** — salted scrypt password hashing, HTTP-only
   session cookies, protected management APIs, and basic login rate limiting
