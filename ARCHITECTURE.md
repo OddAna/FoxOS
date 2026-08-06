@@ -414,6 +414,14 @@ operation-scoped TCP bridges that span the observed source network and
 aliases include the operation identity so common names such as `db` cannot
 cross-connect unrelated migrations.
 
+The application runtime itself receives a user-readable, provider-neutral
+`foxos-app-<domain-or-app>` identity. FoxOS prefers the clearest reviewed public
+domain, ignores temporary `sslip.io`, `nip.io` and test domains, and otherwise
+uses the observed application service name. Migration mode and operation hashes
+remain internal evidence; they are not exposed as the application's name.
+Required TCP helpers follow `foxos-bridge-<app>-<service>` so a supporting
+Postgres or Redis bridge is attributable without exposing a provider ID.
+
 Candidate startup is not copied blindly from a mutable process title or a
 provider wrapper. FoxOS verifies that an observed argv begins with an executable
 inside the source container and preserves its current working directory. For a

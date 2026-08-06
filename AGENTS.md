@@ -39,6 +39,11 @@
   labels, databases, APIs and proxy configuration may be read to rescue an
   existing resource, but this integration must be removable and disabled by
   default. It is never part of the FoxOS core or HTTPS path.
+- User-visible FoxOS application identities must be understandable and
+  provider-neutral. Name application containers `foxos-app-<domain-or-app>`;
+  name supporting bridges `foxos-bridge-<app>-<service>`. Never expose migration
+  strategy names, provider UUIDs or operation hashes as the primary name. Keep
+  technical transaction identity in owner-only state and labels.
 - Provider imports must produce a provider-neutral FoxOS manifest stored on the
   server. Preserve import provenance for audit and rollback, not as the active
   authority.
