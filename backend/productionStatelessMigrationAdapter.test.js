@@ -171,6 +171,14 @@ test('immutable root bootstrap receives only local identity capabilities', () =>
   assert.deepEqual(capabilityProfileForStartup({
     startup: { kind: 'immutable-image-defaults' },
     runtime: { user: '1000' },
+    privatePort: 80
+  }), {
+    name: 'immutable-image-low-port-v1',
+    capabilities: ['NET_BIND_SERVICE']
+  });
+  assert.deepEqual(capabilityProfileForStartup({
+    startup: { kind: 'immutable-image-defaults' },
+    runtime: { user: '1000' },
     privatePort: 3000
   }), {
     name: 'capability-free',
