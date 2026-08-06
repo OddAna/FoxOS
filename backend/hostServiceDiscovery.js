@@ -63,6 +63,25 @@ function listWireGuardConfigs(hostRoot) {
   }
 }
 
+function unitEnabledAtBoot(hostRoot, unit) {
+  const systemdRoot = path.join(hostRoot, 'etc', 'systemd', 'system');
+  try {
+    return fs.readdirSync(systemdRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && /\.(?:wants|requires)$/.test(entry.name))
+      .some((entry) => {
+        try {
+          fs.lstatSync(path.join(systemdRoot, entry.name, unit));
+          return true;
+        } catch {
+          return false;
+        }
+      });
+  } catch (error) {
+    if (error.code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
 function unitRuntime(unit, unitFiles, activeUnits) {
   const file = unitFiles.get(unit) || {};
   const active = activeUnits.get(unit) || {};
@@ -93,7 +112,7 @@ async function createHostServiceDiscovery({ hostRoot, hostRead }) {
   const adminUnits = listDirectAdminUnits(hostRoot);
   const configuredInterfaces = listWireGuardConfigs(hostRoot);
   const activeInterfaces = outputOf(interfaceResult).trim().split(/\s+/).filter((entry) => INTERFACE_PATTERN.test(entry));
-  const version = outputOf(versionResult).trim().split(/\r?\n/)[0].slice(0, 128) || null;
+  const version = outputOf(versionResult).trim().split(/\r?\n/)[0].split(' - ')[0].slice(0, 128) || null;
   const wireGuardInterfaces = Array.from(new Set([
     ...configuredInterfaces,
     ...activeInterfaces,
@@ -107,6 +126,9 @@ async function createHostServiceDiscovery({ hostRoot, hostRead }) {
   for (const interfaceName of wireGuardInterfaces) {
     const unit = `wg-quick@${interfaceName}.service`;
     const runtime = unitRuntime(unit, unitFiles, activeUnits);
+    if (runtime.unitFileState === 'unknown' && unitEnabledAtBoot(hostRoot, unit)) {
+      runtime.unitFileState = 'enabled';
+    }
     if (activeInterfaces.includes(interfaceName)) {
       runtime.state = 'running';
       runtime.activeState = 'active';
@@ -165,5 +187,6 @@ module.exports = {
   listDirectAdminUnits,
   listWireGuardConfigs,
   parseActiveUnits,
-  parseUnitFiles
+  parseUnitFiles,
+  unitEnabledAtBoot
 };

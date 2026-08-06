@@ -9,11 +9,15 @@ test('host discovery finds configured WireGuard and direct administrator systemd
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-host-discovery-'));
   try {
     fs.mkdirSync(path.join(root, 'etc', 'systemd', 'system'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'etc', 'systemd', 'system', 'multi-user.target.wants'), { recursive: true });
     fs.mkdirSync(path.join(root, 'etc', 'wireguard'), { recursive: true });
     fs.writeFileSync(path.join(root, 'etc', 'systemd', 'system', 'custom-worker.service'), '[Service]\nEnvironment=SECRET=hidden\n');
     fs.writeFileSync(path.join(root, 'etc', 'wireguard', 'wg0.conf'), 'PrivateKey = never-read-this\n');
+    fs.symlinkSync('/usr/lib/systemd/system/wg-quick@.service', path.join(
+      root, 'etc', 'systemd', 'system', 'multi-user.target.wants', 'wg-quick@wg0.service'
+    ));
     const outputs = {
-      'systemd-unit-files': 'custom-worker.service enabled enabled\nwg-quick@.service indirect enabled\nwg-quick@wg0.service enabled enabled\n',
+      'systemd-unit-files': 'custom-worker.service enabled enabled\nwg-quick@.service indirect enabled\n',
       'systemd-units': 'custom-worker.service loaded inactive dead Custom worker\nwg-quick@wg0.service loaded active exited WireGuard via wg-quick\n',
       'wireguard-interfaces': 'wg0\n',
       'wireguard-version': 'wireguard-tools v1.0.20210914\n'
