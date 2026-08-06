@@ -2125,8 +2125,10 @@ if (require.main === module) {
               'Resource Registry snapshot ' + snapshot.snapshotId +
               ' recorded ' + snapshot.summary.resources + ' resources using Docker GET requests only'
             );
-            const plan = migrationOrchestrator.createPlan({ confirmation: PLAN_SERVER_MIGRATION_CONFIRMATION });
-            console.log('Server migration plan ' + plan.planId + ' reconciled from the startup scan');
+            if (snapshot.summary.foxosMigrated > 0) {
+              const plan = migrationOrchestrator.createPlan({ confirmation: PLAN_SERVER_MIGRATION_CONFIRMATION });
+              console.log('Server migration plan ' + plan.planId + ' reconciled from verified FoxOS migration state');
+            }
           })
           .catch((error) => {
             console.error('Initial Resource Registry scan failed:', error.message);
