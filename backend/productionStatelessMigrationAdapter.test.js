@@ -5,6 +5,7 @@ const path = require('node:path');
 const test = require('node:test');
 const { adapterStatus } = require('./statelessMigrationManager');
 const {
+  capabilityProfileForStartup,
   createProductionStatelessMigrationAdapter,
   dependencyFromValue,
   environmentForStartup,
@@ -155,6 +156,41 @@ test('immutable image fallback stays closed for dependencies, secrets, mounts an
   }), false);
 });
 
+test('immutable root bootstrap receives only local identity capabilities', () => {
+  assert.deepEqual(capabilityProfileForStartup({
+    startup: { kind: 'immutable-image-defaults' },
+    runtime: { user: null },
+    privatePort: 3000
+  }), {
+    name: 'immutable-image-local-bootstrap-v1',
+    capabilities: ['CHOWN', 'SETGID', 'SETUID']
+  });
+  assert.deepEqual(capabilityProfileForStartup({
+    startup: { kind: 'immutable-image-defaults' },
+    runtime: { user: null },
+    privatePort: 80
+  }), {
+    name: 'immutable-image-local-bootstrap-v1',
+    capabilities: ['CHOWN', 'SETGID', 'SETUID', 'NET_BIND_SERVICE']
+  });
+  assert.deepEqual(capabilityProfileForStartup({
+    startup: { kind: 'immutable-image-defaults' },
+    runtime: { user: '1000' },
+    privatePort: 3000
+  }), {
+    name: 'capability-free',
+    capabilities: []
+  });
+  assert.deepEqual(capabilityProfileForStartup({
+    startup: { kind: 'observed-process-argv' },
+    runtime: { user: null },
+    privatePort: 3000
+  }), {
+    name: 'capability-free',
+    capabilities: []
+  });
+});
+
 test('candidate creation falls back to matching immutable image defaults without dependencies or secrets', async () => {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-production-image-default-startup-'));
   const operationId = 'smop_' + 'a'.repeat(32);
@@ -256,11 +292,15 @@ test('candidate creation falls back to matching immutable image defaults without
   assert.deepEqual(createPayload.Entrypoint, imageConfig.Entrypoint);
   assert.deepEqual(createPayload.Cmd, imageConfig.Cmd);
   assert.equal(createPayload.WorkingDir, '/app/');
+  assert.deepEqual(createPayload.HostConfig.CapDrop, ['ALL']);
+  assert.deepEqual(createPayload.HostConfig.CapAdd, ['CHOWN', 'SETGID', 'SETUID']);
+  assert.deepEqual(createPayload.HostConfig.SecurityOpt, ['no-new-privileges:true']);
   const state = JSON.parse(fs.readFileSync(
     path.join(adapter.paths.operationsRoot, operationId + '.json'),
     'utf8'
   ));
   assert.equal(state.candidate.startupKind, 'immutable-image-defaults');
+  assert.equal(state.candidate.capabilityProfile, 'immutable-image-local-bootstrap-v1');
   fs.rmSync(dataRoot, { recursive: true, force: true });
 });
 
