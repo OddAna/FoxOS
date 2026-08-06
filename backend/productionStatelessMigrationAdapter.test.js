@@ -7,6 +7,7 @@ const { adapterStatus } = require('./statelessMigrationManager');
 const {
   capabilityProfileForStartup,
   createProductionStatelessMigrationAdapter,
+  dependencyBridgeHealthcheck,
   dependencyFromValue,
   environmentForStartup,
   immutableImageFallbackAllowed,
@@ -56,6 +57,20 @@ test('dependency discovery accepts known URL transports without retaining creden
   });
   assert.equal(dependencyFromValue('not-a-url'), null);
   assert.equal(dependencyFromValue('file:///tmp/data'), null);
+});
+
+test('dependency bridges override the agent healthcheck with their exact TCP listener', () => {
+  const healthcheck = dependencyBridgeHealthcheck(5432);
+  assert.deepEqual(healthcheck.Test.slice(0, 3), ['CMD', 'node', '-e']);
+  assert.equal(healthcheck.Test[4], '5432');
+  assert.match(healthcheck.Test[3], /\/proc\/net\/tcp/);
+  assert.match(healthcheck.Test[3], /fields\[3\]===['"]0A['"]/);
+  assert.equal(healthcheck.Timeout, 3000000000);
+  assert.equal(healthcheck.StartPeriod, 5000000000);
+  assert.throws(
+    () => dependencyBridgeHealthcheck(0),
+    (error) => error.code === 'dependency-bridge-health-port-invalid'
+  );
 });
 
 test('dependency URLs are rewritten in memory to operation-scoped bridge aliases', () => {
