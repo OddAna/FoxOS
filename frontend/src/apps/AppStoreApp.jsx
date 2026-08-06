@@ -18,7 +18,6 @@ import {
   RotateCw,
   Search,
   Save,
-  Server,
   Settings,
   Square,
   Terminal,
@@ -27,6 +26,7 @@ import {
 } from 'lucide-react';
 import { useDialog } from '../contexts/DialogContext';
 import { apiFetch } from '../api';
+import ApplicationLogo from '../components/ApplicationLogo';
 
 const CATEGORIES = [
   { id: 'kesfet', name: 'Keşfet', icon: <Compass size={18} /> },
@@ -49,8 +49,6 @@ const APP_VISUALS = {
   'it-tools': { icon: <Wrench size={38} color="#f59e0b" /> },
   'stirling-pdf': { icon: <FileText size={38} color="#ef4444" /> }
 };
-const DEFAULT_APP_LOGO = 'https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/docker.svg';
-
 const decorateApp = (app) => ({
   ...app,
   developer: app.publisher,
@@ -73,30 +71,6 @@ const copyText = async (value) => {
   const copied = document.execCommand('copy');
   textarea.remove();
   if (!copied) throw new Error('Adres kopyalanamadı');
-};
-
-const AppLogo = ({ app, size = 40 }) => {
-  const [sourceIndex, setSourceIndex] = useState(0);
-  const logoSources = [app.logoUrl, DEFAULT_APP_LOGO].filter((source, index, sources) => (
-    source && sources.indexOf(source) === index
-  ));
-
-  useEffect(() => {
-    setSourceIndex(0);
-  }, [app.logoUrl]);
-
-  if (logoSources[sourceIndex]) {
-    return (
-      <img
-        src={logoSources[sourceIndex]}
-        alt={`${app.name} logosu`}
-        onError={() => setSourceIndex((current) => current + 1)}
-        style={{ width: size, height: size, objectFit: 'contain', display: 'block' }}
-      />
-    );
-  }
-
-  return app.icon || <Server size={size} color="#0ea5e9" />;
 };
 
 const AppStoreApp = () => {
@@ -461,7 +435,7 @@ const AppStoreApp = () => {
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '18px', paddingBottom: '24px', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
               <div style={{ width: '72px', height: '72px', flex: '0 0 72px', borderRadius: '16px', background: 'rgba(255,255,255,0.9)', padding: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <AppLogo app={settingsApp} size={48} />
+                <ApplicationLogo app={settingsApp} size={48} />
               </div>
               <div style={{ minWidth: 0, flex: 1 }}>
                 <h1 style={{ margin: '0 0 6px 0', fontSize: '28px', fontWeight: 'bold' }}>{settingsApp.name}</h1>
@@ -586,7 +560,7 @@ const AppStoreApp = () => {
                 </div>
               </div>
               <div style={{ width: '120px', height: '120px', background: 'rgba(255,255,255,0.9)', padding: '20px', borderRadius: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 20px 40px rgba(0,0,0,0.2)', zIndex: 1 }}>
-                <AppLogo app={featuredApp} size={80} />
+                <ApplicationLogo app={featuredApp} size={80} />
               </div>
             </div>
           </div>
@@ -612,7 +586,7 @@ const AppStoreApp = () => {
               {displayedApps.map((app) => (
                 <div key={app.id} style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '16px', padding: '20px', display: 'flex', flexDirection: 'column', minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '16px' }}>
-                    <div style={{ width: '60px', height: '60px', flex: '0 0 60px', borderRadius: '14px', background: 'rgba(255,255,255,0.9)', padding: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><AppLogo app={app} /></div>
+                    <div style={{ width: '60px', height: '60px', flex: '0 0 60px', borderRadius: '14px', background: 'rgba(255,255,255,0.9)', padding: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><ApplicationLogo app={app} /></div>
                     <div style={{ minWidth: 0 }}>
                       <h3 style={{ margin: '0 0 4px 0', fontSize: '16px', fontWeight: 'bold' }}>{app.name}</h3>
                       <div style={{ fontSize: '12px', color: '#888', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{app.developer}</div>

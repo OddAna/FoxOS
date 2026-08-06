@@ -233,6 +233,13 @@ declared by their own web route and fall back to the Docker mark when they do no
 publish one. Coolify databases, workers, agents, reverse proxies, and other
 internal dependency containers are not presented as standalone store applications.
 
+The desktop uses the same live inventory as a shortcut layer; it does not create
+copies, files or extra containers. Each application keeps its stable local
+resource identity and desktop position. The existing status-dot language is
+preserved: green is running, yellow is transitioning, red needs attention and
+black is stopped. Double-click opens a running application. Right-click exposes
+the real Docker-backed start, stop and restart actions.
+
 Applications placed under server management use clear runtime names such as
 `example-com` or `wordpress`. Public domains are preferred;
 temporary preview domains fall back to the application service name. Provider
@@ -259,6 +266,7 @@ The authenticated API exposes:
 
 | Endpoint | Purpose |
 | --- | --- |
+| `GET /api/applications` | Read the canonical user-facing application inventory with stable resource identity, live state, access address and lifecycle capabilities |
 | `POST /api/resources/scan` | Run a read-only inventory and atomically store a new snapshot |
 | `GET /api/resources` | Read the latest stored snapshot, ownership status, relationships, conflicts and adoption blockers |
 | `GET /api/resources/export` | Download a redacted provider-neutral migration plan |

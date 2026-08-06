@@ -547,6 +547,14 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   assert.equal(initialAppsResponse.status, 200);
   assert.equal((await initialAppsResponse.json()).apps.every((catalogApp) => !catalogApp.installed), true);
 
+  const initialApplicationInventoryResponse = await fetch(baseUrl() + '/api/applications', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(initialApplicationInventoryResponse.status, 200);
+  const initialApplicationInventory = await initialApplicationInventoryResponse.json();
+  assert.equal(initialApplicationInventory.schemaVersion, 1);
+  assert.deepEqual(initialApplicationInventory.applications, []);
+
   const installResponse = await fetch(baseUrl() + '/api/apps/it-tools/install', {
     method: 'POST',
     headers: { Cookie: cookie, 'Content-Type': 'application/json' },
@@ -608,6 +616,19 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   });
   assert.equal(discoveredContainerStopResponse.status, 200);
   assert.equal(mockContainer.State, 'exited');
+
+  const applicationInventoryResponse = await fetch(baseUrl() + '/api/applications', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(applicationInventoryResponse.status, 200);
+  const applicationInventory = await applicationInventoryResponse.json();
+  assert.equal(applicationInventory.applications.length, 1);
+  assert.match(applicationInventory.applications[0].id, /^res_[a-f0-9]{32}$/);
+  assert.equal(applicationInventory.applications[0].runtime.containerId, mockContainer.Id);
+  assert.equal(applicationInventory.applications[0].runtime.operationalState, 'stopped');
+  assert.equal(applicationInventory.applications[0].authority, 'observed');
+  assert.equal(applicationInventory.applications[0].capabilities.start, true);
+  assert.equal(applicationInventory.applications[0].capabilities.stop, false);
 
   const settingsResponse = await fetch(baseUrl() + '/api/containers/' + mockContainer.Id + '/settings', {
     headers: { Cookie: cookie }
