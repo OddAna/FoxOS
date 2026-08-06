@@ -269,7 +269,7 @@ function createIngressAuthorityManager({
     }
     const reload = await dockerExec(exactGatewayContainerId, [
       'caddy', 'reload', '--config', '/etc/caddy/Caddyfile', '--adapter', 'caddyfile',
-      '--address', 'http://127.0.0.1:2019'
+      '--address', '127.0.0.1:2019'
     ], { timeoutMs: 30000 });
     if (reload.exitCode !== 0) {
       throw new IngressAuthorityError('FoxOS route configuration reload failed', 503, 'caddy-route-reload-failed');

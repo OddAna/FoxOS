@@ -29,6 +29,7 @@ test('staged routes switch through owned ingress and remove host authority on ro
   const gatewayId = 'a'.repeat(64);
   const ingressId = 'b'.repeat(64);
   const execContainerIds = [];
+  const execCommands = [];
   const manager = createIngressAuthorityManager({
     dataRoot,
     dockerRequest: async (method, requestPath) => {
@@ -44,8 +45,9 @@ test('staged routes switch through owned ingress and remove host authority on ro
       }
       throw new Error('Unexpected Docker request: ' + requestPath);
     },
-    dockerExec: async (containerId) => {
+    dockerExec: async (containerId, command) => {
       execContainerIds.push(containerId);
+      execCommands.push(command);
       return { exitCode: 0, output: '' };
     },
     hostCommand: async (binary, args) => {
@@ -86,6 +88,8 @@ test('staged routes switch through owned ingress and remove host authority on ro
   assert.equal(adminCommands.includes('set map /runtime/routes.map app.example.com legacy'), true);
   assert.equal(hostCalls.some((call) => call.includes('--to-ports') && call.includes('9443')), true);
   assert.deepEqual(execContainerIds, [gatewayId, gatewayId]);
+  assert.deepEqual(execCommands[1].slice(-2), ['--address', '127.0.0.1:2019']);
+  assert.equal(execCommands[1].includes('http://127.0.0.1:2019'), false);
   fs.rmSync(dataRoot, { recursive: true, force: true });
 });
 
