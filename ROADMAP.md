@@ -50,6 +50,16 @@ target blocks only adoption/migration operations that require restore proof.
 
 - [x] Read containers, images, networks, volumes and container inspections using
   Docker `GET` requests only.
+- [x] Include stopped Docker containers with `all=1`, then add the optional
+  encrypted Coolify migration reader so applications, services and databases
+  that remain defined in Coolify but have no Docker container are still
+  represented as inactive provider definitions. The reader performs only three
+  bounded `GET` inventory calls when explicitly configured, stores no plaintext
+  token and is absent from clean-install/runtime authority.
+- [x] Add fixed read-only Linux host service discovery. Inventory direct
+  administrator-owned systemd units and WireGuard interfaces/config presence,
+  unit enablement, active state and tool version without reading unit contents,
+  WireGuard config contents, keys, peers, addresses or endpoints.
 - [x] Normalize provider, role, runtime, ports, routes, mounts, networks, health,
   restart policy and safe provenance into provider-neutral resource records.
 - [x] Assign stable local FoxOS resource IDs through hashed identity aliases.
@@ -273,6 +283,21 @@ target blocks only adoption/migration operations that require restore proof.
 - [ ] Expand the implemented disposable dry-run, conflict detection, verified
   cutover and reversible rollback to real application classes one safety gate at
   a time.
+- [ ] Rehydrate inactive provider definitions into provider-neutral source,
+  environment, route, persistence and runtime manifests before attempting any
+  start or cutover. An absent container is a recoverable definition class, not
+  a generic unsupported-version error.
+- [ ] Implement host-service adoption beginning with WireGuard: encrypt private
+  key material, preserve interface/unit identity, validate routing and firewall
+  dependencies, write a server-owned revision, reload without losing the
+  management path and prove an exact rollback. Then apply the same manifest and
+  rollback contract to other administrator-owned systemd services.
+- [ ] Replace the generic unsupported bucket with executable class adapters for
+  every discovered resource: stateless applications, stateful applications,
+  databases by engine, workers/agents with drain semantics, host services,
+  network services and the provider proxy retirement gate. A resource may stay
+  blocked on concrete missing evidence, but not merely because its class was not
+  inventoried or named by the current release.
 
 ## Git source, build and deployment
 

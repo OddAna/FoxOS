@@ -47,8 +47,10 @@ const {
   CloudflareConnectionError,
   createCloudflareConnectionManager
 } = require('./cloudflareConnectionManager');
+const { createCoolifyMigrationReader } = require('./coolifyMigrationReader');
 const { createDockerClient } = require('./dockerClient');
 const { createEncryptionStore } = require('./encryptionStore');
+const { createHostServiceDiscovery } = require('./hostServiceDiscovery');
 const { createRouteManager } = require('./routeManager');
 const { createSecretManager } = require('./secretManager');
 const {
@@ -475,12 +477,76 @@ function runExactHostFile(file, args) {
   });
 }
 
+function runExactHostObservation(operation) {
+  const definitions = {
+    'systemd-unit-files': {
+      candidates: ['/usr/bin/systemctl', '/bin/systemctl'],
+      args: ['list-unit-files', '--type=service', '--all', '--no-legend', '--no-pager', '--plain']
+    },
+    'systemd-units': {
+      candidates: ['/usr/bin/systemctl', '/bin/systemctl'],
+      args: ['list-units', '--type=service', '--all', '--no-legend', '--no-pager', '--plain']
+    },
+    'wireguard-interfaces': {
+      candidates: ['/usr/bin/wg', '/bin/wg'],
+      args: ['show', 'interfaces']
+    },
+    'wireguard-version': {
+      candidates: ['/usr/bin/wg', '/bin/wg'],
+      args: ['--version']
+    }
+  };
+  const definition = definitions[operation];
+  if (!definition) {
+    return Promise.resolve({ success: false, exitCode: 1, output: 'Host observation is outside the fixed read policy.\n' });
+  }
+  const hostExecutable = definition.candidates.find((candidate) => (
+    fs.existsSync(path.resolve(HOST_ROOT, '.' + candidate))
+  ));
+  if (!hostExecutable) {
+    return Promise.resolve({ success: false, exitCode: 127, output: '' });
+  }
+  const invocation = HOST_EXECUTION === 'nsenter' ? {
+    executable: 'nsenter',
+    args: [
+      '--target', '1', '--mount', '--uts', '--ipc', '--net', '--pid', '--',
+      hostExecutable, ...definition.args
+    ]
+  } : {
+    executable: hostExecutable,
+    args: definition.args
+  };
+  return new Promise((resolve) => {
+    execFile(invocation.executable, invocation.args, {
+      timeout: 15000,
+      maxBuffer: 2 * 1024 * 1024,
+      windowsHide: true
+    }, (error, stdout) => {
+      resolve({
+        success: !error,
+        exitCode: error && Number.isInteger(error.code) ? error.code : error ? 1 : 0,
+        output: String(stdout || '')
+      });
+    });
+  });
+}
+
 const dockerClient = createDockerClient(DOCKER_SOCKET);
 const dockerRequest = dockerClient.request;
+const encryptionStore = createEncryptionStore({ dataRoot: DATA_ROOT });
+const coolifyMigrationReader = createCoolifyMigrationReader({
+  dataRoot: DATA_ROOT,
+  encryptionStore
+});
 
 const resourceRegistry = createResourceRegistry({
   dataRoot: DATA_ROOT,
-  dockerRequest
+  dockerRequest,
+  hostResourceReader: () => createHostServiceDiscovery({
+    hostRoot: HOST_ROOT,
+    hostRead: runExactHostObservation
+  }),
+  providerResourceReader: () => coolifyMigrationReader.scan()
 });
 const routeManager = createRouteManager({
   dataRoot: DATA_ROOT,
@@ -489,7 +555,6 @@ const routeManager = createRouteManager({
   networkName: process.env.FOXOS_ROUTE_NETWORK || 'foxos-routing',
   gatewayHost: process.env.FOXOS_ROUTE_GATEWAY_HOST || 'foxos-gateway'
 });
-const encryptionStore = createEncryptionStore({ dataRoot: DATA_ROOT });
 const secretManager = createSecretManager({
   dataRoot: DATA_ROOT,
   encryptionStore
@@ -2305,7 +2370,7 @@ if (require.main === module) {
           .then((snapshot) => {
             console.log(
               'Resource Registry snapshot ' + snapshot.snapshotId +
-              ' recorded ' + snapshot.summary.resources + ' resources using Docker GET requests only'
+              ' recorded ' + snapshot.summary.resources + ' resources using read-only Docker, host and optional provider observations'
             );
             if (snapshot.summary.foxosMigrated > 0) {
               const plan = migrationOrchestrator.createPlan({ confirmation: PLAN_SERVER_MIGRATION_CONFIRMATION });

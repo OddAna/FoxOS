@@ -293,6 +293,80 @@ test('resource registry scans with GET only, redacts secrets and preserves stabl
   fs.rmSync(root, { recursive: true, force: true });
 });
 
+test('registry merges matching provider definitions and retains inactive definitions plus host services', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-registry-sources-'));
+  const coolifyUuid = 'app-uuid-long-enough';
+  const running = container({
+    id: 'd'.repeat(64),
+    name: `running-${coolifyUuid}`,
+    image: 'example/running:1',
+    labels: { 'coolify.managed': 'true' },
+    port: 18081
+  });
+  try {
+    const registry = createResourceRegistry({
+      dataRoot: root,
+      randomUUID: (() => {
+        let sequence = 1;
+        return () => `00000000-0000-4000-8000-${String(sequence++).padStart(12, '0')}`;
+      })(),
+      dockerRequest: async (method, requestPath) => {
+        assert.equal(method, 'GET');
+        if (requestPath === '/containers/json?all=1') return [running];
+        if (requestPath === `/containers/${running.Id}/json`) return {
+          Config: { Image: running.Image, Labels: running.Labels, Env: [] },
+          HostConfig: { RestartPolicy: { Name: 'unless-stopped' }, PortBindings: {} },
+          Mounts: [],
+          NetworkSettings: { Networks: {} },
+          State: { Status: 'running' }
+        };
+        if (requestPath === '/images/json?all=0' || requestPath === '/networks') return [];
+        if (requestPath === '/volumes') return { Volumes: [] };
+        throw new Error(`unexpected ${requestPath}`);
+      },
+      providerResourceReader: async () => ({
+        provider: 'coolify', configured: true, readOnly: true, resources: [{
+          sourceKind: 'provider-definition', provider: 'coolify', externalId: coolifyUuid,
+          name: 'Running app', providerKind: 'application', status: 'running:healthy', routes: []
+        }, {
+          sourceKind: 'provider-definition', provider: 'coolify', externalId: 'inactive-service-uuid',
+          name: 'Inactive service', providerKind: 'service', serviceType: 'directus', status: 'exited', routes: []
+        }]
+      }),
+      hostResourceReader: async () => ({
+        source: 'linux-host', configured: true, readOnly: true,
+        inventory: { wireGuardInterfaces: 1 },
+        resources: [{
+          sourceKind: 'host-service', provider: 'linux-host', externalId: 'wireguard:wg0',
+          name: 'WireGuard (wg0)', providerKind: 'network-service', serviceType: 'wireguard',
+          runtime: { unit: 'wg-quick@wg0.service', state: 'running', status: 'active:exited', inspection: 'complete' },
+          configuration: { interface: 'wg0', filePresent: true, contentsRead: false }
+        }]
+      })
+    });
+    const snapshot = await registry.scan();
+    assert.equal(snapshot.summary.resources, 3);
+    assert.deepEqual(snapshot.summary.byKind, {
+      container: 1,
+      'host-service': 1,
+      'provider-definition': 1
+    });
+    const dockerResource = snapshot.resources.find((resource) => resource.kind === 'container');
+    assert.equal(dockerResource.provenance.externalDefinition.runtimePresent, true);
+    assert.equal(snapshot.resources.filter((resource) => resource.kind === 'provider-definition').length, 1);
+    const inactive = snapshot.resources.find((resource) => resource.name === 'Inactive service');
+    assert.equal(inactive.runtime.state, 'stopped');
+    assert.equal(inactive.classification.evidence.stateClass.includes('provider-definition-runtime-absent'), true);
+    const wireguard = snapshot.resources.find((resource) => resource.name === 'WireGuard (wg0)');
+    assert.equal(wireguard.classification.workloadRole, 'network-service');
+    assert.equal(wireguard.classification.stateClass, 'host-configured');
+    assert.equal(snapshot.discovery.sources.every((source) => source.readOnly), true);
+    assert.equal(snapshot.guarantees.runtimeMutated, false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('route and label normalization keeps only migration-safe fields', () => {
   const labels = {
     'coolify.managed': 'true',

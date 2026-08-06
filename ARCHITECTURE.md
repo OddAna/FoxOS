@@ -151,6 +151,17 @@ relationships, ownership status, blockers and conflicts under the FoxOS data
 root and exposes authenticated scan/read/redacted-export APIs. A scan still
 never creates desired state, changes labels or mutates Docker runtime state.
 
+The observation boundary now has three independent readers. Docker inventory
+uses `GET /containers/json?all=1`, so stopped containers remain visible. An
+optional Coolify migration reader uses an encrypted local token to project only
+safe application/service/database definition fields; it recovers inactive
+definitions that have no remaining container and never becomes runtime
+authority. A fixed Linux-host reader observes administrator systemd units and
+WireGuard interface/unit/config-file presence. It does not read service file
+contents, WireGuard configuration contents, keys, peers, addresses or endpoints.
+If the optional Coolify reader is not configured, no Coolify request is made and
+normal FoxOS discovery remains Docker- and host-owned.
+
 ### Implemented boundary: Server-owned access links for observed web apps
 
 FoxOS may give a discovered, running web application multiple server-owned HTTPS
@@ -425,8 +436,12 @@ route transaction. Stateful applications currently require a separately
 approved bounded-quiesce budget and preserve zero-downtime continuous sync or
 application-aware replication as post-roadmap work. Databases require a
 database-specific consistent backup/replication and primary-handoff policy.
-Workers and agents require drain semantics; provider proxies retire last;
-protected, unknown and unsupported resources fail closed.
+Workers and agents require drain semantics; provider proxies retire last.
+Inactive provider definitions use a separate recovery strategy, and host-native
+network/systemd resources use separate adoption strategies. Protected and
+unknown resources fail closed with a concrete evidence or implementation
+blocker rather than being flattened into an unexplained version-unsupported
+bucket.
 
 The planner treats shared networks, volumes and provider projects only as
 coordination hints. They do not create dependency direction or execution order.

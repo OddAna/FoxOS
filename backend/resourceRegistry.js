@@ -560,6 +560,155 @@ function normalizeResource(container, details, resourceId, inspectionFailed) {
   return resource;
 }
 
+function observationAliases(observation) {
+  const provider = String(observation.provider || 'unknown');
+  const externalId = String(observation.externalId || '');
+  if (!externalId || externalId.length > 256) return [];
+  return [`${observation.sourceKind || 'external-observation'}:${provider}:${externalId}`];
+}
+
+function declaredRoutes(observation) {
+  return (observation.routes || []).map((value) => {
+    try {
+      const parsed = new URL(value);
+      return {
+        domain: parsed.hostname.toLowerCase(),
+        scheme: parsed.protocol.slice(0, -1),
+        path: redactRoutePath(parsed.pathname || '/'),
+        tls: parsed.protocol === 'https:'
+      };
+    } catch {
+      return null;
+    }
+  }).filter(Boolean);
+}
+
+function statusState(value) {
+  const status = String(value || '').toLowerCase();
+  if (status.startsWith('running') || status.startsWith('active')) return 'running';
+  if (status.startsWith('exited') || status.startsWith('stopped') || status.startsWith('inactive')) return 'stopped';
+  return 'defined';
+}
+
+function normalizeObservedResource(observation, resourceId) {
+  const providerDefinition = observation.sourceKind === 'provider-definition';
+  const providerKind = observation.providerKind || 'service';
+  const runtimeObservation = observation.runtime || {};
+  const state = providerDefinition ? statusState(observation.status) : runtimeObservation.state || 'unknown';
+  const resource = {
+    schemaVersion: SCHEMA_VERSION,
+    id: resourceId,
+    kind: observation.sourceKind,
+    name: String(observation.name || observation.serviceType || 'Observed resource').slice(0, 256),
+    role: providerKind === 'database' ? 'database' : providerKind,
+    ownership: 'observed',
+    provider: observation.provider || 'linux-host',
+    protected: false,
+    provenance: {
+      imported: false,
+      safeLabels: {},
+      project: null,
+      service: observation.serviceType || null,
+      externalDefinition: providerDefinition ? {
+        providerKind,
+        serviceType: observation.serviceType || null,
+        source: observation.source || null,
+        declaredRoutes: declaredRoutes(observation),
+        observedUpdatedAt: observation.observedUpdatedAt || null,
+        runtimePresent: false
+      } : null,
+      hostConfiguration: !providerDefinition ? observation.configuration || null : null
+    },
+    runtime: providerDefinition ? {
+      engine: 'provider-definition',
+      containerId: null,
+      image: observation.image || null,
+      imageId: null,
+      state,
+      status: observation.status || null,
+      restartPolicy: null,
+      health: {
+        configured: false,
+        status: String(observation.status || '').includes(':')
+          ? String(observation.status).split(':').slice(1).join(':')
+          : null,
+        httpTarget: null
+      },
+      constraints: {},
+      environmentVariableCount: null,
+      inspection: 'definition-only'
+    } : {
+      engine: 'systemd',
+      containerId: null,
+      image: null,
+      imageId: null,
+      state,
+      status: runtimeObservation.status || null,
+      unit: runtimeObservation.unit || null,
+      activeState: runtimeObservation.activeState || null,
+      subState: runtimeObservation.subState || null,
+      unitFileState: runtimeObservation.unitFileState || null,
+      version: runtimeObservation.version || null,
+      restartPolicy: runtimeObservation.unitFileState || null,
+      health: { configured: false, status: runtimeObservation.activeState || null, httpTarget: null },
+      constraints: {},
+      environmentVariableCount: null,
+      inspection: runtimeObservation.inspection || 'complete'
+    },
+    ports: [],
+    routes: [],
+    declaredRoutes: providerDefinition ? declaredRoutes(observation) : [],
+    mounts: [],
+    networks: [],
+    adoption: {
+      stage: 'observed',
+      eligible: false,
+      ready: false,
+      blockers: [{
+        code: providerDefinition ? 'provider-definition-runtime-missing' : 'host-service-manifest-missing',
+        severity: 'blocking',
+        message: providerDefinition
+          ? 'The provider definition has no current Docker runtime to inspect.'
+          : 'The host service has no provider-neutral FoxOS manifest and recovery proof.'
+      }]
+    }
+  };
+  resource.classification = classifyResource(resource);
+  return resource;
+}
+
+function providerDefinitionMatches(resource, observation) {
+  if (!resource || resource.kind !== 'container' || resource.provider !== observation.provider) return false;
+  const externalId = String(observation.externalId || '');
+  if (!externalId) return false;
+  const labels = resource.provenance && resource.provenance.safeLabels || {};
+  return [resource.name, ...Object.values(labels)].some((value) => String(value || '').includes(externalId));
+}
+
+async function readOptionalObservation(reader, source) {
+  if (typeof reader !== 'function') {
+    return { source, configured: false, readOnly: true, resources: [], status: 'disabled' };
+  }
+  try {
+    const result = await reader();
+    return {
+      ...result,
+      source: result && (result.source || result.provider) || source,
+      resources: Array.isArray(result && result.resources) ? result.resources : [],
+      status: result && result.configured === false ? 'disabled' : 'ready'
+    };
+  } catch (error) {
+    return {
+      source,
+      configured: true,
+      readOnly: true,
+      resources: [],
+      status: 'error',
+      errorCode: String(error && error.code || `${source}-unavailable`).slice(0, 128)
+    };
+  }
+}
+
 function countBy(items, selector) {
   const counts = {};
   for (const item of items) {
@@ -735,6 +884,8 @@ async function mapLimit(items, limit, operation) {
 function createResourceRegistry({
   dataRoot,
   dockerRequest,
+  hostResourceReader = null,
+  providerResourceReader = null,
   clock = () => new Date(),
   randomUUID = () => crypto.randomUUID()
 }) {
@@ -768,11 +919,13 @@ function createResourceRegistry({
 
   async function scanInternal() {
     const observedAt = new Date(clock()).toISOString();
-    const [containers, images, networks, volumePayload] = await Promise.all([
+    const [containers, images, networks, volumePayload, hostObservation, providerObservation] = await Promise.all([
       dockerRequest('GET', '/containers/json?all=1'),
       dockerRequest('GET', '/images/json?all=0'),
       dockerRequest('GET', '/networks'),
-      dockerRequest('GET', '/volumes')
+      dockerRequest('GET', '/volumes'),
+      readOptionalObservation(hostResourceReader, 'linux-host'),
+      readOptionalObservation(providerResourceReader, 'legacy-provider')
     ]);
 
     const inspections = await mapLimit(containers || [], INSPECT_CONCURRENCY, async (container) => {
@@ -798,7 +951,43 @@ function createResourceRegistry({
         randomUUID
       );
       return normalizeResource(container, inspection.details, resourceId, inspection.failed);
-    }).sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
+    });
+
+    for (const observation of providerObservation.resources) {
+      const matchingResources = resources.filter((resource) => providerDefinitionMatches(resource, observation));
+      if (matchingResources.length) {
+        const definition = {
+          providerKind: observation.providerKind || null,
+          serviceType: observation.serviceType || null,
+          status: observation.status || null,
+          source: observation.source || null,
+          declaredRoutes: declaredRoutes(observation),
+          observedUpdatedAt: observation.observedUpdatedAt || null,
+          runtimePresent: true
+        };
+        for (const resource of matchingResources) resource.provenance.externalDefinition = definition;
+        continue;
+      }
+      const resourceId = resolveResourceId(
+        identityState,
+        observationAliases(observation),
+        observedAt,
+        randomUUID
+      );
+      resources.push(normalizeObservedResource(observation, resourceId));
+    }
+
+    for (const observation of hostObservation.resources) {
+      const resourceId = resolveResourceId(
+        identityState,
+        observationAliases(observation),
+        observedAt,
+        randomUUID
+      );
+      resources.push(normalizeObservedResource(observation, resourceId));
+    }
+
+    resources.sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
     const migrationManagement = readFoxosMigrationManagement(dataRoot, resources);
     for (const resource of resources) {
       const management = migrationManagement.get(resource.id);
@@ -819,8 +1008,20 @@ function createResourceRegistry({
       inventory,
       relationships,
       conflicts,
+      discovery: {
+        sources: [hostObservation, providerObservation].map((observation) => ({
+          source: observation.source,
+          configured: observation.configured !== false,
+          readOnly: observation.readOnly !== false,
+          status: observation.status,
+          discoveredResources: observation.resources.length,
+          errorCode: observation.errorCode || null
+        })),
+        hostInventory: hostObservation.inventory || null
+      },
       summary: {
         resources: resources.length,
+        byKind: countBy(resources, (resource) => resource.kind),
         byOwnership: countBy(resources, (resource) => resource.ownership),
         byProvider: countBy(resources, (resource) => resource.provider),
         byRole: countBy(resources, (resource) => resource.role),
@@ -844,6 +1045,8 @@ function createResourceRegistry({
       mode: 'read-only-observation',
       guarantees: {
         dockerRequests: 'GET-only',
+        hostRequests: 'fixed-read-only-observation',
+        optionalProviderRequests: 'GET-only-when-explicitly-configured',
         runtimeMutated: false,
         secretValuesIncluded: false,
         classificationSchemaVersion: RESOURCE_CLASSIFICATION_SCHEMA_VERSION,
@@ -918,10 +1121,13 @@ module.exports = {
   createResourceRegistry,
   detectConflicts,
   identityAliases,
+  normalizeObservedResource,
+  observationAliases,
   parseDockerHttpHealthTarget,
   parseTraefikRoutes,
   readFoxosMigrationManagement,
   resolveResourceId,
   roleFor,
-  safeLabels
+  safeLabels,
+  statusState
 };

@@ -71,7 +71,7 @@ const SELECT_STYLE = {
 const REVIEW_STATES = {
   ready: 'Geçiş hazırlığına uygun',
   blocked: 'Eksik bilgi',
-  unsupported: 'Bu sürümde desteklenmiyor',
+  unsupported: 'Geçiş desteği hazırlanıyor',
   managed: 'Sunucu yönetiminde',
   protected: 'Korunan sistem kaynağı'
 };
@@ -82,6 +82,9 @@ const STRATEGY_LABELS = {
   'database-aware-replication-handoff': 'Veritabanına özel aktarım',
   'drain-and-replace': 'İşi boşalt ve değiştir',
   'provider-proxy-retirement-last': 'Sağlayıcı proxy’sini en son kaldır',
+  'provider-definition-recovery': 'Deaktif tanımı kurtar ve yeniden oluştur',
+  'host-network-service-adoption': 'Host ağ servisini güvenli biçimde devral',
+  'host-service-adoption': 'Host servisini güvenli biçimde devral',
   'already-foxos-managed': 'Sunucu yönetiminde',
   'protected-skip': 'Korunan kaynak — atla',
   'dedicated-lifecycle-required': 'Kaynağa özel yaşam döngüsü gerekli',
@@ -96,8 +99,10 @@ const CLASS_LABELS = {
   agent: 'Ajan',
   proxy: 'Proxy',
   core: 'Sistem',
+  'network-service': 'Ağ servisi',
   stateless: 'Durumsuz',
   stateful: 'Durumlu',
+  'host-configured': 'Host yapılandırmalı',
   unknown: 'Belirsiz',
   'provider-owned': 'Harici sağlayıcı yönetiminde',
   'foxos-owned': 'Sunucu yönetiminde'
@@ -109,7 +114,8 @@ const AVAILABILITY_LABELS = {
   'database-aware-handoff-required': 'Veritabanı tutarlılığı korunmalı',
   'already-managed': 'Mevcut çalışma korunacak',
   'not-applicable': 'Uygulanmaz',
-  'unknown-blocked': 'Belirsiz — engelli'
+  'unknown-blocked': 'Belirsiz — engelli',
+  'host-service-continuity-required': 'Host servisi kesintisiz korunmalı'
 };
 
 const ACTIVE_RUN_STATUSES = new Set(['queued', 'preparing', 'executing']);
@@ -149,7 +155,12 @@ const BLOCKER_LABELS = {
   'database-aware-handoff-not-implemented': 'Veritabanına özel çoğaltma ve ana sunucu devri henüz açılmadı.',
   'worker-drain-policy-not-implemented': 'Kuyruk boşaltma ve devam eden iş kurtarma politikası eksik.',
   'provider-proxy-retirement-gate-open': 'Bağımlı tüm rotalar doğrulanmadan sağlayıcı proxy’si kaldırılamaz.',
-  'resource-class-migration-policy-missing': 'Bu kaynak sınıfı için incelenmiş geçiş politikası yok.'
+  'resource-class-migration-policy-missing': 'Bu kaynak sınıfı için incelenmiş geçiş politikası yok.',
+  'provider-definition-runtime-evidence-missing': 'Deaktif tanımın çalışan runtime kanıtı henüz yok.',
+  'provider-definition-runtime-recovery-required': 'Deaktif tanım sunucuya ait bir çalışma manifestine dönüştürülmeli.',
+  'host-service-manifest-missing': 'Host servisi için sunucuya ait manifest ve geri alma sürümü eksik.',
+  'host-network-service-adoption-not-implemented': 'Host ağ servisi için anahtar koruması ve birebir geri alma işlemi hazırlanıyor.',
+  'host-service-adoption-not-implemented': 'systemd servisi için yapılandırma yakalama ve geri alma işlemi hazırlanıyor.'
 };
 
 function reviewState(resource) {

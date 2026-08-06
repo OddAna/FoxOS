@@ -294,10 +294,28 @@ remain running.
 
 FoxOS keeps a provider-neutral, versioned observation of the server under
 `.foxos-data/registry/`. Coolify labels and other provider metadata are treated
-as migration input, not permanent authority. A scan reads containers, images,
-networks, volumes, mounts, ports, routes, health and restart state through
-Docker `GET` requests only. It does not recreate, label, start, stop or adopt a
-resource.
+as migration input, not permanent authority. A scan reads running and stopped
+containers, images, networks, volumes, mounts, ports, routes, health and restart
+state through Docker `GET` requests. It also observes administrator-owned
+systemd units and WireGuard interface/unit/config-file presence with fixed
+read-only host commands. It never reads WireGuard keys, peers, addresses,
+endpoints or config contents and does not recreate, label, start, stop or adopt
+a resource.
+
+An existing Coolify installation can be connected as an optional migration
+reader. This is useful for deactivated applications/services/databases whose
+Docker containers no longer exist. The token is accepted over stdin, encrypted
+with the server-local FoxOS key and never stored or returned as plaintext:
+
+```bash
+printf '%s' "$COOLIFY_API_TOKEN" | \
+  docker compose exec -T foxos \
+  node coolifyMigrationReaderCli.js configure --url "https://your-coolify.example"
+```
+
+The reader performs bounded `GET` inventory calls only when configured. It is
+not required for installation, startup, normal discovery or operation; removing
+Coolify after verified migration does not remove FoxOS-owned desired state.
 
 The production agent performs this same read-only scan asynchronously at
 startup so the server has a current snapshot after a FoxOS restart. Set

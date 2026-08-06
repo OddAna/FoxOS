@@ -86,6 +86,9 @@ function migrationStrategy(resource) {
   if (resource.protected) return 'protected-skip';
   if (resource.management && resource.management.owner === 'foxos') return 'already-foxos-managed';
   if (classification.authorityClass === 'foxos-owned') return 'already-foxos-managed';
+  if (resource.kind === 'provider-definition') return 'provider-definition-recovery';
+  if (classification.workloadRole === 'network-service') return 'host-network-service-adoption';
+  if (resource.kind === 'host-service') return 'host-service-adoption';
   if (classification.status !== 'classified') return 'manual-review-required';
   if (classification.workloadRole === 'proxy') return 'provider-proxy-retirement-last';
   if (classification.workloadRole === 'database' || classification.stateClass === 'database') {
@@ -147,6 +150,15 @@ function availabilityPolicy(resource, strategy) {
       postRoadmapCapability: 'database-zero-downtime-replication-and-primary-handoff'
     };
   }
+  if (classification.stateClass === 'host-configured') {
+    return {
+      currentMode: 'host-service-continuity-required',
+      targetMode: 'reconcile-host-service-with-rollback',
+      sourcePauseBudgetMs: 0,
+      explicitApprovalRequired: true,
+      postRoadmapCapability: null
+    };
+  }
   return {
     currentMode: 'unknown-blocked',
     targetMode: 'manual-review-required',
@@ -171,14 +183,32 @@ function implementationGaps(resource, strategy, conflicts) {
     'apply',
     'This orchestrator version plans migrations but has no runtime apply transaction.'
   )];
-  if ((resource.routes || []).length) {
+  if ((resource.routes || []).length || (resource.declaredRoutes || []).length) {
     gaps.push(blocker(
       'general-domain-route-cutover-not-implemented',
       'routes',
       'Arbitrary production domain, route and TLS authority cutover is not implemented.'
     ));
   }
-  if (strategy === 'blue-green-atomic-route') {
+  if (strategy === 'provider-definition-recovery') {
+    gaps.push(blocker(
+      'provider-definition-runtime-recovery-required',
+      'runtime',
+      'The inactive provider definition must be reconstructed into a provider-neutral runtime manifest before migration.'
+    ));
+  } else if (strategy === 'host-network-service-adoption') {
+    gaps.push(blocker(
+      'host-network-service-adoption-not-implemented',
+      'runtime',
+      'Host network configuration, encrypted key custody and exact rollback must be implemented before adoption.'
+    ));
+  } else if (strategy === 'host-service-adoption') {
+    gaps.push(blocker(
+      'host-service-adoption-not-implemented',
+      'runtime',
+      'The systemd unit and its configuration must be captured into a provider-neutral manifest with rollback proof.'
+    ));
+  } else if (strategy === 'blue-green-atomic-route') {
     gaps.push(blocker(
       'zero-downtime-blue-green-apply-not-implemented',
       'availability',
@@ -270,6 +300,7 @@ function createMigrationOrchestrator({
       !resource.protected && !foxosManaged && classification && classification.authorityClass === 'provider-owned'
     );
     const reviewEligible = Boolean(
+      resource.kind === 'container' &&
       migrationRequired && strategy === 'blue-green-atomic-route' &&
       classification && classification.independenceAudit &&
       classification.independenceAudit.eligibleForReadOnlyAudit === true
@@ -285,14 +316,26 @@ function createMigrationOrchestrator({
 
     let manifest = null;
     let compileFailure = null;
-    try {
-      manifest = compileApplicationManifest(resource.id);
-    } catch (error) {
+    if (resource.kind !== 'container') {
       compileFailure = blocker(
-        'application-manifest-compilation-failed:' + (error.code || 'unknown'),
+        resource.kind === 'provider-definition'
+          ? 'provider-definition-runtime-evidence-missing'
+          : 'host-service-manifest-missing',
         'manifest',
-        'The provider-neutral application manifest could not be compiled.'
+        resource.kind === 'provider-definition'
+          ? 'The inactive definition has no inspected runtime evidence yet.'
+          : 'The host service has no server-owned manifest and recovery revision yet.'
       );
+    } else {
+      try {
+        manifest = compileApplicationManifest(resource.id);
+      } catch (error) {
+        compileFailure = blocker(
+          'application-manifest-compilation-failed:' + (error.code || 'unknown'),
+          'manifest',
+          'The provider-neutral application manifest could not be compiled.'
+        );
+      }
     }
 
     const manifestBlockers = migrationRequired && manifest && manifest.gates && manifest.gates.blockers || [];
@@ -344,7 +387,7 @@ function createMigrationOrchestrator({
         manifestRevisionId: manifest && manifest.revisionId || null,
         manifestGateStatus: manifest && manifest.gates && manifest.gates.status || 'unavailable',
         sourceType: manifest && manifest.desired && manifest.desired.source && manifest.desired.source.type || null,
-        routeCount: (resource.routes || []).length,
+        routeCount: (resource.routes || []).length + (resource.declaredRoutes || []).length,
         mountCount: (resource.mounts || []).length,
         environmentVariableCount: resource.runtime && resource.runtime.environmentVariableCount,
         secretValuesIncluded: false

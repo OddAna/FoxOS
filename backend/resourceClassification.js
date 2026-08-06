@@ -1,6 +1,6 @@
 const crypto = require('node:crypto');
 
-const RESOURCE_CLASSIFICATION_SCHEMA_VERSION = 1;
+const RESOURCE_CLASSIFICATION_SCHEMA_VERSION = 2;
 
 const DATABASE_IDENTITY = /(?:^|[\s/_.:@-])(postgres(?:ql)?|mysql|mariadb|mongodb?|mongo|redis|valkey|qdrant|clickhouse|cassandra|elasticsearch|opensearch|influxdb|cockroach(?:db)?|mssql|sqlserver)(?:$|[\s/_.:@-])/i;
 const PROXY_IDENTITY = /(?:^|[\s/_.:@-])(traefik|caddy|nginx|haproxy|envoy)(?:$|[\s/_.:@-])/i;
@@ -20,6 +20,8 @@ function identityText(resource) {
   return [
     resource.name,
     resource.runtime && resource.runtime.image,
+    resource.runtime && resource.runtime.unit,
+    resource.runtime && resource.runtime.version,
     resource.provenance && resource.provenance.service,
     labels['coolify.service.subName'],
     labels['coolify.serviceName']
@@ -41,6 +43,10 @@ function workloadRole(resource) {
   ) {
     reasons.push(labels['com.foxos.gateway'] === 'true' ? 'foxos-gateway-label' : 'proxy-identity');
     return { value: 'proxy', reasons };
+  }
+  if (resource.role === 'network-service' || resource.kind === 'host-service' && /wireguard|wg-quick/i.test(identity)) {
+    reasons.push('host-network-service');
+    return { value: 'network-service', reasons };
   }
   if (subtype === 'database' || resource.role === 'database' || DATABASE_IDENTITY.test(identity)) {
     reasons.push(subtype === 'database' ? 'provider-database-subtype' : 'database-identity');
@@ -101,6 +107,13 @@ function workloadRole(resource) {
 }
 
 function stateClass(resource, role) {
+  if (resource.kind === 'provider-definition') {
+    if (role === 'database') return { value: 'database', reasons: ['provider-database-definition'] };
+    return { value: 'unknown', reasons: ['provider-definition-runtime-absent'] };
+  }
+  if (resource.kind === 'host-service') {
+    return { value: 'host-configured', reasons: ['host-configuration-and-unit-state'] };
+  }
   if (!resource.runtime || resource.runtime.inspection !== 'complete') {
     return { value: 'unknown', reasons: ['docker-inspection-incomplete'] };
   }
@@ -139,6 +152,7 @@ function auditCandidate(resource, classification) {
   if (resource.protected) blockers.push('protected-resource');
   if (!resource.runtime || resource.runtime.inspection !== 'complete') blockers.push('inspection-incomplete');
   if (!resource.runtime || resource.runtime.state !== 'running') blockers.push('runtime-not-running');
+  if (resource.kind && resource.kind !== 'container') blockers.push('not-docker-container');
   return {
     eligibleForReadOnlyAudit: blockers.length === 0,
     blockers: sortedUnique(blockers),
