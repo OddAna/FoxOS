@@ -427,7 +427,8 @@ test('bounded production adapter failures remain actionable in the operation rec
     manager.execute(plan.planId, 'approval-secret-value'),
     (error) => (
       error.code === 'candidate-startup-contract-unsupported' &&
-      error.message === productionFailure.message
+      error.message === productionFailure.message &&
+      /^smop_[a-f0-9]{32}$/.test(error.operationId)
     )
   );
   const operation = manager.status().operations[0];

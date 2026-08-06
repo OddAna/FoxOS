@@ -238,6 +238,10 @@ target blocks only adoption/migration operations that require restore proof.
   provider-neutral Next standalone runtime directly, fail closed on unsupported
   titles before traffic mutation, and preserve bounded adapter failure codes in
   the run record without secrets.
+- [x] Replace the single immediate production-candidate HTTP probe with a
+  bounded 30-second readiness window that accepts the reviewed `200-399`
+  response range, persists value-free attempt/exit/OOM diagnostics and retains
+  the failed transaction's exact operation ID in the parent migration run.
 - [ ] Complete the first fresh UI-authorized production stateless migration and
   record source continuity, zero unavailable samples, rollback availability and
   unchanged non-selected workloads before calling the live boundary complete.
