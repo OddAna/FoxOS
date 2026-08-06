@@ -8,6 +8,8 @@ const {
   createProductionStatelessMigrationAdapter,
   dependencyFromValue,
   environmentForStartup,
+  immutableImageFallbackAllowed,
+  startupContractFromImageDefaults,
   startupContractFromObservation,
   rewriteEnvironmentDependencies
 } = require('./productionStatelessMigrationAdapter');
@@ -82,6 +84,184 @@ test('unresolvable process titles fail closed instead of becoming Docker entrypo
     cmd: [],
     workingDirectory: '/app'
   });
+});
+
+test('matching immutable image defaults provide a bounded provider-neutral startup contract', () => {
+  const config = {
+    Entrypoint: ['/bin/bash', '-l', '-c'],
+    Cmd: ['test -n "$PORT" && nginx -c /assets/nginx.conf'],
+    WorkingDir: '/app/',
+    User: ''
+  };
+  assert.deepEqual(startupContractFromImageDefaults({
+    sourceConfig: config,
+    imageConfig: { ...config }
+  }), {
+    kind: 'immutable-image-defaults',
+    entrypoint: ['/bin/bash', '-l', '-c'],
+    cmd: ['test -n "$PORT" && nginx -c /assets/nginx.conf'],
+    workingDirectory: '/app/'
+  });
+});
+
+test('image-default startup fallback rejects provider overrides and unsafe arguments', () => {
+  const imageConfig = {
+    Entrypoint: ['/bin/sh', '-c'],
+    Cmd: ['nginx -g "daemon off;"'],
+    WorkingDir: '/app',
+    User: ''
+  };
+  assert.equal(startupContractFromImageDefaults({
+    sourceConfig: { ...imageConfig, Cmd: ['provider-wrapper'] },
+    imageConfig
+  }), null);
+  assert.equal(startupContractFromImageDefaults({
+    sourceConfig: imageConfig,
+    imageConfig: { ...imageConfig, Cmd: ['unsafe\ncommand'] }
+  }), null);
+  assert.equal(startupContractFromImageDefaults({
+    sourceConfig: { ...imageConfig, User: 'root' },
+    imageConfig
+  }), null);
+});
+
+test('immutable image fallback stays closed for dependencies, secrets, mounts and runtime-user drift', () => {
+  const imageId = 'sha256:' + '1'.repeat(64);
+  const safe = {
+    image: { Id: imageId },
+    imageId,
+    dependencies: [],
+    environmentRevision: { secretRefs: [] },
+    runtime: { writableMounts: 0, user: null },
+    sourceConfig: { User: '' }
+  };
+  assert.equal(immutableImageFallbackAllowed(safe), true);
+  assert.equal(immutableImageFallbackAllowed({ ...safe, dependencies: [{ hostname: 'database' }] }), false);
+  assert.equal(immutableImageFallbackAllowed({
+    ...safe,
+    environmentRevision: { secretRefs: [{ name: 'TOKEN' }] }
+  }), false);
+  assert.equal(immutableImageFallbackAllowed({
+    ...safe,
+    runtime: { ...safe.runtime, writableMounts: 1 }
+  }), false);
+  assert.equal(immutableImageFallbackAllowed({
+    ...safe,
+    runtime: { ...safe.runtime, user: '1000' }
+  }), false);
+  assert.equal(immutableImageFallbackAllowed({
+    ...safe,
+    image: { Id: 'sha256:' + '2'.repeat(64) }
+  }), false);
+});
+
+test('candidate creation falls back to matching immutable image defaults without dependencies or secrets', async () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-production-image-default-startup-'));
+  const operationId = 'smop_' + 'a'.repeat(32);
+  const resourceId = 'res_' + 'b'.repeat(32);
+  const sourceId = 'c'.repeat(64);
+  const candidateId = 'd'.repeat(64);
+  const imageId = 'sha256:' + 'e'.repeat(64);
+  const agentImageId = 'sha256:' + 'f'.repeat(64);
+  const snapshotId = 'snap_' + '1'.repeat(32);
+  const environmentRevision = 'env_rev_' + '2'.repeat(32);
+  const imageConfig = {
+    Entrypoint: ['/bin/bash', '-l', '-c'],
+    Cmd: ['test -n "$PORT" && nginx -c /assets/nginx.conf'],
+    WorkingDir: '/app/',
+    User: ''
+  };
+  let createPayload = null;
+  const source = {
+    Id: sourceId,
+    Image: imageId,
+    Config: { ...imageConfig },
+    State: { Running: true },
+    NetworkSettings: { Networks: { legacy: {} } }
+  };
+  const dockerRequest = async (method, requestPath, payload) => {
+    if (method === 'GET' && requestPath === '/containers/' + sourceId + '/json') return source;
+    if (method === 'GET' && requestPath === '/containers/foxos/json') return { Image: agentImageId };
+    if (method === 'GET' && requestPath === '/images/' + encodeURIComponent(imageId) + '/json') {
+      return { Id: imageId, Config: { ...imageConfig } };
+    }
+    if (method === 'POST' && requestPath.startsWith('/images/')) return {};
+    if (method === 'POST' && requestPath.startsWith('/containers/create?name=')) {
+      createPayload = payload;
+      return { Id: candidateId };
+    }
+    if (method === 'POST' && requestPath === '/networks/foxos-egress/connect') return {};
+    if (method === 'POST' && requestPath === '/containers/' + candidateId + '/start') return {};
+    if (method === 'GET' && requestPath === '/containers/' + candidateId + '/json') {
+      return { Id: candidateId, Image: imageId, State: { Running: true, ExitCode: 0, OOMKilled: false } };
+    }
+    throw new Error('Unexpected Docker request: ' + method + ' ' + requestPath);
+  };
+  const adapter = createProductionStatelessMigrationAdapter({
+    dataRoot,
+    dockerRequest,
+    dockerExec: async () => ({ exitCode: 1, output: '' }),
+    resourceRegistry: {
+      getLatest: () => ({
+        snapshotId,
+        resources: [{ id: resourceId, runtime: { containerId: sourceId, imageId } }]
+      })
+    },
+    secretManager: {
+      getEnvironmentRevision: () => ({ revision: environmentRevision, secretRefs: [] }),
+      resolveEnvironment: () => ['PORT=3000']
+    },
+    certificateImporter: { importDomain: async () => ({}) },
+    ingressAuthority: {
+      hostIngressAddress: async () => '10.0.3.1',
+      stageRoutes: async () => [],
+      verifyLegacyDomain: async () => ({ legacyReady: true })
+    }
+  });
+  fs.writeFileSync(path.join(adapter.paths.operationsRoot, operationId + '.json'), JSON.stringify({
+    schemaVersion: 1,
+    operationId,
+    planId: 'smplan_' + '3'.repeat(32),
+    resourceId,
+    source: { containerId: sourceId, imageId },
+    dependencies: [],
+    candidate: null,
+    routes: []
+  }));
+  const candidate = await adapter.createCandidate({
+    operationId,
+    plan: {
+      sourceSnapshotId: snapshotId,
+      resource: { resourceId },
+      executionContract: {
+        contractId: 'smcontract_' + '4'.repeat(32),
+        candidate: {
+          environment: { revision: environmentRevision },
+          runtime: {
+            user: null,
+            restartPolicy: 'unless-stopped',
+            readOnlyRootFilesystem: false,
+            memoryBytes: 536870912,
+            nanoCpus: 1000000000,
+            pidsLimit: 256,
+            writableMounts: 0
+          },
+          ingressPorts: [3000],
+          health: { privatePort: 3000 }
+        }
+      }
+    }
+  });
+  assert.equal(candidate.owned, true);
+  assert.deepEqual(createPayload.Entrypoint, imageConfig.Entrypoint);
+  assert.deepEqual(createPayload.Cmd, imageConfig.Cmd);
+  assert.equal(createPayload.WorkingDir, '/app/');
+  const state = JSON.parse(fs.readFileSync(
+    path.join(adapter.paths.operationsRoot, operationId + '.json'),
+    'utf8'
+  ));
+  assert.equal(state.candidate.startupKind, 'immutable-image-defaults');
+  fs.rmSync(dataRoot, { recursive: true, force: true });
 });
 
 test('candidate creation applies the reconstructed Next standalone contract', async () => {
