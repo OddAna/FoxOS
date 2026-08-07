@@ -137,6 +137,9 @@ function stateClass(resource, role) {
 }
 
 function authorityClass(resource) {
+  if (resource.kind === 'host-service' && resource.provider === 'linux-host') {
+    return { value: 'server-owned', reasons: ['host-service-installed-on-current-server'] };
+  }
   if (resource.provider === 'foxos' && resource.ownership === 'foxos-managed') {
     return { value: 'foxos-owned', reasons: ['foxos-provider-and-managed-ownership'] };
   }
@@ -145,7 +148,7 @@ function authorityClass(resource) {
 
 function auditCandidate(resource, classification) {
   const blockers = [];
-  if (classification.authorityClass !== 'provider-owned') blockers.push('already-foxos-owned');
+  if (classification.authorityClass !== 'provider-owned') blockers.push('not-provider-owned');
   if (classification.workloadRole !== 'application') blockers.push('not-application-workload');
   if (classification.stateClass !== 'stateless') blockers.push('not-stateless');
   if (classification.status !== 'classified') blockers.push('classification-needs-review');

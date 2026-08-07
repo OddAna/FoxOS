@@ -42,13 +42,19 @@ export const ApplicationProvider = ({ children }) => {
   const runApplicationAction = useCallback(async (application, action) => {
     const allowed = application.capabilities && application.capabilities[action];
     const containerId = application.runtime && application.runtime.containerId;
-    if (!allowed || !containerId) throw new Error('Bu işlem uygulama için kullanılamıyor');
+    const hostService = application.installation && application.installation.state === 'host-service';
+    if (!allowed || (!containerId && !hostService)) throw new Error('Bu işlem uygulama için kullanılamıyor');
     if (pendingActions.current.has(application.id)) throw new Error('Uygulamada başka bir işlem sürüyor');
 
     pendingActions.current.add(application.id);
     setActions((current) => ({ ...current, [application.id]: action }));
     try {
-      await apiFetch(`/api/containers/${containerId}/${action}`, { method: 'POST' });
+      await apiFetch(
+        hostService
+          ? `/api/host-services/${application.id}/${action}`
+          : `/api/containers/${containerId}/${action}`,
+        { method: 'POST' }
+      );
       await refreshApplications({ quiet: true });
     } catch (actionError) {
       try {

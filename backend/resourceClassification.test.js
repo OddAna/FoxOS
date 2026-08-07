@@ -116,3 +116,25 @@ test('classification revision is stable and contains no provider identifier valu
   assert.equal(JSON.stringify(first).includes('production'), false);
   assert.equal(JSON.stringify(first).includes('example.test'), false);
 });
+
+test('a service installed directly on the Linux host is server-owned without migration', () => {
+  const classification = classifyResource(resource({
+    kind: 'host-service',
+    name: 'WireGuard (wg0)',
+    role: 'network-service',
+    provider: 'linux-host',
+    runtime: {
+      engine: 'systemd',
+      unit: 'wg-quick@wg0.service',
+      state: 'running',
+      inspection: 'complete'
+    },
+    routes: [],
+    ports: [],
+    mounts: []
+  }));
+  assert.equal(classification.workloadRole, 'network-service');
+  assert.equal(classification.stateClass, 'host-configured');
+  assert.equal(classification.authorityClass, 'server-owned');
+  assert.equal(classification.independenceAudit.eligibleForReadOnlyAudit, false);
+});

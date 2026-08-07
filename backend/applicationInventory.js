@@ -285,8 +285,8 @@ function hostServiceApplicationProjection(resource) {
     declaredUrls: [],
     hostPort: null,
     bindAddress: null,
-    authority: 'observed',
-    managedByServer: false,
+    authority: 'server-owned',
+    managedByServer: true,
     provenance: {
       source: resource.provider || 'linux-host',
       importedFrom: null
@@ -297,6 +297,10 @@ function hostServiceApplicationProjection(resource) {
       containerId: null,
       containerName: null,
       serviceUnit: runtime.unit || null,
+      unitFileState: runtime.unitFileState || 'unknown',
+      bootEnabled: ['enabled', 'enabled-runtime', 'linked', 'linked-runtime'].includes(
+        String(runtime.unitFileState || '').toLowerCase()
+      ),
       state: runtime.state || 'stopped',
       status: runtime.status || null,
       healthStatus: runtime.activeState || null,
@@ -305,10 +309,11 @@ function hostServiceApplicationProjection(resource) {
     },
     capabilities: {
       open: false,
-      start: false,
-      stop: false,
-      restart: false,
+      start: !['running', 'transitioning'].includes(operationalState),
+      stop: operationalState === 'running',
+      restart: operationalState === 'running',
       settings: true,
+      editBootState: true,
       checkUpdates: false,
       editCompose: false,
       editAccessLink: false,
@@ -320,7 +325,11 @@ function hostServiceApplicationProjection(resource) {
       definitionType: role,
       sourceType: 'systemd'
     },
-    management: null
+    management: {
+      owner: 'server',
+      state: 'native-host-service',
+      runtime: 'systemd'
+    }
   };
 }
 

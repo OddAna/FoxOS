@@ -283,3 +283,156 @@ test('a verified FoxOS migration projection is managed and cannot re-enter migra
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('Linux host services require no migration and completed domains suppress inactive provider duplicates', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-native-host-plan-'));
+  try {
+    const managed = resource('6', {
+      name: 'managed-site',
+      management: {
+        owner: 'foxos',
+        logicalResourceId: 'res_' + '6'.repeat(32),
+        domains: ['managed.example.test']
+      },
+      routes: [{ domain: 'managed.example.test', path: '/', tls: true }]
+    });
+    const definitionBase = {
+      id: 'res_' + '7'.repeat(32),
+      kind: 'provider-definition',
+      name: 'old-managed-definition',
+      role: 'application',
+      ownership: 'observed',
+      provider: 'coolify',
+      protected: false,
+      provenance: { imported: false, safeLabels: {}, externalDefinition: {} },
+      runtime: { engine: 'provider-definition', state: 'stopped', inspection: 'definition-only' },
+      ports: [], routes: [],
+      declaredRoutes: [{ domain: 'managed.example.test', path: '/', tls: true }],
+      mounts: [], networks: []
+    };
+    const definition = { ...definitionBase, classification: classifyResource(definitionBase) };
+    const hostBase = {
+      id: 'res_' + '8'.repeat(32),
+      kind: 'host-service',
+      name: 'WireGuard (wg0)',
+      role: 'network-service',
+      ownership: 'observed',
+      provider: 'linux-host',
+      protected: false,
+      provenance: { imported: false, safeLabels: {} },
+      runtime: {
+        engine: 'systemd', unit: 'wg-quick@wg0.service', state: 'running', inspection: 'complete'
+      },
+      ports: [], routes: [], declaredRoutes: [], mounts: [], networks: []
+    };
+    const host = { ...hostBase, classification: classifyResource(hostBase) };
+    managed.classification = classifyResource(managed);
+    const snapshot = {
+      snapshotId: 'snap_' + 'f'.repeat(32),
+      resources: [managed, definition, host],
+      relationships: [],
+      conflicts: []
+    };
+    const manager = createMigrationOrchestrator({
+      dataRoot: root,
+      resourceRegistry: { getLatest: () => snapshot },
+      compileApplicationManifest: () => { throw new Error('managed records need no manifest'); }
+    });
+    const plan = manager.createPlan({ confirmation: PLAN_SERVER_MIGRATION_CONFIRMATION });
+    const definitionPlan = plan.resources.find((entry) => entry.resourceId === definition.id);
+    const hostPlan = plan.resources.find((entry) => entry.resourceId === host.id);
+    assert.equal(definitionPlan.migrationRequired, false);
+    assert.equal(definitionPlan.strategy, 'already-foxos-managed');
+    assert.equal(definitionPlan.canonicalResourceId, managed.id);
+    assert.deepEqual(definitionPlan.blockers.evidence, []);
+    assert.equal(hostPlan.migrationRequired, false);
+    assert.equal(hostPlan.strategy, 'already-server-owned');
+    assert.equal(hostPlan.currentAuthorityClass, 'server-owned');
+    assert.equal(hostPlan.readiness.planningStatus, 'already-server-owned');
+    assert.equal(plan.summary.alreadyServerOwned, 1);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('provider sidecars travel with one parent while the provider control plane retires last', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-provider-groups-'));
+  try {
+    const resourceName = 'n8n-' + 'x'.repeat(20);
+    const parent = resource('9', {
+      name: resourceName,
+      provenance: {
+        imported: false,
+        project: 'automation',
+        service: 'n8n',
+        safeLabels: { 'coolify.resourceName': resourceName }
+      },
+      mounts: [{ type: 'volume', name: 'n8n-data', destination: '/data', readOnly: false }]
+    });
+    const sidecar = resource('a', {
+      name: 'task-runners-' + 'x'.repeat(20),
+      role: 'worker',
+      provenance: {
+        imported: false,
+        project: 'automation',
+        service: 'task-runners',
+        safeLabels: { 'coolify.resourceName': resourceName }
+      },
+      routes: [],
+      ports: [],
+      mounts: []
+    });
+    const proxy = resource('b', {
+      name: 'coolify-proxy',
+      role: 'proxy',
+      provenance: {
+        imported: false,
+        project: 'coolify-proxy',
+        service: 'traefik',
+        safeLabels: { 'coolify.managed': 'true' }
+      },
+      routes: [],
+      ports: [],
+      mounts: [{ type: 'bind', source: '/data/coolify/proxy', destination: '/data', readOnly: false }]
+    });
+    const resources = [parent, sidecar, proxy].map((entry) => ({
+      ...entry,
+      classification: classifyResource(entry)
+    }));
+    const snapshot = {
+      snapshotId: 'snap_' + 'e'.repeat(32),
+      resources,
+      relationships: [],
+      conflicts: []
+    };
+    const manager = createMigrationOrchestrator({
+      dataRoot: root,
+      resourceRegistry: { getLatest: () => snapshot },
+      compileApplicationManifest: () => ({
+        revisionId: 'arev_' + 'c'.repeat(32),
+        desired: { source: { type: 'oci-image' }, dependencies: [] },
+        gates: { blockers: [{ code: 'external-provider-authority', section: 'ownership' }] }
+      })
+    });
+    const plan = manager.createPlan({ confirmation: PLAN_SERVER_MIGRATION_CONFIRMATION });
+    const parentPlan = plan.resources.find((entry) => entry.resourceId === parent.id);
+    const sidecarPlan = plan.resources.find((entry) => entry.resourceId === sidecar.id);
+    const proxyPlan = plan.resources.find((entry) => entry.resourceId === proxy.id);
+    assert.equal(parentPlan.migrationRequired, true);
+    assert.deepEqual(parentPlan.migrationGroup.memberResourceIds, [parent.id, sidecar.id].sort());
+    assert.ok(parentPlan.blockers.implementation.some((entry) => (
+      entry.code === 'provider-resource-group-transaction-required'
+    )));
+    assert.equal(sidecarPlan.migrationRequired, false);
+    assert.equal(sidecarPlan.strategy, 'migrate-with-parent');
+    assert.equal(sidecarPlan.parentResourceId, parent.id);
+    assert.equal(sidecarPlan.readiness.planningStatus, 'included-with-parent');
+    assert.equal(proxyPlan.migrationRequired, false);
+    assert.equal(proxyPlan.strategy, 'provider-control-plane-retirement-last');
+    assert.equal(proxyPlan.readiness.planningStatus, 'provider-retirement-pending');
+    assert.equal(plan.summary.includedWithParent, 1);
+    assert.equal(plan.summary.providerRetirementPending, 1);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

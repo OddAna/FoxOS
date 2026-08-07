@@ -367,6 +367,9 @@ The authenticated API exposes:
 | `GET /api/migration-runs` | Read owner-only whole-server migration run history and the latest state |
 | `POST /api/migration-runs` | Persist the exact selection and start immutable all-resource preflight followed by serial execution when every gate is ready |
 | `GET /api/migration-runs/:runId` | Read one migration run, per-resource blockers and verified operation IDs |
+| `GET /api/host-services/:resourceId/settings` | Read the exact Registry-bound systemd state and boot setting |
+| `PATCH /api/host-services/:resourceId/settings` | Enable or disable the exact observed systemd unit at boot |
+| `POST /api/host-services/:resourceId/:action` | Start, stop or restart the exact observed Linux-host service |
 | `GET /api/stateless-migrations/plans/:planId/review` | Read the server-owned reviewed configuration and drift state for one stateless plan |
 | `PUT /api/stateless-migrations/plans/:planId/review` | Save health target, runtime confirmation, every route confirmation and certificate adapter choice without applying them |
 | `POST /api/resources/:resourceId/adoption-plan` | Create a deterministic import draft for the strictly disposable pilot |
@@ -1251,6 +1254,14 @@ Do not copy its contents into Git or logs.
 - Automatic production migration currently supports only eligible stateless
   Docker web applications. Stateful applications, databases, workers,
   privileged containers, writable mounts and ambiguous routes remain blocked
+- Linux-host systemd and WireGuard services are already server-owned and do not
+  require migration. FoxOS can start, stop, restart and change boot enablement
+  for the exact discovered unit, but does not read or edit its configuration or
+  secrets
+- Coolify application companions are grouped under one migration parent and
+  partial group execution is blocked until the atomic group adapter is ready.
+  Coolify's own panel, proxy and support services are retirement-only resources,
+  not application migration targets
 - The first migration certificate handoff imports an already valid matching
   certificate from readable Traefik ACME storage. After import, FoxOS Caddy owns
   renewal. A later primary-domain change issues its new certificate directly

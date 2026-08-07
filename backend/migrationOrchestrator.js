@@ -85,6 +85,7 @@ function migrationStrategy(resource) {
   const classification = resource.classification || {};
   if (resource.protected) return 'protected-skip';
   if (resource.management && resource.management.owner === 'foxos') return 'already-foxos-managed';
+  if (classification.authorityClass === 'server-owned') return 'already-server-owned';
   if (classification.authorityClass === 'foxos-owned') return 'already-foxos-managed';
   if (resource.kind === 'provider-definition') return 'provider-definition-recovery';
   if (classification.workloadRole === 'network-service') return 'host-network-service-adoption';
@@ -114,10 +115,28 @@ function availabilityPolicy(resource, strategy) {
       postRoadmapCapability: null
     };
   }
-  if (strategy === 'already-foxos-managed') {
+  if (strategy === 'already-foxos-managed' || strategy === 'already-server-owned') {
     return {
       currentMode: 'already-managed',
       targetMode: 'preserve-current-availability',
+      sourcePauseBudgetMs: null,
+      explicitApprovalRequired: false,
+      postRoadmapCapability: null
+    };
+  }
+  if (strategy === 'migrate-with-parent') {
+    return {
+      currentMode: 'included-with-parent',
+      targetMode: 'migrate-as-one-resource-group',
+      sourcePauseBudgetMs: null,
+      explicitApprovalRequired: false,
+      postRoadmapCapability: null
+    };
+  }
+  if (strategy === 'provider-control-plane-retirement-last') {
+    return {
+      currentMode: 'provider-retirement-pending',
+      targetMode: 'remove-after-independent-workloads',
       sourcePauseBudgetMs: null,
       explicitApprovalRequired: false,
       postRoadmapCapability: null
@@ -177,7 +196,10 @@ function relationshipResourceIds(relationship) {
 }
 
 function implementationGaps(resource, strategy, conflicts) {
-  if (strategy === 'protected-skip' || strategy === 'already-foxos-managed') return [];
+  if (
+    strategy === 'protected-skip' || strategy === 'already-foxos-managed' ||
+    strategy === 'already-server-owned'
+  ) return [];
   const gaps = [blocker(
     'migration-apply-transaction-not-implemented',
     'apply',
@@ -292,12 +314,78 @@ function createMigrationOrchestrator({
     return plan;
   }
 
+  function managedDefinitionProjection(currentSnapshot, resource) {
+    if (!resource || resource.kind !== 'provider-definition') return null;
+    const definitionDomains = new Set((resource.declaredRoutes || [])
+      .map((route) => String(route && route.domain || '').toLowerCase())
+      .filter(Boolean));
+    if (!definitionDomains.size) return null;
+    const matches = (currentSnapshot.resources || []).filter((candidate) => (
+      candidate && candidate.management && candidate.management.owner === 'foxos' &&
+      [
+        ...(candidate.routes || []).map((route) => route && route.domain),
+        ...(candidate.declaredRoutes || []).map((route) => route && route.domain),
+        ...(candidate.management.domains || [])
+      ].some((domain) => definitionDomains.has(String(domain || '').toLowerCase()))
+    ));
+    if (!matches.length) return null;
+    return matches.sort((left, right) => left.id.localeCompare(right.id))[0];
+  }
+
+  function providerControlPlane(resource) {
+    const name = String(resource && resource.name || '').toLowerCase();
+    const project = String(resource && resource.provenance && resource.provenance.project || '').toLowerCase();
+    return Boolean(
+      /^coolify(?:-|$)/.test(name) &&
+      (project === 'source' || ['coolify-proxy', 'coolify-sentinel'].includes(name))
+    );
+  }
+
+  function providerResourceGroup(currentSnapshot, resource) {
+    const labels = resource && resource.provenance && resource.provenance.safeLabels || {};
+    const providerResourceName = String(labels['coolify.resourceName'] || '');
+    if (!providerResourceName) return null;
+    const members = (currentSnapshot.resources || []).filter((candidate) => {
+      const candidateLabels = candidate && candidate.provenance && candidate.provenance.safeLabels || {};
+      return candidate.kind === 'container' &&
+        String(candidateLabels['coolify.resourceName'] || '') === providerResourceName;
+    });
+    if (members.length < 2) return null;
+    const primaries = members.filter((candidate) => (
+      candidate.classification && candidate.classification.workloadRole === 'application' &&
+      ((candidate.routes || []).length > 0 || (candidate.ports || []).some((port) => port.hostPort))
+    )).sort((left, right) => left.id.localeCompare(right.id));
+    if (primaries.length !== 1) return null;
+    return {
+      parentResourceId: primaries[0].id,
+      memberResourceIds: members.map((candidate) => candidate.id).sort()
+    };
+  }
+
   function planResource(currentSnapshot, resource) {
-    const strategy = migrationStrategy(resource);
-    const classification = resource.classification || null;
-    const foxosManaged = Boolean(resource.management && resource.management.owner === 'foxos');
+    const managedDefinition = managedDefinitionProjection(currentSnapshot, resource);
+    const controlPlane = providerControlPlane(resource);
+    const providerGroup = providerResourceGroup(currentSnapshot, resource);
+    const groupedWithParent = Boolean(
+      providerGroup && providerGroup.parentResourceId !== resource.id
+    );
+    const effectiveManagement = resource.management || managedDefinition && {
+      ...managedDefinition.management,
+      canonicalResourceId: managedDefinition.management.logicalResourceId || managedDefinition.id,
+      inactiveDefinitionResourceId: resource.id
+    } || null;
+    const foxosManaged = Boolean(effectiveManagement && effectiveManagement.owner === 'foxos');
+    const classification = managedDefinition && resource.classification
+      ? { ...resource.classification, authorityClass: 'foxos-owned' }
+      : resource.classification || null;
+    const strategy = controlPlane
+      ? 'provider-control-plane-retirement-last'
+      : groupedWithParent
+        ? 'migrate-with-parent'
+        : managedDefinition ? 'already-foxos-managed' : migrationStrategy(resource);
     const migrationRequired = Boolean(
-      !resource.protected && !foxosManaged && classification && classification.authorityClass === 'provider-owned'
+      !resource.protected && !foxosManaged && !controlPlane && !groupedWithParent &&
+      classification && classification.authorityClass === 'provider-owned'
     );
     const reviewEligible = Boolean(
       resource.kind === 'container' &&
@@ -316,7 +404,9 @@ function createMigrationOrchestrator({
 
     let manifest = null;
     let compileFailure = null;
-    if (resource.kind !== 'container') {
+    if (!migrationRequired) {
+      // Server-owned host services and completed canonical migrations require no import manifest.
+    } else if (resource.kind !== 'container') {
       compileFailure = blocker(
         resource.kind === 'provider-definition'
           ? 'provider-definition-runtime-evidence-missing'
@@ -347,20 +437,34 @@ function createMigrationOrchestrator({
     const authorityBlockers = uniqueBlockers(manifestBlockers.filter((entry) => (
       entry.code === 'external-provider-authority'
     )).map((entry) => ({ ...entry, source: 'application-manifest' })));
-    const evidenceBlockers = uniqueBlockers([
+    const evidenceBlockers = migrationRequired ? uniqueBlockers([
       ...manifestBlockers.filter((entry) => (
         entry.code !== 'external-provider-authority' &&
         !(strategy === 'blue-green-atomic-route' && TRANSACTION_PROVEN_MANIFEST_BLOCKERS.has(entry.code))
       ))
         .map((entry) => ({ ...entry, source: 'application-manifest' })),
       ...(compileFailure ? [compileFailure] : [])
-    ]);
-    const gaps = implementationGaps(resource, strategy, conflicts);
+    ]) : [];
+    const gaps = migrationRequired ? implementationGaps(resource, strategy, conflicts) : [];
+    if (
+      migrationRequired && providerGroup && providerGroup.parentResourceId === resource.id &&
+      providerGroup.memberResourceIds.length > 1
+    ) {
+      gaps.push(blocker(
+        'provider-resource-group-transaction-required',
+        'dependencies',
+        'The application and every provider-group companion must migrate in one verified transaction.'
+      ));
+    }
     const evidenceComplete = migrationRequired && evidenceBlockers.length === 0;
     const planningStatus = resource.protected
       ? 'protected-skip'
+      : controlPlane
+        ? 'provider-retirement-pending'
+        : groupedWithParent
+          ? 'included-with-parent'
       : !migrationRequired
-        ? 'already-foxos-managed'
+        ? strategy === 'already-server-owned' ? 'already-server-owned' : 'already-foxos-managed'
         : evidenceComplete
           ? 'evidence-complete-apply-unavailable'
           : reviewEligible
@@ -373,12 +477,23 @@ function createMigrationOrchestrator({
       name: resource.name,
       observedProvider: resource.provider,
       observedOwnership: resource.ownership,
-      currentProvider: foxosManaged ? 'foxos' : resource.provider,
+      currentProvider: foxosManaged ? 'foxos' : classification && classification.authorityClass === 'server-owned'
+        ? 'server' : resource.provider,
       currentAuthorityClass: foxosManaged ? 'foxos-owned' : classification && classification.authorityClass || null,
-      management: resource.management || null,
+      management: effectiveManagement,
       protected: Boolean(resource.protected),
       migrationRequired,
-      targetLifecycle: migrationRequired ? 'independent' : foxosManaged ? 'foxos-managed' : resource.ownership,
+      targetLifecycle: migrationRequired ? 'independent' : foxosManaged ? 'foxos-managed'
+        : strategy === 'already-server-owned' ? 'server-managed'
+          : groupedWithParent ? 'independent-with-parent'
+            : controlPlane ? 'retire-after-independent-workloads' : resource.ownership,
+      canonicalResourceId: managedDefinition
+        ? managedDefinition.management.logicalResourceId || managedDefinition.id
+        : null,
+      parentResourceId: groupedWithParent ? providerGroup.parentResourceId : null,
+      migrationGroup: providerGroup && providerGroup.parentResourceId === resource.id
+        ? { ...providerGroup, executionOwnedByParent: true }
+        : null,
       classification,
       strategy,
       availability: availabilityPolicy(resource, strategy),
@@ -406,7 +521,7 @@ function createMigrationOrchestrator({
         authority: authorityBlockers,
         evidence: evidenceBlockers,
         transaction: transactionAcquiredBlockers,
-        implementation: gaps
+        implementation: uniqueBlockers(gaps)
       },
       readiness: {
         planningStatus,
@@ -449,6 +564,15 @@ function createMigrationOrchestrator({
       migrationRequired: migrationResources.length,
       alreadyFoxOSManaged: resources.filter((resource) => (
         resource.readiness.planningStatus === 'already-foxos-managed'
+      )).length,
+      alreadyServerOwned: resources.filter((resource) => (
+        resource.readiness.planningStatus === 'already-server-owned'
+      )).length,
+      includedWithParent: resources.filter((resource) => (
+        resource.readiness.planningStatus === 'included-with-parent'
+      )).length,
+      providerRetirementPending: resources.filter((resource) => (
+        resource.readiness.planningStatus === 'provider-retirement-pending'
       )).length,
       protectedSkipped: resources.filter((resource) => (
         resource.readiness.planningStatus === 'protected-skip'

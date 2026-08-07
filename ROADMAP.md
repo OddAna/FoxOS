@@ -60,6 +60,10 @@ target blocks only adoption/migration operations that require restore proof.
   administrator-owned systemd units and WireGuard interfaces/config presence,
   unit enablement, active state and tool version without reading unit contents,
   WireGuard config contents, keys, peers, addresses or endpoints.
+- [x] Treat those Linux-host resources as already server-owned, remove them from
+  migration selection and expose fixed Registry-bound systemd
+  start/stop/restart plus boot-enable controls without reading configuration or
+  accepting client commands/unit paths.
 - [x] Normalize provider, role, runtime, ports, routes, mounts, networks, health,
   restart policy and safe provenance into provider-neutral resource records.
 - [x] Assign stable local FoxOS resource IDs through hashed identity aliases.
@@ -280,6 +284,11 @@ target blocks only adoption/migration operations that require restore proof.
   back behind the legacy proxy; reassert recorded authority on agent startup.
   Resolve every managed route to the exact running Docker container and refresh
   that address atomically before a health-gated replacement retires the old runtime.
+- [x] Collapse inactive provider definitions whose declared domain already maps
+  to a completed server-managed application, group exact Coolify application
+  companions under one migration parent, block partial group execution, and
+  classify the Coolify control plane as a retirement-only layer that remains
+  until all workloads are independently verified.
 - [x] Reserve the configured FoxOS panel hostname in the owned ingress map so
   application reconciliation and agent recreation cannot fall it through to a
   legacy proxy while migrated application routes remain healthy.
@@ -290,17 +299,13 @@ target blocks only adoption/migration operations that require restore proof.
   environment, route, persistence and runtime manifests before attempting any
   start or cutover. An absent container is a recoverable definition class, not
   a generic unsupported-version error.
-- [ ] Implement host-service adoption beginning with WireGuard: encrypt private
-  key material, preserve interface/unit identity, validate routing and firewall
-  dependencies, write a server-owned revision, reload without losing the
-  management path and prove an exact rollback. Then apply the same manifest and
-  rollback contract to other administrator-owned systemd services.
 - [ ] Replace the generic unsupported bucket with executable class adapters for
   every discovered resource: stateless applications, stateful applications,
-  databases by engine, workers/agents with drain semantics, host services,
-  network services and the provider proxy retirement gate. A resource may stay
-  blocked on concrete missing evidence, but not merely because its class was not
-  inventoried or named by the current release.
+  databases by engine, workers/agents with drain semantics, inactive provider
+  definitions and the provider proxy retirement gate. Linux-host services are
+  already server-owned and are managed in place rather than migrated. A
+  resource may stay blocked on concrete missing evidence, but not merely because
+  its class was not inventoried or named by the current release.
 
 ## Git source, build and deployment
 

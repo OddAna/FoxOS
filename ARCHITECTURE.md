@@ -159,6 +159,11 @@ definitions that have no remaining container and never becomes runtime
 authority. A fixed Linux-host reader observes administrator systemd units and
 WireGuard interface/unit/config-file presence. It does not read service file
 contents, WireGuard configuration contents, keys, peers, addresses or endpoints.
+Those Linux-host records are server-owned by definition and do not enter the
+migration queue. A separate authenticated manager may resolve the exact observed
+unit from Registry and issue only fixed systemd start, stop, restart, enable or
+disable actions; it accepts no client command or unit path and refreshes the
+read-only observation after each operation.
 If the optional Coolify reader is not configured, no Coolify request is made and
 normal FoxOS discovery remains Docker- and host-owned.
 
@@ -385,12 +390,12 @@ provider UUIDs never become their primary name.
 
 Host-native records discovered by the Linux reader are projected into the same
 Application Manager with their stable resource ID, systemd unit and observed
-active/failed/stopped state. They remain off the desktop by default and do not
-receive Docker lifecycle, update, Compose or route capabilities. This is an
-inventory projection only: it does not read unit contents, WireGuard
-configuration or key material and does not adopt or mutate a host service.
-Host-service management requires the dedicated manifest, continuity and exact
-rollback gates tracked in the roadmap.
+active/failed/stopped state. They remain off the desktop by default, are marked
+server-owned without migration, and receive only fixed systemd lifecycle and
+boot-enable controls. They do not receive Docker update, Compose or route
+capabilities. The control surface does not read unit contents, WireGuard
+configuration or key material, accept a client-supplied unit or make FoxOS the
+owner of the service; the Linux server remains the authority.
 
 The application update check remains separate from every apply transaction and
 performs Docker and registry reads only. A
@@ -519,10 +524,13 @@ application-aware replication as post-roadmap work. Databases require a
 database-specific consistent backup/replication and primary-handoff policy.
 Workers and agents require drain semantics; provider proxies retire last.
 Inactive provider definitions use a separate recovery strategy, and host-native
-network/systemd resources use separate adoption strategies. Protected and
-unknown resources fail closed with a concrete evidence or implementation
-blocker rather than being flattened into an unexplained version-unsupported
-bucket.
+network/systemd resources are already server-owned and require no migration.
+Provider companions sharing one exact resource identity are grouped under one
+public application and may not be migrated independently. Coolify's own control
+plane is classified as retirement-only and remains until every workload is
+independent. Protected and unknown resources fail closed with a concrete
+evidence or implementation blocker rather than being flattened into an
+unexplained version-unsupported bucket.
 
 The planner treats shared networks, volumes and provider projects only as
 coordination hints. They do not create dependency direction or execution order.

@@ -157,10 +157,14 @@
   turn a running application into a stopped card or silently drop its desktop
   shortcut.
 - The same inventory includes discovered administrator-owned systemd and
-  WireGuard host-service records. Preserve the real unit and observed state,
-  keep them off the desktop by default and expose no Docker lifecycle, update,
-  Compose or access-link capability. Inventory visibility is not adoption or
-  permission to read service contents, WireGuard secrets or mutate the host.
+  WireGuard host-service records. These resources already belong to the Linux
+  server and require no provider migration or FoxOS adoption. Preserve the real
+  unit and observed state, keep them off the desktop by default and expose only
+  the dedicated fixed systemd start/stop/restart and boot-enable controls. The
+  manager must resolve the exact unit from Registry, accept no client command or
+  unit path, serialize each resource operation and refresh observation after a
+  change. Do not expose Docker lifecycle, update, Compose or access-link
+  capability, and never read service contents, WireGuard configuration or keys.
 - Keep the disposable stateless lab separate from production. Preserve its
   reviewed image digest, `slab_*` identity, `.foxos.invalid` hostname,
   loopback-only ports, injected-fault rollback and exact run-labeled cleanup;

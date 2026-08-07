@@ -51,6 +51,7 @@ const { createCoolifyMigrationReader } = require('./coolifyMigrationReader');
 const { createDockerClient } = require('./dockerClient');
 const { createEncryptionStore } = require('./encryptionStore');
 const { createHostServiceDiscovery } = require('./hostServiceDiscovery');
+const { HostServiceError, createHostServiceManager } = require('./hostServiceManager');
 const { createRouteManager } = require('./routeManager');
 const { createSecretManager } = require('./secretManager');
 const {
@@ -548,6 +549,45 @@ function runExactHostObservation(operation) {
   });
 }
 
+function runExactHostServiceCommand(action, unit) {
+  const allowedActions = new Set(['start', 'stop', 'restart', 'enable', 'disable']);
+  if (
+    !allowedActions.has(action) ||
+    !/^[A-Za-z0-9_.@-]+\.service$/.test(String(unit || ''))
+  ) {
+    return Promise.resolve({ success: false, exitCode: 1, output: '' });
+  }
+  const hostExecutable = ['/usr/bin/systemctl', '/bin/systemctl'].find((candidate) => (
+    fs.existsSync(path.resolve(HOST_ROOT, '.' + candidate))
+  ));
+  if (!hostExecutable) {
+    return Promise.resolve({ success: false, exitCode: 127, output: '' });
+  }
+  const invocation = HOST_EXECUTION === 'nsenter' ? {
+    executable: 'nsenter',
+    args: [
+      '--target', '1', '--mount', '--uts', '--ipc', '--net', '--pid', '--',
+      hostExecutable, action, unit, '--no-ask-password', '--no-pager'
+    ]
+  } : {
+    executable: hostExecutable,
+    args: [action, unit, '--no-ask-password', '--no-pager']
+  };
+  return new Promise((resolve) => {
+    execFile(invocation.executable, invocation.args, {
+      timeout: 120000,
+      maxBuffer: 256 * 1024,
+      windowsHide: true
+    }, (error, stdout, stderr) => {
+      resolve({
+        success: !error,
+        exitCode: error && Number.isInteger(error.code) ? error.code : error ? 1 : 0,
+        output: String(stdout || '') + String(stderr || '')
+      });
+    });
+  });
+}
+
 function runExactApplicationCompose({ operation, project, services, overrideFile = null }) {
   const allowedOperations = new Set(['build', 'pull', 'stop', 'up', 'rollback']);
   const namePattern = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/;
@@ -664,6 +704,10 @@ const resourceRegistry = createResourceRegistry({
     hostRead: runExactHostObservation
   }),
   providerResourceReader: () => coolifyMigrationReader.scan()
+});
+const hostServiceManager = createHostServiceManager({
+  resourceRegistry,
+  hostCommand: runExactHostServiceCommand
 });
 const routeManager = createRouteManager({
   dataRoot: DATA_ROOT,
@@ -2284,6 +2328,46 @@ app.put('/api/applications/:applicationId/desktop-shortcut', async (req, res) =>
     ) });
   } catch (error) {
     sendDesktopShortcutError(res, error, 'Could not update desktop shortcut visibility');
+  }
+});
+
+app.get('/api/host-services/:resourceId/settings', (req, res) => {
+  try {
+    res.json({ settings: hostServiceManager.settings(req.params.resourceId) });
+  } catch (error) {
+    const expected = error instanceof HostServiceError;
+    res.status(expected ? error.statusCode : 502).json({
+      error: expected ? error.message : 'Sunucu servisi ayarları okunamadı',
+      code: expected ? error.code : 'host-service-settings-failed'
+    });
+  }
+});
+
+app.patch('/api/host-services/:resourceId/settings', async (req, res) => {
+  try {
+    const result = await hostServiceManager.setBootState(
+      req.params.resourceId,
+      req.body && req.body.bootState
+    );
+    res.json(result);
+  } catch (error) {
+    const expected = error instanceof HostServiceError;
+    res.status(expected ? error.statusCode : 502).json({
+      error: expected ? error.message : 'Otomatik başlatma ayarı değiştirilemedi',
+      code: expected ? error.code : 'host-service-boot-state-failed'
+    });
+  }
+});
+
+app.post('/api/host-services/:resourceId/:action', async (req, res) => {
+  try {
+    res.json(await hostServiceManager.lifecycle(req.params.resourceId, req.params.action));
+  } catch (error) {
+    const expected = error instanceof HostServiceError;
+    res.status(expected ? error.statusCode : 502).json({
+      error: expected ? error.message : 'Sunucu servisi işlemi tamamlanamadı',
+      code: expected ? error.code : 'host-service-lifecycle-failed'
+    });
   }
 });
 

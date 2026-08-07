@@ -68,9 +68,11 @@ const ApplicationManager = ({ target }) => {
   const [targetContainerId, setTargetContainerId] = useState(target && target.containerId || null);
   const [searchQuery, setSearchQuery] = useState('');
   const [containerSettings, setContainerSettings] = useState(null);
+  const [hostSettings, setHostSettings] = useState(null);
   const [settingsLoading, setSettingsLoading] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [restartPolicy, setRestartPolicy] = useState('no');
+  const [hostBootState, setHostBootState] = useState('disabled');
   const [domainStatus, setDomainStatus] = useState(null);
   const [domainInput, setDomainInput] = useState('');
   const [domainLoading, setDomainLoading] = useState(false);
@@ -157,8 +159,30 @@ const ApplicationManager = ({ target }) => {
   }, [selectedApplicationId]);
 
   useEffect(() => {
+    if (selectedInstallationState === 'host-service' && selectedApplicationId) {
+      let active = true;
+      setSettingsLoading(true);
+      setContainerSettings(null);
+      setHostSettings(null);
+      setMessage(null);
+      apiFetch(`/api/host-services/${selectedApplicationId}/settings`)
+        .then((response) => response.json())
+        .then((payload) => {
+          if (!active) return;
+          setHostSettings(payload.settings);
+          setHostBootState(payload.settings.bootEnabled ? 'enabled' : 'disabled');
+        })
+        .catch((settingsError) => {
+          if (active) setMessage({ type: 'error', text: settingsError.message });
+        })
+        .finally(() => {
+          if (active) setSettingsLoading(false);
+        });
+      return () => { active = false; };
+    }
     if (!selectedContainerId) {
       setContainerSettings(null);
+      setHostSettings(null);
       setSettingsLoading(false);
       return undefined;
     }
@@ -182,7 +206,7 @@ const ApplicationManager = ({ target }) => {
       });
 
     return () => { active = false; };
-  }, [selectedContainerId]);
+  }, [selectedApplicationId, selectedContainerId, selectedInstallationState]);
 
   useEffect(() => {
     if (!selectedDomainApplicationId || !canEditSelectedDomain) {
@@ -331,6 +355,27 @@ const ApplicationManager = ({ target }) => {
   };
 
   const saveContainerSettings = async () => {
+    if (selectedApplication && selectedInstallationState === 'host-service' && hostSettings) {
+      setSettingsSaving(true);
+      setMessage(null);
+      try {
+        const response = await apiFetch(`/api/host-services/${selectedApplication.id}/settings`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ bootState: hostBootState })
+        });
+        const payload = await response.json();
+        setHostSettings(payload.settings);
+        setHostBootState(payload.settings.bootEnabled ? 'enabled' : 'disabled');
+        await refreshApplications({ quiet: true });
+        setMessage({ type: 'success', text: 'Ayar kaydedildi.' });
+      } catch (settingsError) {
+        setMessage({ type: 'error', text: settingsError.message });
+      } finally {
+        setSettingsSaving(false);
+      }
+      return;
+    }
     const containerId = selectedApplication && selectedApplication.runtime.containerId;
     if (!containerId || !containerSettings) return;
     setSettingsSaving(true);
@@ -606,6 +651,7 @@ const ApplicationManager = ({ target }) => {
     setSelectedApplicationId(null);
     setTargetContainerId(null);
     setContainerSettings(null);
+    setHostSettings(null);
     setDomainStatus(null);
     setDomainInput('');
     setDomainMessage(null);
@@ -809,14 +855,22 @@ const ApplicationManager = ({ target }) => {
               ? 'Sunucu yeniden başladığında systemd servisinin davranışı.'
               : 'Sunucu veya Docker yeniden başladığında containerın davranışı.'}
           </div>
-          {!selectedContainerId ? (
-            <div style={{ color: '#888', fontSize: '13px', lineHeight: 1.5 }}>
-              {selectedApplication.installation.state === 'host-service'
-                ? 'Host servis yönetimi henüz bu alandan kullanılamıyor.'
-                : 'Çalışan container bulunmadığı için otomatik başlatma ayarı henüz kullanılamıyor.'}
-            </div>
-          ) : settingsLoading ? (
+          {settingsLoading ? (
             <div style={{ color: '#888', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}><Loader2 size={15} className="spin" /> Ayarlar okunuyor...</div>
+          ) : selectedInstallationState === 'host-service' && hostSettings ? (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center' }}>
+              <select value={hostBootState} onChange={(event) => setHostBootState(event.target.value)} style={{ minWidth: '210px', background: '#24242a', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 12px', borderRadius: '8px', outline: 'none', fontSize: '13px' }}>
+                <option value="enabled">Açılışta başlat</option>
+                <option value="disabled">Açılışta başlatma</option>
+              </select>
+              <button type="button" onClick={saveContainerSettings} disabled={settingsSaving} style={{ background: '#0ea5e9', color: '#fff', border: 'none', padding: '9px 14px', borderRadius: '8px', cursor: settingsSaving ? 'not-allowed' : 'pointer', opacity: settingsSaving ? 0.5 : 1, display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px', fontWeight: 'bold' }}>
+                {settingsSaving ? <Loader2 size={15} className="spin" /> : <Save size={15} />} Kaydet
+              </button>
+            </div>
+          ) : !selectedContainerId ? (
+            <div style={{ color: '#888', fontSize: '13px', lineHeight: 1.5 }}>
+              Çalışan container bulunmadığı için otomatik başlatma ayarı henüz kullanılamıyor.
+            </div>
           ) : (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center' }}>
               <select value={restartPolicy} onChange={(event) => setRestartPolicy(event.target.value)} disabled={!containerSettings} style={{ minWidth: '210px', background: '#24242a', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 12px', borderRadius: '8px', outline: 'none', fontSize: '13px' }}>
@@ -891,7 +945,7 @@ const ApplicationManager = ({ target }) => {
           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 160px) minmax(0, 1fr)', rowGap: '10px', columnGap: '16px', fontSize: '13px', wordBreak: 'break-word' }}>
             <div style={{ color: '#888' }}>Instance</div><div>{selectedApplication.instanceName || selectedApplication.runtime.containerName || 'Deaktif kurulum'}</div>
             <div style={{ color: '#888' }}>{selectedApplication.installation.state === 'host-service' ? 'Servis' : 'Container'}</div><div>{selectedApplication.installation.state === 'host-service' ? selectedApplication.runtime.serviceUnit || 'systemd servisi' : selectedApplication.runtime.containerName || 'Çalışan container yok'}</div>
-            <div style={{ color: '#888' }}>Yönetim</div><div>{selectedApplication.installation && selectedApplication.installation.state === 'inactive-definition' ? 'Kurulum tanımı bulundu · şu anda çalışmıyor' : selectedApplication.installation && selectedApplication.installation.state === 'host-service' ? 'Sunucuya doğrudan kurulu · yönetim desteği hazırlanıyor' : selectedApplication.managedByServer ? 'Sunucu tarafından yönetiliyor' : `${selectedApplication.provenance.source === 'coolify' ? 'Coolify' : 'Mevcut'} kurulumundan çalışıyor · geçiş tamamlanmadı`}</div>
+            <div style={{ color: '#888' }}>Yönetim</div><div>{selectedApplication.installation && selectedApplication.installation.state === 'inactive-definition' ? 'Kurulum tanımı bulundu · şu anda çalışmıyor' : selectedApplication.installation && selectedApplication.installation.state === 'host-service' ? 'Sunucuya doğrudan kurulu · sunucu yönetiminde' : selectedApplication.managedByServer ? 'Sunucu tarafından yönetiliyor' : `${selectedApplication.provenance.source === 'coolify' ? 'Coolify' : 'Mevcut'} kurulumundan çalışıyor · geçiş tamamlanmadı`}</div>
             <div style={{ color: '#888' }}>Durum</div><div>{selectedApplication.runtime.status || selectedApplication.runtime.state}</div>
             {containerSettings && containerSettings.ports.length > 0 && (
               <><div style={{ color: '#888' }}>Portlar</div><div>{containerSettings.ports.map((port) => `${port.hostIp}:${port.hostPort} → ${port.privatePort}`).join(', ')}</div></>

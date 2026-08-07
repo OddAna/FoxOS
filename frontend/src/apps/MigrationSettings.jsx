@@ -73,6 +73,8 @@ const REVIEW_STATES = {
   blocked: 'Eksik bilgi',
   unsupported: 'Geçiş desteği hazırlanıyor',
   managed: 'Sunucu yönetiminde',
+  grouped: 'Bağlı uygulamayla birlikte geçirilecek',
+  retirement: 'Sağlayıcı kaldırılırken sona bırakılacak',
   protected: 'Korunan sistem kaynağı'
 };
 
@@ -85,6 +87,9 @@ const STRATEGY_LABELS = {
   'provider-definition-recovery': 'Deaktif tanımı kurtar ve yeniden oluştur',
   'host-network-service-adoption': 'Host ağ servisini güvenli biçimde devral',
   'host-service-adoption': 'Host servisini güvenli biçimde devral',
+  'already-server-owned': 'Doğrudan sunucu yönetiminde',
+  'migrate-with-parent': 'Ana uygulamayla tek grup olarak geçir',
+  'provider-control-plane-retirement-last': 'Sağlayıcı kontrol düzlemini en son kaldır',
   'already-foxos-managed': 'Sunucu yönetiminde',
   'protected-skip': 'Korunan kaynak — atla',
   'dedicated-lifecycle-required': 'Kaynağa özel yaşam döngüsü gerekli',
@@ -105,7 +110,8 @@ const CLASS_LABELS = {
   'host-configured': 'Host yapılandırmalı',
   unknown: 'Belirsiz',
   'provider-owned': 'Harici sağlayıcı yönetiminde',
-  'foxos-owned': 'Sunucu yönetiminde'
+  'foxos-owned': 'Sunucu yönetiminde',
+  'server-owned': 'Doğrudan sunucu yönetiminde'
 };
 
 const AVAILABILITY_LABELS = {
@@ -115,7 +121,9 @@ const AVAILABILITY_LABELS = {
   'already-managed': 'Mevcut çalışma korunacak',
   'not-applicable': 'Uygulanmaz',
   'unknown-blocked': 'Belirsiz — engelli',
-  'host-service-continuity-required': 'Host servisi kesintisiz korunmalı'
+  'host-service-continuity-required': 'Host servisi kesintisiz korunmalı',
+  'included-with-parent': 'Ana uygulamanın geçiş sözleşmesine dahil',
+  'provider-retirement-pending': 'Tüm uygulamalar bağımsız olduktan sonra kaldırılacak'
 };
 
 const ACTIVE_RUN_STATUSES = new Set(['queued', 'preparing', 'executing']);
@@ -158,6 +166,7 @@ const BLOCKER_LABELS = {
   'resource-class-migration-policy-missing': 'Bu kaynak sınıfı için incelenmiş geçiş politikası yok.',
   'provider-definition-runtime-evidence-missing': 'Deaktif tanımın çalışan runtime kanıtı henüz yok.',
   'provider-definition-runtime-recovery-required': 'Deaktif tanım sunucuya ait bir çalışma manifestine dönüştürülmeli.',
+  'provider-resource-group-transaction-required': 'Uygulama ve aynı kurulum grubundaki veritabanı/runner tek doğrulanmış işlemde geçirilmelidir.',
   'host-service-manifest-missing': 'Host servisi için sunucuya ait manifest ve geri alma sürümü eksik.',
   'host-network-service-adoption-not-implemented': 'Host ağ servisi için anahtar koruması ve birebir geri alma işlemi hazırlanıyor.',
   'host-service-adoption-not-implemented': 'systemd servisi için yapılandırma yakalama ve geri alma işlemi hazırlanıyor.'
@@ -165,6 +174,8 @@ const BLOCKER_LABELS = {
 
 function reviewState(resource) {
   if (resource.protected) return 'protected';
+  if (resource.readiness?.planningStatus === 'included-with-parent') return 'grouped';
+  if (resource.readiness?.planningStatus === 'provider-retirement-pending') return 'retirement';
   if (!resource.migrationRequired) return 'managed';
   if (resource.strategy !== 'blue-green-atomic-route') return 'unsupported';
   const plannedEligibility = resource.readiness?.reviewEligible;

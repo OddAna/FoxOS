@@ -359,7 +359,7 @@ test('inactive provider definitions remain visible as non-running installed appl
   );
 });
 
-test('host-native services remain visible with their systemd state and no fake Docker controls', () => {
+test('host-native services are server-owned and expose real systemd lifecycle controls', () => {
   const applications = buildApplicationInventory({
     resources: [{
       id: 'res_' + 'a'.repeat(32),
@@ -406,13 +406,16 @@ test('host-native services remain visible with their systemd state and no fake D
   assert.equal(wireGuard.runtime.containerId, null);
   assert.equal(wireGuard.runtime.serviceUnit, 'wg-quick@wg0.service');
   assert.equal(wireGuard.runtime.operationalState, 'running');
+  assert.equal(wireGuard.managedByServer, true);
+  assert.equal(wireGuard.authority, 'server-owned');
   assert.equal(wireGuard.desktopShortcutDefaultVisible, false);
   assert.deepEqual(wireGuard.capabilities, {
     open: false,
     start: false,
-    stop: false,
-    restart: false,
+    stop: true,
+    restart: true,
     settings: true,
+    editBootState: true,
     checkUpdates: false,
     editCompose: false,
     editAccessLink: false,
@@ -420,4 +423,6 @@ test('host-native services remain visible with their systemd state and no fake D
   });
   const failedService = applications.find((application) => application.name === 'clickup-hosts-refresh');
   assert.equal(failedService.runtime.operationalState, 'error');
+  assert.equal(failedService.capabilities.start, true);
+  assert.equal(failedService.capabilities.stop, false);
 });
