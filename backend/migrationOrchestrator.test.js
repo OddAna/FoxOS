@@ -164,7 +164,7 @@ function harness() {
   };
 }
 
-test('stateful storage evidence blocks selection without pretending the adapter is unimplemented', () => {
+test('large stateful storage falls back to zero-copy in-place runtime transfer', () => {
   const { manager, resources, root } = harness();
   try {
     const stateful = resources.find((entry) => entry.name === 'stateful-app');
@@ -179,12 +179,13 @@ test('stateful storage evidence blocks selection without pretending the adapter 
     };
     const plan = manager.createPlan({ confirmation: PLAN_SERVER_MIGRATION_CONFIRMATION });
     const projected = plan.resources.find((entry) => entry.resourceId === stateful.id);
-    assert.equal(projected.readiness.reviewEligible, false);
+    assert.equal(projected.readiness.reviewEligible, true);
     assert.equal(projected.readiness.applyImplemented, true);
-    assert.equal(projected.availability.currentMode, 'stateful-presync-required');
+    assert.equal(projected.executionAdapter, 'runtime-transfer');
+    assert.equal(projected.availability.currentMode, 'in-place-runtime-transfer-ready');
     assert.equal(projected.blockers.implementation.some((entry) => (
       entry.code === 'stateful-presync-required'
-    )), true);
+    )), false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -200,8 +201,8 @@ test('whole-server planning is deterministic, class-aware, redacted and plan-onl
     assert.equal(first.summary.migrationRequired, 3);
     assert.equal(first.summary.alreadyFoxOSManaged, 1);
     assert.equal(first.summary.protectedSkipped, 1);
-    assert.equal(first.summary.reviewEligible, 2);
-    assert.equal(first.summary.applyImplemented, 2);
+    assert.equal(first.summary.reviewEligible, 3);
+    assert.equal(first.summary.applyImplemented, 3);
     assert.equal(first.coordinationHints[0].dependencyDirectionKnown, false);
     assert.equal(first.coordinationHints[0].applyOrderInferred, false);
 
@@ -231,10 +232,12 @@ test('whole-server planning is deterministic, class-aware, redacted and plan-onl
 
     const databasePlan = first.resources.find((entry) => entry.resourceId === database.id);
     assert.equal(databasePlan.strategy, 'database-aware-replication-handoff');
-    assert.equal(databasePlan.readiness.evidenceComplete, false);
+    assert.equal(databasePlan.executionAdapter, 'runtime-transfer');
+    assert.equal(databasePlan.readiness.evidenceComplete, true);
+    assert.equal(databasePlan.readiness.reviewEligible, true);
     assert.equal(
       databasePlan.blockers.implementation.some((entry) => entry.code === 'database-aware-handoff-not-implemented'),
-      true
+      false
     );
     assert.equal(first.resources.find((entry) => entry.resourceId === managed.id).strategy, 'already-foxos-managed');
     assert.equal(first.resources.find((entry) => entry.resourceId === protectedCore.id).strategy, 'protected-skip');
@@ -450,9 +453,11 @@ test('provider sidecars travel with one parent while the provider control plane 
     const proxyPlan = plan.resources.find((entry) => entry.resourceId === proxy.id);
     assert.equal(parentPlan.migrationRequired, true);
     assert.deepEqual(parentPlan.migrationGroup.memberResourceIds, [parent.id, sidecar.id].sort());
-    assert.ok(parentPlan.blockers.implementation.some((entry) => (
+    assert.equal(parentPlan.executionAdapter, 'runtime-transfer');
+    assert.equal(parentPlan.readiness.reviewEligible, true);
+    assert.equal(parentPlan.blockers.implementation.some((entry) => (
       entry.code === 'provider-resource-group-transaction-required'
-    )));
+    )), false);
     assert.equal(sidecarPlan.migrationRequired, false);
     assert.equal(sidecarPlan.strategy, 'migrate-with-parent');
     assert.equal(sidecarPlan.parentResourceId, parent.id);

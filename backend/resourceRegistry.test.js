@@ -76,6 +76,68 @@ test('verified FoxOS traffic authority projects a preserved provider source as F
   }
 });
 
+test('verified in-place runtime transfer projects every group member as server-managed', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-runtime-transfer-management-'));
+  const parentId = 'res_' + 'a'.repeat(32);
+  const memberId = 'res_' + 'b'.repeat(32);
+  const operationId = 'rtop_' + 'c'.repeat(32);
+  const routeId = 'smroute_' + 'd'.repeat(24);
+  const parentContainerId = 'e'.repeat(64);
+  const memberContainerId = 'f'.repeat(64);
+  try {
+    fs.mkdirSync(path.join(root, 'runtime-transfers', 'operations'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'ingress'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'runtime-transfers', 'operations', operationId + '.json'), JSON.stringify({
+      operationId,
+      resourceId: parentId,
+      memberResourceIds: [parentId, memberId],
+      status: 'server-runtime-adopted',
+      completedAt: '2026-08-07T13:00:00.000Z',
+      candidateContainerId: parentContainerId,
+      routes: [{ routeId, domain: 'n8n.example.test', path: '/', privatePort: 5678 }],
+      trafficProof: { healthy: true, unavailableSamples: 0 },
+      manifests: [{
+        resourceId: parentId,
+        name: 'n8n',
+        runtime: { containerId: parentContainerId },
+        provenance: { importedFrom: 'coolify' }
+      }, {
+        resourceId: memberId,
+        name: 'task-runners',
+        runtime: { containerId: memberContainerId },
+        provenance: { importedFrom: 'coolify' }
+      }]
+    }));
+    fs.writeFileSync(path.join(root, 'ingress', 'authority.json'), JSON.stringify({
+      owner: 'foxos',
+      publicAuthorityActive: true,
+      domains: { 'n8n.example.test': 'foxos' },
+      routes: {
+        [routeId]: { routeId, operationId, domain: 'n8n.example.test', status: 'active' }
+      }
+    }));
+    const resources = [{
+      id: parentId,
+      provider: 'coolify',
+      ownership: 'observed',
+      runtime: { containerId: parentContainerId, state: 'running' }
+    }, {
+      id: memberId,
+      provider: 'coolify',
+      ownership: 'observed',
+      runtime: { containerId: memberContainerId, state: 'running' }
+    }];
+    const management = readFoxosMigrationManagement(root, resources);
+    assert.equal(management.get(parentId).state, 'active');
+    assert.equal(management.get(parentId).authorityActive, true);
+    assert.equal(management.get(memberId).state, 'active');
+    assert.equal(management.get(memberId).candidateContainerId, memberContainerId);
+    assert.deepEqual(management.get(memberId).domains, []);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('verified stateful traffic authority projects the restored candidate as server-managed', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-registry-stateful-management-'));
   const resourceId = 'res_' + 'a'.repeat(32);

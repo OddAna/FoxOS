@@ -190,6 +190,9 @@ function definitionRoutes(resource) {
 
 function definitionApplicationProjection(resource) {
   const definition = resource.provenance && resource.provenance.externalDefinition || {};
+  const management = resource.management && resource.management.owner === 'foxos'
+    ? resource.management
+    : null;
   const definitionType = definition.providerKind || resource.role || 'application';
   const category = {
     application: 'Web Apps',
@@ -214,11 +217,11 @@ function definitionApplicationProjection(resource) {
     declaredUrls: definitionRoutes(resource),
     hostPort: null,
     bindAddress: null,
-    authority: 'observed',
-    managedByServer: false,
+    authority: management ? 'server' : 'observed',
+    managedByServer: Boolean(management),
     provenance: {
-      source: resource.provider || 'provider-definition',
-      importedFrom: null
+      source: management ? 'server' : resource.provider || 'provider-definition',
+      importedFrom: management ? resource.provider || null : null
     },
     runtime: {
       present: false,
@@ -247,7 +250,11 @@ function definitionApplicationProjection(resource) {
       definitionType,
       sourceType: definition.source && definition.source.type || 'provider-definition'
     },
-    management: null
+    management: management ? {
+      state: management.state || 'attention-required',
+      lifecycle: management.lifecycle || null,
+      routeAuthorityActive: management.authorityActive === true
+    } : null
   };
 }
 

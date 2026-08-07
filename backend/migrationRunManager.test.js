@@ -254,3 +254,62 @@ test('one-click coordinator prepares and executes an implemented stateful adapte
     fs.rmSync(dataRoot, { recursive: true, force: true });
   }
 });
+
+test('one-click coordinator prepares and executes an in-place runtime transfer', async () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-runtime-transfer-run-'));
+  let scheduled;
+  const transferred = {
+    ...resource(RESOURCE_A, 'n8n'),
+    executionAdapter: 'runtime-transfer',
+    readiness: { reviewEligible: true, evidenceComplete: false, applyImplemented: true }
+  };
+  const plan = { planId: SERVER_PLAN_ID, sourceSnapshotId: SNAPSHOT_ID, resources: [transferred] };
+  const calls = [];
+  const manager = createMigrationRunManager({
+    dataRoot,
+    getServerMigrationPlan: () => plan,
+    getLatestRegistrySnapshot: () => ({ snapshotId: SNAPSHOT_ID }),
+    saveSelection: () => ({ selectionId: 'msel_' + '3'.repeat(32) }),
+    prepareStatelessPlan: () => { throw new Error('stateless adapter must not be used'); },
+    getStatelessReviewStatus: () => { throw new Error('stateless review must not be used'); },
+    executeStatelessMigration: async () => { throw new Error('stateless execution must not be used'); },
+    prepareRuntimeTransferPlan: (input) => {
+      calls.push(['prepare', input.confirmation]);
+      return {
+        planId: 'rtplan_' + '4'.repeat(32),
+        resourceId: RESOURCE_A,
+        evidenceFingerprint: '5'.repeat(64)
+      };
+    },
+    executeRuntimeTransfer: async () => {
+      calls.push(['execute']);
+      return { operationId: 'rtop_' + '6'.repeat(32), status: 'server-runtime-adopted' };
+    },
+    issueApproval: (input) => {
+      calls.push(['approval', input.kind, input.evidenceFingerprint]);
+      return 'one-time-runtime-transfer-grant';
+    },
+    randomUUID: () => '00000000-0000-4000-8000-000000000006',
+    schedule: (work) => { scheduled = work; }
+  });
+  try {
+    const queued = manager.start({
+      serverPlanId: SERVER_PLAN_ID,
+      resourceIds: [RESOURCE_A],
+      confirmation: START_SERVER_MIGRATION_CONFIRMATION
+    }, { type: 'foxos-session', username: 'burak', sessionToken: 'runtime-session' });
+    await scheduled();
+    const completed = manager.getRun(queued.runId);
+    assert.equal(completed.status, 'completed');
+    assert.equal(completed.resources[0].executionKind, 'runtime-transfer');
+    assert.equal(completed.resources[0].runtimeTransferPlanId, 'rtplan_' + '4'.repeat(32));
+    assert.equal(completed.resources[0].operationId, 'rtop_' + '6'.repeat(32));
+    assert.deepEqual(calls, [
+      ['prepare', 'PREPARE RUNTIME TRANSFER'],
+      ['approval', 'runtime-transfer-apply', '5'.repeat(64)],
+      ['execute']
+    ]);
+  } finally {
+    fs.rmSync(dataRoot, { recursive: true, force: true });
+  }
+});

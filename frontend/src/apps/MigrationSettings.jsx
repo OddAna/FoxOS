@@ -128,7 +128,8 @@ const AVAILABILITY_LABELS = {
   'unknown-blocked': 'Belirsiz — engelli',
   'host-service-continuity-required': 'Host servisi kesintisiz korunmalı',
   'included-with-parent': 'Ana uygulamanın geçiş sözleşmesine dahil',
-  'provider-retirement-pending': 'Tüm uygulamalar bağımsız olduktan sonra kaldırılacak'
+  'provider-retirement-pending': 'Tüm uygulamalar bağımsız olduktan sonra kaldırılacak',
+  'in-place-runtime-transfer-ready': 'Çalışan örnek durdurulmadan sunucu yönetimine devredilecek'
 };
 
 const ACTIVE_RUN_STATUSES = new Set(['queued', 'preparing', 'executing']);
@@ -197,7 +198,7 @@ function reviewState(resource) {
   if (resource.readiness?.planningStatus === 'included-with-parent') return 'grouped';
   if (resource.readiness?.planningStatus === 'provider-retirement-pending') return 'retirement';
   if (!resource.migrationRequired) return 'managed';
-  if (!['blue-green-atomic-route', 'shadow-refresh-bounded-quiesce'].includes(resource.strategy)) return 'unsupported';
+  if (!resource.executionAdapter) return 'unsupported';
   const plannedApply = resource.readiness?.applyImplemented;
   const applyImplemented = plannedApply === true || (
     plannedApply === undefined && resource.strategy === 'blue-green-atomic-route'
@@ -408,7 +409,10 @@ const MigrationSettings = () => {
     setReviewStatus(null);
     setReviewDraft(null);
     setReviewMessage(null);
-    if (!resource || reviewState(resource) !== 'ready') {
+    if (
+      !resource || reviewState(resource) !== 'ready' ||
+      resource.executionAdapter !== 'stateless-blue-green'
+    ) {
       setReviewLoading(false);
       return () => { active = false; };
     }
@@ -454,7 +458,7 @@ const MigrationSettings = () => {
     const state = reviewState(resource);
     result[state] += 1;
     return result;
-  }, { ready: 0, blocked: 0, unsupported: 0, managed: 0, protected: 0 }), [resources]);
+  }, { ready: 0, blocked: 0, unsupported: 0, managed: 0, grouped: 0, retirement: 0, protected: 0 }), [resources]);
 
   const scanServer = async () => {
     setScanning(true);
@@ -673,7 +677,17 @@ const MigrationSettings = () => {
           )) : <div style={{ color: '#888', fontSize: '13px' }}>Doğrulanmış bir kaynak bağımlılığı bulunamadı.</div>}
         </DetailSection>
 
-        {isReady && (
+        {isReady && detailResource.executionAdapter === 'runtime-transfer' && (
+          <DetailSection title="Geçiş İncelemesi" description="Mevcut çalışan örnek ve bağlı kaynakları yeniden oluşturulmadan sunucu yönetimine alınır; uygulama durdurulmaz ve veri kopyalanmaz.">
+            <div style={{ fontSize: '13px', lineHeight: 1.5 }}>
+              {detailResource.migrationGroup?.memberResourceIds?.length > 1
+                ? `${detailResource.migrationGroup.memberResourceIds.length} bağlı kaynak tek işlem kaydıyla devralınacak.`
+                : 'Kaynağın mevcut Docker çalışma kimliği korunacak.'}
+            </div>
+          </DetailSection>
+        )}
+
+        {isReady && detailResource.executionAdapter !== 'runtime-transfer' && (
           <>
             <DetailSection title="Geçiş İncelemesi" description="Bu ayarlar yalnızca mevcut plan ve manifest için sunucuda saklanır. Kaydetmek çalışma durumunu, rotaları veya sağlayıcıyı değiştirmez.">
               {reviewLoading ? (

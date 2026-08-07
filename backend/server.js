@@ -52,6 +52,11 @@ const {
   MAX_DIRECT_STATEFUL_TRANSACTION_BYTES,
   createProductionStatefulMigrationAdapter
 } = require('./productionStatefulMigrationAdapter');
+const {
+  PREPARE_RUNTIME_TRANSFER_CONFIRMATION,
+  RuntimeTransferError,
+  createRuntimeTransferManager
+} = require('./runtimeTransferManager');
 const { createTraefikCertificateImporter } = require('./traefikCertificateImporter');
 const { createUiApprovalManager } = require('./uiApprovalManager');
 const { createBackupManager } = require('./backupManager');
@@ -914,6 +919,17 @@ const statefulMigrationManifestCompiler = createStatefulMigrationManifestCompile
   compileApplicationManifest: (resourceId) => applicationManifestManager.compile(resourceId)
 });
 const uiApprovalManager = createUiApprovalManager();
+const runtimeTransferManager = createRuntimeTransferManager({
+  dataRoot: DATA_ROOT,
+  dockerRequest,
+  dockerExec: dockerClient.exec,
+  resourceRegistry,
+  secretManager,
+  certificateImporter,
+  ingressAuthority: ingressAuthorityManager,
+  approvalVerifier: (input) => uiApprovalManager.verify(input),
+  routingNetwork: process.env.FOXOS_ROUTE_NETWORK || 'foxos-routing'
+});
 const statelessMigrationManager = createStatelessMigrationManager({
   dataRoot: DATA_ROOT,
   getServerMigrationPlan: (planId) => migrationOrchestrator.getPlan(planId),
@@ -943,9 +959,24 @@ const migrationRunManager = createMigrationRunManager({
   getStatelessReviewStatus: (planId) => statelessMigrationReviewManager.status(planId),
   prepareResourceEvidence: async (resourceIds) => {
     const snapshot = resourceRegistry.getLatest();
+    const captureIds = new Set();
     for (const resourceId of resourceIds) {
       const resource = snapshot && (snapshot.resources || []).find((entry) => entry.id === resourceId);
       if (!resource) throw new MigrationRunError('Selected resource disappeared before evidence capture', 409, 'resource-not-found');
+      if (resource.kind !== 'container') continue;
+      captureIds.add(resource.id);
+      const labels = resource.provenance && resource.provenance.safeLabels || {};
+      const providerResourceName = String(labels['coolify.resourceName'] || '');
+      if (!providerResourceName) continue;
+      for (const member of snapshot.resources || []) {
+        const memberLabels = member.provenance && member.provenance.safeLabels || {};
+        if (
+          member.kind === 'container' &&
+          String(memberLabels['coolify.resourceName'] || '') === providerResourceName
+        ) captureIds.add(member.id);
+      }
+    }
+    for (const resourceId of [...captureIds].sort()) {
       await workloadEvidenceManager.captureEnvironmentForMigration(resourceId);
     }
   },
@@ -987,6 +1018,15 @@ const migrationRunManager = createMigrationRunManager({
   prepareStatefulPlan: (input) => statefulMigrationManager.createPlan(input),
   prepareStatefulConfirmation: PREPARE_STATEFUL_MIGRATION_CONFIRMATION,
   executeStatefulMigration: (planId, approval) => statefulMigrationManager.execute(planId, approval),
+  prepareRuntimeTransferPlan: ({ serverPlanId, resourceId, confirmation }) => (
+    runtimeTransferManager.createPlan({
+      serverPlan: migrationOrchestrator.getPlan(serverPlanId),
+      resourceId,
+      confirmation
+    })
+  ),
+  prepareRuntimeTransferConfirmation: PREPARE_RUNTIME_TRANSFER_CONFIRMATION,
+  executeRuntimeTransfer: (planId, approval) => runtimeTransferManager.execute(planId, approval),
   issueApproval: (input) => uiApprovalManager.issue(input)
 });
 
@@ -1168,6 +1208,17 @@ function sendMigrationRunError(res, error, action) {
       ? 'Server migration run failed'
       : error.message,
     code: error.code || 'migration-run-error'
+  });
+}
+
+function sendRuntimeTransferError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof RuntimeTransferError)
+      ? 'Runtime transfer operation failed'
+      : error.message,
+    code: error.code || 'runtime-transfer-error'
   });
 }
 
@@ -2227,6 +2278,22 @@ app.get('/api/migration-runs/:runId', (req, res) => {
     res.json({ run: migrationRunManager.getRun(req.params.runId) });
   } catch (error) {
     sendMigrationRunError(res, error, 'Could not read server migration run');
+  }
+});
+
+app.get('/api/runtime-transfers', (req, res) => {
+  try {
+    res.json(runtimeTransferManager.status());
+  } catch (error) {
+    sendRuntimeTransferError(res, error, 'Could not read runtime transfers');
+  }
+});
+
+app.get('/api/runtime-transfers/operations/:operationId', (req, res) => {
+  try {
+    res.json({ operation: runtimeTransferManager.getOperation(req.params.operationId) });
+  } catch (error) {
+    sendRuntimeTransferError(res, error, 'Could not read runtime transfer operation');
   }
 });
 

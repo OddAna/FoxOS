@@ -46,7 +46,11 @@ function isReviewSelectable(resource) {
     resource &&
     resource.migrationRequired === true &&
     resource.protected !== true &&
-    ['blue-green-atomic-route', 'shadow-refresh-bounded-quiesce'].includes(resource.strategy) &&
+    (
+      Boolean(resource.executionAdapter) ||
+      resource.executionAdapter === undefined &&
+        ['blue-green-atomic-route', 'shadow-refresh-bounded-quiesce'].includes(resource.strategy)
+    ) &&
     applyImplemented &&
     reviewEligible
   );

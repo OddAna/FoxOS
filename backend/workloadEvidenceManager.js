@@ -224,18 +224,18 @@ function createWorkloadEvidenceManager({
 
   function environmentCandidate(resource) {
     const classification = resource.classification || {};
+    const supportedWorkloadRoles = new Set(['application', 'database', 'worker', 'agent', 'network-service']);
     const eligible = (
-      resource.role === 'application' &&
       resource.runtime && resource.runtime.state === 'running' &&
       resource.runtime.inspection === 'complete' &&
       !resource.protected &&
-      classification.workloadRole === 'application' &&
-      ['stateless', 'stateful'].includes(classification.stateClass) &&
+      supportedWorkloadRoles.has(classification.workloadRole) &&
+      ['stateless', 'stateful', 'database'].includes(classification.stateClass) &&
       classification.authorityClass === 'provider-owned'
     );
     if (!eligible) {
       throw new WorkloadEvidenceError(
-        'Only a running, fully inspected provider-owned stateless or stateful application can capture environment evidence',
+        'Only a running, fully inspected provider-owned workload can capture environment evidence',
         409,
         'not-an-environment-evidence-candidate'
       );

@@ -200,12 +200,19 @@ function implementationGaps(resource, strategy, conflicts, applyImplemented = fa
     strategy === 'protected-skip' || strategy === 'already-foxos-managed' ||
     strategy === 'already-server-owned'
   ) return [];
-  const gaps = applyImplemented ? [] : [blocker(
+  if (applyImplemented) {
+    return uniqueBlockers(conflicts.filter((entry) => entry.severity === 'blocking').map((conflict) => blocker(
+      'blocking-resource-conflict:' + conflict.type,
+      'conflicts',
+      'A blocking observed resource conflict must be resolved before apply.'
+    )));
+  }
+  const gaps = [blocker(
     'migration-apply-transaction-not-implemented',
     'apply',
     'This resource class has no runtime apply transaction yet.'
   )];
-  if (!applyImplemented && ((resource.routes || []).length || (resource.declaredRoutes || []).length)) {
+  if ((resource.routes || []).length || (resource.declaredRoutes || []).length) {
     gaps.push(blocker(
       'general-domain-route-cutover-not-implemented',
       'routes',
@@ -230,13 +237,13 @@ function implementationGaps(resource, strategy, conflicts, applyImplemented = fa
       'runtime',
       'The systemd unit and its configuration must be captured into a provider-neutral manifest with rollback proof.'
     ));
-  } else if (strategy === 'blue-green-atomic-route' && !applyImplemented) {
+  } else if (strategy === 'blue-green-atomic-route') {
     gaps.push(blocker(
       'zero-downtime-blue-green-apply-not-implemented',
       'availability',
       'The required zero-downtime blue/green apply transaction is not implemented.'
     ));
-  } else if (strategy === 'shadow-refresh-bounded-quiesce' && !applyImplemented) {
+  } else if (strategy === 'shadow-refresh-bounded-quiesce') {
     gaps.push(blocker(
       'stateful-cutover-pause-budget-unset',
       'availability',
@@ -260,7 +267,7 @@ function implementationGaps(resource, strategy, conflicts, applyImplemented = fa
       'routes',
       'The provider proxy must remain until every dependent production route is independently verified.'
     ));
-  } else if (!applyImplemented) {
+  } else {
     gaps.push(blocker(
       'resource-class-migration-policy-missing',
       'classification',
@@ -410,8 +417,28 @@ function createMigrationOrchestrator({
       !resource.migrationStorage || resource.migrationStorage.status === 'ready'
     );
     const statefulReviewEligible = statefulAdapterEligible && statefulStorageReady;
-    const reviewEligible = statelessReviewEligible || statefulReviewEligible;
-    const applyImplemented = statelessReviewEligible || statefulAdapterEligible;
+    const runtimeTransferEligible = Boolean(
+      migrationRequired && (
+        resource.kind === 'provider-definition' ||
+        resource.kind === 'container' && resource.runtime &&
+        resource.runtime.state === 'running' && resource.runtime.inspection === 'complete' &&
+        (
+          strategy === 'shadow-refresh-bounded-quiesce' ||
+          strategy === 'database-aware-replication-handoff' ||
+          strategy === 'drain-and-replace' ||
+          providerGroup && providerGroup.parentResourceId === resource.id
+        )
+      )
+    );
+    const executionAdapter = statelessReviewEligible
+      ? 'stateless-blue-green'
+      : statefulReviewEligible
+        ? 'stateful-copy'
+        : runtimeTransferEligible
+          ? 'runtime-transfer'
+          : null;
+    const reviewEligible = statelessReviewEligible || statefulReviewEligible || runtimeTransferEligible;
+    const applyImplemented = Boolean(executionAdapter);
     const conflicts = (currentSnapshot.conflicts || []).filter((entry) => (
       (entry.resourceIds || []).includes(resource.id)
     )).map((entry) => ({
@@ -452,11 +479,13 @@ function createMigrationOrchestrator({
       ? uniqueBlockers(manifestBlockers.filter((entry) => (
         TRANSACTION_PROVEN_MANIFEST_BLOCKERS.has(entry.code)
       )).map((entry) => ({ ...entry, source: 'stateless-transaction' })))
-      : [];
+      : executionAdapter === 'runtime-transfer'
+        ? uniqueBlockers(manifestBlockers.map((entry) => ({ ...entry, source: 'runtime-transfer' })))
+        : [];
     const authorityBlockers = uniqueBlockers(manifestBlockers.filter((entry) => (
       entry.code === 'external-provider-authority'
     )).map((entry) => ({ ...entry, source: 'application-manifest' })));
-    const evidenceBlockers = migrationRequired ? uniqueBlockers([
+    const evidenceBlockers = migrationRequired && executionAdapter !== 'runtime-transfer' ? uniqueBlockers([
       ...manifestBlockers.filter((entry) => (
         entry.code !== 'external-provider-authority' &&
         !(strategy === 'blue-green-atomic-route' && TRANSACTION_PROVEN_MANIFEST_BLOCKERS.has(entry.code))
@@ -467,7 +496,8 @@ function createMigrationOrchestrator({
     const gaps = migrationRequired ? implementationGaps(resource, strategy, conflicts, applyImplemented) : [];
     if (
       migrationRequired && strategy === 'shadow-refresh-bounded-quiesce' &&
-      statefulAdapterEligible && resource.migrationStorage && resource.migrationStorage.status !== 'ready'
+      statefulAdapterEligible && executionAdapter !== 'runtime-transfer' &&
+      resource.migrationStorage && resource.migrationStorage.status !== 'ready'
     ) {
       gaps.push(blocker(
         resource.migrationStorage.blockerCode || 'stateful-capacity-inspection-failed',
@@ -477,7 +507,7 @@ function createMigrationOrchestrator({
     }
     if (
       migrationRequired && providerGroup && providerGroup.parentResourceId === resource.id &&
-      providerGroup.memberResourceIds.length > 1
+      providerGroup.memberResourceIds.length > 1 && executionAdapter !== 'runtime-transfer'
     ) {
       gaps.push(blocker(
         'provider-resource-group-transaction-required',
@@ -523,11 +553,19 @@ function createMigrationOrchestrator({
       migrationGroup: providerGroup && providerGroup.parentResourceId === resource.id
         ? { ...providerGroup, executionOwnedByParent: true }
         : null,
+      executionAdapter,
       classification,
       strategy,
       availability: {
-        ...availabilityPolicy(resource, strategy, applyImplemented),
-        ...(strategy === 'shadow-refresh-bounded-quiesce' && resource.migrationStorage && resource.migrationStorage.status !== 'ready'
+        ...(executionAdapter === 'runtime-transfer' ? {
+          currentMode: 'in-place-runtime-transfer-ready',
+          targetMode: 'server-authority-with-existing-runtime',
+          sourcePauseBudgetMs: 0,
+          explicitApprovalRequired: true,
+          postRoadmapCapability: 'provider-definition-removal-after-control-plane-retirement'
+        } : availabilityPolicy(resource, strategy, applyImplemented)),
+        ...(executionAdapter !== 'runtime-transfer' && strategy === 'shadow-refresh-bounded-quiesce' &&
+          resource.migrationStorage && resource.migrationStorage.status !== 'ready'
           ? { currentMode: resource.migrationStorage?.blockerCode || 'stateful-capacity-inspection-failed' }
           : {})
       },

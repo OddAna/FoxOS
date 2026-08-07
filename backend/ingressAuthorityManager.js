@@ -7,7 +7,7 @@ const { atomicWriteJson } = require('./resourceRegistry');
 
 const INGRESS_AUTHORITY_SCHEMA_VERSION = 1;
 const DOMAIN_PATTERN = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
-const OPERATION_ID_PATTERN = /^(?:smop|stmop)_[a-f0-9]{32}$/;
+const OPERATION_ID_PATTERN = /^(?:smop|stmop|rtop)_[a-f0-9]{32}$/;
 const CONTAINER_ID_PATTERN = /^[a-f0-9]{12,64}$/;
 const NETWORK_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/;
 const ROUTE_PATH_PATTERN = /^\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$/;

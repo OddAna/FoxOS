@@ -125,6 +125,47 @@ test('a migrated source and active candidate become one server-owned application
   assert.equal(applications[0].logoUrl, '/api/apps/' + resourceId + '/icon');
 });
 
+test('an in-place transferred runtime keeps one stable visible desktop application', () => {
+  const containerId = '7'.repeat(64);
+  const resourceId = 'res_' + '8'.repeat(32);
+  const applications = buildApplicationInventory({
+    appStates: [{
+      id: 'ubik-runtime',
+      installed: true,
+      canManage: true,
+      name: 'Ubik',
+      externalUrl: 'https://ubik.example.com',
+      containerId,
+      containerName: 'ubik-runtime',
+      state: 'running',
+      status: 'Up 1 minute'
+    }],
+    containers: [{ Id: containerId, Names: ['/ubik-runtime'], State: 'running', Status: 'Up 1 minute' }],
+    resources: [{
+      id: resourceId,
+      provider: 'coolify',
+      ownership: 'observed',
+      runtime: { containerId },
+      management: {
+        owner: 'foxos',
+        state: 'active',
+        lifecycle: 'in-place-runtime-transfer',
+        logicalResourceId: resourceId,
+        candidateContainerId: containerId,
+        domains: ['ubik.example.com'],
+        authorityActive: true
+      }
+    }]
+  });
+
+  assert.equal(applications.length, 1);
+  assert.equal(applications[0].id, resourceId);
+  assert.equal(applications[0].runtime.containerId, containerId);
+  assert.equal(applications[0].managedByServer, true);
+  assert.equal(applications[0].desktopShortcutDefaultVisible, true);
+  assert.equal(applications[0].externalUrl, 'https://ubik.example.com');
+});
+
 test('a source-cleaned candidate keeps the logical application identity and absorbs its inactive definition', () => {
   const candidateId = 'c'.repeat(64);
   const logicalResourceId = 'res_' + '4'.repeat(32);

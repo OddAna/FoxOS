@@ -15,6 +15,7 @@ const RESOURCE_ID_PATTERN = /^res_[a-f0-9]{32}$/;
 const RUN_ID_PATTERN = /^mrun_[a-f0-9]{32}$/;
 const STATELESS_OPERATION_PATTERN = /^smop_[a-f0-9]{32}$/;
 const STATEFUL_OPERATION_PATTERN = /^stmop_[a-f0-9]{32}$/;
+const RUNTIME_TRANSFER_OPERATION_PATTERN = /^rtop_[a-f0-9]{32}$/;
 const MAX_RUNS = 50;
 const ACTIVE_STATUSES = new Set(['queued', 'preparing', 'executing']);
 
@@ -93,6 +94,9 @@ function createMigrationRunManager({
   prepareStatefulPlan = null,
   executeStatefulMigration = null,
   prepareStatefulConfirmation = 'PREPARE STATEFUL MIGRATION',
+  prepareRuntimeTransferPlan = null,
+  executeRuntimeTransfer = null,
+  prepareRuntimeTransferConfirmation = 'PREPARE RUNTIME TRANSFER',
   issueApproval,
   clock = () => new Date(),
   randomUUID = () => crypto.randomUUID(),
@@ -104,6 +108,7 @@ function createMigrationRunManager({
     typeof prepareStatelessPlan !== 'function' || typeof getStatelessReviewStatus !== 'function' ||
     typeof executeStatelessMigration !== 'function' || typeof issueApproval !== 'function' ||
     (Boolean(prepareStatefulPlan) !== Boolean(executeStatefulMigration)) ||
+    (Boolean(prepareRuntimeTransferPlan) !== Boolean(executeRuntimeTransfer)) ||
     typeof schedule !== 'function'
   ) {
     throw new Error('Migration run manager requires plan, selection, review, approval and execution adapters');
@@ -331,11 +336,22 @@ function createMigrationRunManager({
           const plannedResource = getServerMigrationPlan(serverPlanId).resources.find((entry) => (
             entry.resourceId === resourceId
           ));
-          const executionKind = plannedResource && plannedResource.strategy === 'shadow-refresh-bounded-quiesce'
-            ? 'stateful'
-            : 'stateless';
+          const executionKind = plannedResource && plannedResource.executionAdapter === 'runtime-transfer'
+            ? 'runtime-transfer'
+            : plannedResource && plannedResource.strategy === 'shadow-refresh-bounded-quiesce'
+              ? 'stateful'
+              : 'stateless';
           let plan;
-          if (executionKind === 'stateful') {
+          if (executionKind === 'runtime-transfer') {
+            if (typeof prepareRuntimeTransferPlan !== 'function') {
+              throw new MigrationRunError('Runtime transfer adapter is unavailable', 409, 'runtime-transfer-unavailable');
+            }
+            plan = await prepareRuntimeTransferPlan({
+              serverPlanId,
+              resourceId,
+              confirmation: prepareRuntimeTransferConfirmation
+            });
+          } else if (executionKind === 'stateful') {
             if (typeof prepareStatefulPlan !== 'function') {
               throw new MigrationRunError('Stateful migration adapter is unavailable', 409, 'stateful-adapter-unavailable');
             }
@@ -355,6 +371,7 @@ function createMigrationRunManager({
           result.executionPlanId = plan.planId;
           result.statelessPlanId = executionKind === 'stateless' ? plan.planId : null;
           result.statefulPlanId = executionKind === 'stateful' ? plan.planId : null;
+          result.runtimeTransferPlanId = executionKind === 'runtime-transfer' ? plan.planId : null;
           result.blockers = uniqueBlockers(plan.readiness && plan.readiness.blockers || []);
           if (!result.blockers.length && executionKind === 'stateless') {
             let review = getStatelessReviewStatus(plan.planId);
@@ -414,19 +431,27 @@ function createMigrationRunManager({
         persist(run);
         try {
           const approval = issueApproval({
-            kind: prepared.executionKind + '-migration-apply',
+            kind: prepared.executionKind === 'runtime-transfer'
+              ? 'runtime-transfer-apply'
+              : prepared.executionKind + '-migration-apply',
             planId: plan.planId,
             resourceId,
-            evidenceFingerprint: plan.resource.evidenceFingerprint,
+            evidenceFingerprint: prepared.executionKind === 'runtime-transfer'
+              ? plan.evidenceFingerprint
+              : plan.resource.evidenceFingerprint,
             actor: context
           });
-          const operation = prepared.executionKind === 'stateful'
-            ? await executeStatefulMigration(plan.planId, approval)
-            : await executeStatelessMigration(plan.planId, approval);
-          const expectedStatus = prepared.executionKind === 'stateful'
-            ? 'traffic-on-server-source-preserved'
-            : 'traffic-on-foxos-source-preserved';
-          if (!operation || operation.status !== expectedStatus) {
+          const operation = prepared.executionKind === 'runtime-transfer'
+            ? await executeRuntimeTransfer(plan.planId, approval)
+            : prepared.executionKind === 'stateful'
+              ? await executeStatefulMigration(plan.planId, approval)
+              : await executeStatelessMigration(plan.planId, approval);
+          const expectedStatuses = prepared.executionKind === 'runtime-transfer'
+            ? new Set(['server-runtime-adopted', 'server-definition-adopted'])
+            : prepared.executionKind === 'stateful'
+              ? new Set(['traffic-on-server-source-preserved'])
+              : new Set(['traffic-on-foxos-source-preserved']);
+          if (!operation || !expectedStatuses.has(operation.status)) {
             throw new MigrationRunError('Migration did not reach verified server-owned traffic', 500, 'execution-proof-incomplete');
           }
           result.status = 'completed';
@@ -436,7 +461,8 @@ function createMigrationRunManager({
           result.status = 'failed';
           if (
             STATELESS_OPERATION_PATTERN.test(String(error && error.operationId || '')) ||
-            STATEFUL_OPERATION_PATTERN.test(String(error && error.operationId || ''))
+            STATEFUL_OPERATION_PATTERN.test(String(error && error.operationId || '')) ||
+            RUNTIME_TRANSFER_OPERATION_PATTERN.test(String(error && error.operationId || ''))
           ) {
             result.operationId = error.operationId;
           }
@@ -544,11 +570,14 @@ function createMigrationRunManager({
         resourceId: resource.resourceId,
         name: resource.name,
         strategy: resource.strategy,
-        executionKind: resource.strategy === 'shadow-refresh-bounded-quiesce' ? 'stateful' : 'stateless',
+        executionKind: resource.executionAdapter === 'runtime-transfer'
+          ? 'runtime-transfer'
+          : resource.strategy === 'shadow-refresh-bounded-quiesce' ? 'stateful' : 'stateless',
         executionPlanId: null,
         status: 'selected',
         statelessPlanId: null,
         statefulPlanId: null,
+        runtimeTransferPlanId: null,
         operationId: null,
         blockers: []
       })),
@@ -570,7 +599,9 @@ function createMigrationRunManager({
         snapshotRevalidatedBeforeExecution: true,
         allResourcesPreflightedBeforeMutation: true,
         serialExecution: true,
-        zeroDowntimeRequired: selectedResources.every((resource) => resource.strategy === 'blue-green-atomic-route'),
+        zeroDowntimeRequired: selectedResources.every((resource) => (
+          resource.strategy === 'blue-green-atomic-route' || resource.executionAdapter === 'runtime-transfer'
+        )),
         boundedQuiesceAllowed: selectedResources.some((resource) => resource.strategy === 'shadow-refresh-bounded-quiesce'),
         automaticRollbackDelegatedToTransaction: true,
         sourceStopAllowedAfterVerifiedCutover: selectedResources.some((resource) => (

@@ -11,6 +11,10 @@ const INSPECT_CONCURRENCY = 6;
 const MAX_REVISIONS = 100;
 const VERIFIED_STATELESS_MIGRATION_STATUS = 'traffic-on-foxos-source-preserved';
 const VERIFIED_STATEFUL_MIGRATION_STATUS = 'traffic-on-server-source-preserved';
+const VERIFIED_RUNTIME_TRANSFER_STATUSES = new Set([
+  'server-runtime-adopted',
+  'server-definition-adopted'
+]);
 
 const SAFE_LABEL_KEYS = new Set([
   'com.foxos.managed',
@@ -254,6 +258,67 @@ function readFoxosMigrationManagement(dataRoot, resources = []) {
       automaticMigrationAllowed: false,
       completedAt: operation.completedAt || null
     });
+  }
+
+  const runtimeTransferOperations = listJson(path.join(dataRoot, 'runtime-transfers', 'operations'));
+  for (const operation of runtimeTransferOperations) {
+    if (
+      !VERIFIED_RUNTIME_TRANSFER_STATUSES.has(operation.status) ||
+      !/^rtop_[a-f0-9]{32}$/.test(String(operation.operationId || ''))
+    ) continue;
+    const manifests = Array.isArray(operation.manifests) ? operation.manifests : [];
+    const operationRoutes = Array.isArray(operation.routes) ? operation.routes : [];
+    const authorityRoutes = operationRoutes.map((route) => (
+      route && route.routeId && authority && authority.routes && authority.routes[route.routeId]
+    )).filter(Boolean);
+    const domains = Array.from(new Set(operationRoutes.map((route) => route && route.domain).filter(Boolean))).sort();
+    const routeAuthorityActive = !operationRoutes.length || Boolean(
+      authority && authority.owner === 'foxos' && authority.publicAuthorityActive === true &&
+      authorityRoutes.length === operationRoutes.length &&
+      authorityRoutes.every((route) => (
+        route.operationId === operation.operationId && route.status === 'active' &&
+        authority.domains && authority.domains[route.domain] === 'foxos'
+      ))
+    );
+    for (const resourceId of operation.memberResourceIds || [operation.resourceId]) {
+      if (!/^res_[a-f0-9]{32}$/.test(String(resourceId || ''))) continue;
+      const manifest = manifests.find((entry) => entry && entry.resourceId === resourceId) || null;
+      const containerId = manifest && manifest.runtime && manifest.runtime.containerId ||
+        (resourceId === operation.resourceId ? operation.candidateContainerId : null);
+      const candidateResource = containerId ? resourcesByContainerId.get(containerId) || null : null;
+      const definitionOnly = operation.status === 'server-definition-adopted';
+      const candidateRunning = definitionOnly || Boolean(
+        candidateResource && candidateResource.runtime && candidateResource.runtime.state === 'running'
+      );
+      const resourceDomains = resourceId === operation.resourceId ? domains : [];
+      const trafficVerified = !resourceDomains.length || Boolean(
+        operation.trafficProof && operation.trafficProof.healthy === true &&
+        operation.trafficProof.unavailableSamples === 0
+      );
+      const state = routeAuthorityActive && candidateRunning && trafficVerified
+        ? 'active'
+        : 'attention-required';
+      recordManagement(resourceId, {
+        owner: 'foxos',
+        logicalResourceId: resourceId,
+        state,
+        lifecycle: definitionOnly ? 'inactive-definition-transfer' : 'in-place-runtime-transfer',
+        operationId: operation.operationId,
+        routeId: resourceDomains.length && operationRoutes[0] && operationRoutes[0].routeId || null,
+        domains: resourceDomains,
+        candidateContainerId: containerId,
+        candidateResourceId: candidateResource && candidateResource.id || null,
+        authorityActive: resourceDomains.length ? routeAuthorityActive : true,
+        candidateRunning,
+        trafficVerified,
+        sourcePreserved: true,
+        sourceName: manifest && manifest.name || null,
+        sourceProvider: manifest && manifest.provenance && manifest.provenance.importedFrom || null,
+        sourceOwnership: 'observed',
+        automaticMigrationAllowed: false,
+        completedAt: operation.completedAt || null
+      });
+    }
   }
   return managementByResourceId;
 }

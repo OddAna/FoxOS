@@ -277,6 +277,31 @@ test('stateful application environment evidence stays GET-only while source capt
   }
 });
 
+test('database, worker and agent group members can capture provider-neutral environment evidence', async () => {
+  for (const workloadRole of ['database', 'worker', 'agent']) {
+    const { dockerCalls, manager, root, setSnapshot } = harness();
+    try {
+      const member = resource();
+      member.role = workloadRole;
+      member.name = workloadRole === 'database' ? 'postgres' : workloadRole === 'agent' ? 'beszel-agent' : 'task-runners';
+      member.classification = {
+        ...classifyResource(member),
+        authorityClass: 'provider-owned',
+        stateClass: workloadRole === 'database' ? 'stateful' : 'stateless',
+        workloadRole
+      };
+      setSnapshot(snapshot(member));
+
+      const capture = await manager.captureEnvironmentForMigration(RESOURCE_ID);
+      assert.equal(capture.environment.managedVariableCount, 4);
+      assert.equal(capture.guarantees.runtimeMutated, false);
+      assert.deepEqual(dockerCalls.map((call) => call.method), ['GET', 'GET']);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
 test('workload evidence operations require exact confirmations and remain empty on a clean install', async () => {
   const { manager, root } = harness();
   try {
