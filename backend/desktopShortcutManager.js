@@ -161,6 +161,25 @@ function createDesktopShortcutManager({ dataRoot, clock = () => new Date() }) {
     return { applicationId, path: shortcutLocation, updatedAt: updated.updatedAt };
   }
 
+  function forget(applicationId) {
+    if (!APPLICATION_ID_PATTERN.test(String(applicationId || ''))) {
+      throw new DesktopShortcutError('Uygulama kimliği geçersiz.', 400, 'invalid-application-id');
+    }
+    const current = state();
+    const hiddenApplicationIds = current.hiddenApplicationIds.filter((id) => id !== applicationId);
+    const visibleApplicationIds = current.visibleApplicationIds.filter((id) => id !== applicationId);
+    const applicationLocations = { ...current.applicationLocations };
+    delete applicationLocations[applicationId];
+    const changed =
+      hiddenApplicationIds.length !== current.hiddenApplicationIds.length ||
+      visibleApplicationIds.length !== current.visibleApplicationIds.length ||
+      Object.keys(applicationLocations).length !== Object.keys(current.applicationLocations).length;
+    if (changed) {
+      writeState({ ...current, hiddenApplicationIds, visibleApplicationIds, applicationLocations });
+    }
+    return { applicationId, forgotten: changed };
+  }
+
   function relocateDirectory(sourceLocation, targetLocation) {
     const source = normalizeLocation(sourceLocation);
     const target = normalizeLocation(targetLocation);
@@ -201,6 +220,7 @@ function createDesktopShortcutManager({ dataRoot, clock = () => new Date() }) {
   }
 
   return {
+    forget,
     isVisible,
     location,
     normalizeLocation,

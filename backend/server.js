@@ -131,7 +131,11 @@ const {
   DesktopShortcutError,
   createDesktopShortcutManager
 } = require('./desktopShortcutManager');
-const { SCHEMA_VERSION: RESOURCE_SCHEMA_VERSION, createResourceRegistry } = require('./resourceRegistry');
+const {
+  SCHEMA_VERSION: RESOURCE_SCHEMA_VERSION,
+  ResourceRegistryError,
+  createResourceRegistry
+} = require('./resourceRegistry');
 const {
   catalogContainerForApp,
   containerName,
@@ -1168,6 +1172,17 @@ function sendDesktopShortcutError(res, error, action) {
   });
 }
 
+function sendResourceRegistryError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof ResourceRegistryError)
+      ? 'Sunucu envanteri güncellenemedi.'
+      : error.message,
+    code: error.code || 'resource-registry-error'
+  });
+}
+
 function sendConnectionError(res, error, action) {
   const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
   if (status >= 500) console.error(action + ':', error.message);
@@ -1864,6 +1879,30 @@ app.post('/api/resources/scan', async (req, res) => {
   } catch (error) {
     console.error('Could not scan server resources:', error.message);
     res.status(503).json({ error: 'Could not scan server resources' });
+  }
+});
+
+app.delete('/api/inactive-definitions/:resourceId', async (req, res) => {
+  try {
+    const retired = resourceRegistry.retireProviderDefinition(
+      req.params.resourceId,
+      req.body && req.body.confirmation
+    );
+    desktopShortcutManager.forget(req.params.resourceId);
+    let snapshot = await resourceRegistry.scan();
+    if (snapshot.resources.some((resource) => resource.id === req.params.resourceId)) {
+      snapshot = await resourceRegistry.scan();
+    }
+    if (snapshot.resources.some((resource) => resource.id === req.params.resourceId)) {
+      throw new ResourceRegistryError(
+        'Inactive definition retirement could not be verified',
+        503,
+        'inactive-definition-removal-unverified'
+      );
+    }
+    res.json({ retired, snapshotId: snapshot.snapshotId });
+  } catch (error) {
+    sendResourceRegistryError(res, error, 'Could not remove inactive definition');
   }
 });
 

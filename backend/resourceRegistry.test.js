@@ -594,6 +594,69 @@ test('offline provider scans retain redacted definitions and their explicit desk
   }
 });
 
+test('retired inactive definitions stay excluded from online and cached provider inventory', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-registry-retired-definition-'));
+  let providerReady = true;
+  try {
+    const registry = createResourceRegistry({
+      dataRoot: root,
+      dockerRequest: async (method, requestPath) => {
+        assert.equal(method, 'GET');
+        if (requestPath === '/containers/json?all=1' || requestPath === '/images/json?all=0' || requestPath === '/networks') return [];
+        if (requestPath === '/volumes') return { Volumes: [] };
+        throw new Error(`unexpected ${requestPath}`);
+      },
+      providerResourceReader: async () => {
+        if (!providerReady) {
+          throw Object.assign(new Error('provider unavailable'), { code: 'provider-unavailable' });
+        }
+        return {
+          provider: 'coolify',
+          configured: true,
+          readOnly: true,
+          resources: [{
+            sourceKind: 'provider-definition',
+            provider: 'coolify',
+            externalId: 'old-definition',
+            name: 'Old definition',
+            providerKind: 'application',
+            status: 'stopped',
+            recoveryArtifact: providerRecoveryArtifact('c')
+          }]
+        };
+      }
+    });
+    const first = await registry.scan();
+    const resourceId = first.resources[0].id;
+    assert.throws(
+      () => registry.retireProviderDefinition(resourceId, 'wrong'),
+      { code: 'inactive-definition-removal-confirmation-required' }
+    );
+    const retired = registry.retireProviderDefinition(
+      resourceId,
+      `REMOVE INACTIVE DEFINITION ${resourceId}`
+    );
+    assert.equal(retired.resourceId, resourceId);
+    assert.equal(fs.statSync(registry.paths.retiredProviderDefinitionsFile).mode & 0o777, 0o600);
+
+    const online = await registry.scan();
+    assert.equal(online.summary.resources, 0);
+    assert.equal(
+      online.discovery.sources.find((source) => source.source === 'coolify').retiredResourcesExcluded,
+      1
+    );
+    providerReady = false;
+    const offline = await registry.scan();
+    assert.equal(offline.summary.resources, 0);
+    assert.equal(
+      offline.discovery.sources.find((source) => source.source === 'legacy-provider').retiredResourcesExcluded,
+      1
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('adopted inactive definitions remain server-managed without provider history', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-registry-adopted-definition-'));
   const resourceId = 'res_' + 'b'.repeat(32);

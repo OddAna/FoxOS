@@ -107,6 +107,24 @@ test('desktop shortcuts persist folder locations and return cleanly to the deskt
   assert.equal(manager.state().applicationLocations[applicationId], undefined);
 });
 
+test('forget removes every persisted preference for a retired application', () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-shortcut-forget-'));
+  const manager = createDesktopShortcutManager({ dataRoot });
+  const applicationId = 'res_' + 'a'.repeat(32);
+  try {
+    manager.setVisible(applicationId, true);
+    manager.setLocation(applicationId, '/Masaüstü/Arşiv');
+    assert.equal(manager.forget(applicationId).forgotten, true);
+    const state = manager.state();
+    assert.equal(state.visibleApplicationIds.includes(applicationId), false);
+    assert.equal(state.hiddenApplicationIds.includes(applicationId), false);
+    assert.equal(Object.hasOwn(state.applicationLocations, applicationId), false);
+    assert.equal(manager.forget(applicationId).forgotten, false);
+  } finally {
+    fs.rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
 test('renaming or removing a desktop folder keeps contained application shortcuts reachable', () => {
   const manager = createDesktopShortcutManager({
     dataRoot: fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-shortcuts-'))

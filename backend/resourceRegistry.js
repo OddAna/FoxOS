@@ -16,6 +16,17 @@ const VERIFIED_RUNTIME_TRANSFER_STATUSES = new Set([
   'server-definition-adopted'
 ]);
 const VERIFIED_INACTIVE_RUNTIME_STATUS = 'server-definition-runtime-active';
+const RETIRED_PROVIDER_DEFINITIONS_SCHEMA_VERSION = 1;
+const RESOURCE_ID_PATTERN = /^res_[a-f0-9]{32}$/;
+
+class ResourceRegistryError extends Error {
+  constructor(message, statusCode = 409, code = 'resource-registry-error') {
+    super(message);
+    this.name = 'ResourceRegistryError';
+    this.statusCode = statusCode;
+    this.code = code;
+  }
+}
 
 const SAFE_LABEL_KEYS = new Set([
   'com.foxos.managed',
@@ -1248,8 +1259,77 @@ function createResourceRegistry({
   const registryRoot = path.join(dataRoot, 'registry');
   const identitiesFile = path.join(registryRoot, 'identities.json');
   const latestFile = path.join(registryRoot, 'latest.json');
+  const retiredProviderDefinitionsFile = path.join(registryRoot, 'retired-provider-definitions.json');
   const revisionsRoot = path.join(registryRoot, 'revisions');
   let scanInFlight = null;
+
+  function retiredProviderDefinitions() {
+    const state = readJson(retiredProviderDefinitionsFile, {
+      schemaVersion: RETIRED_PROVIDER_DEFINITIONS_SCHEMA_VERSION,
+      updatedAt: null,
+      entries: []
+    });
+    if (
+      state.schemaVersion !== RETIRED_PROVIDER_DEFINITIONS_SCHEMA_VERSION ||
+      !Array.isArray(state.entries) ||
+      state.entries.some((entry) => (
+        !entry || !RESOURCE_ID_PATTERN.test(String(entry.resourceId || '')) ||
+        typeof entry.provider !== 'string' || !entry.provider ||
+        !Number.isFinite(Date.parse(entry.retiredAt))
+      ))
+    ) {
+      throw new ResourceRegistryError(
+        'Retired provider definition state is invalid',
+        503,
+        'retired-provider-definitions-invalid'
+      );
+    }
+    return {
+      schemaVersion: RETIRED_PROVIDER_DEFINITIONS_SCHEMA_VERSION,
+      updatedAt: state.updatedAt || null,
+      entries: [...state.entries].sort((left, right) => left.resourceId.localeCompare(right.resourceId))
+    };
+  }
+
+  function retireProviderDefinition(resourceId, confirmation) {
+    if (!RESOURCE_ID_PATTERN.test(String(resourceId || ''))) {
+      throw new ResourceRegistryError('Inactive definition ID is invalid', 400, 'invalid-resource-id');
+    }
+    const expectedConfirmation = `REMOVE INACTIVE DEFINITION ${resourceId}`;
+    if (confirmation !== expectedConfirmation) {
+      throw new ResourceRegistryError(
+        `Exact confirmation required: ${expectedConfirmation}`,
+        409,
+        'inactive-definition-removal-confirmation-required'
+      );
+    }
+    const snapshot = getLatest();
+    const resource = snapshot && (snapshot.resources || []).find((entry) => entry.id === resourceId);
+    if (!resource) {
+      throw new ResourceRegistryError('Inactive definition was not found', 404, 'resource-not-found');
+    }
+    if (resource.kind !== 'provider-definition' || resource.runtime && resource.runtime.containerId) {
+      throw new ResourceRegistryError(
+        'Only an inactive definition without a runtime can be removed',
+        409,
+        'resource-removal-not-safe'
+      );
+    }
+    const state = retiredProviderDefinitions();
+    const retiredAt = new Date(clock()).toISOString();
+    const entry = {
+      resourceId,
+      provider: String(resource.provider || 'provider'),
+      retiredAt
+    };
+    atomicWriteJson(retiredProviderDefinitionsFile, {
+      schemaVersion: RETIRED_PROVIDER_DEFINITIONS_SCHEMA_VERSION,
+      updatedAt: retiredAt,
+      entries: [...state.entries.filter((candidate) => candidate.resourceId !== resourceId), entry]
+        .sort((left, right) => left.resourceId.localeCompare(right.resourceId))
+    });
+    return entry;
+  }
 
   function recoverProviderDefinitionMetadata(resource) {
     if (typeof providerDefinitionMetadataReader !== 'function' || resource.kind !== 'provider-definition') {
@@ -1376,6 +1456,20 @@ function createResourceRegistry({
       recoveredAdoptedDefinitions += 1;
     }
 
+    const retiredDefinitionIds = new Set(
+      retiredProviderDefinitions().entries.map((entry) => entry.resourceId)
+    );
+    let retiredProviderDefinitionsExcluded = 0;
+    for (let index = resources.length - 1; index >= 0; index -= 1) {
+      if (
+        resources[index].kind === 'provider-definition' &&
+        retiredDefinitionIds.has(resources[index].id)
+      ) {
+        resources.splice(index, 1);
+        retiredProviderDefinitionsExcluded += 1;
+      }
+    }
+
     const capacityCandidates = resources.filter((resource) => (
       resource.kind === 'container' && resource.classification &&
       resource.classification.workloadRole === 'application' &&
@@ -1442,7 +1536,8 @@ function createResourceRegistry({
           discoveredResources: observation.resources.length,
           errorCode: observation.errorCode || null,
           retainedResources: observation === providerObservation ? retainedProviderDefinitions : 0,
-          recoveredServerOwnedResources: observation === providerObservation ? recoveredAdoptedDefinitions : 0
+          recoveredServerOwnedResources: observation === providerObservation ? recoveredAdoptedDefinitions : 0,
+          retiredResourcesExcluded: observation === providerObservation ? retiredProviderDefinitionsExcluded : 0
         })),
         hostInventory: hostObservation.inventory || null
       },
@@ -1539,7 +1634,9 @@ function createResourceRegistry({
     exportLatest,
     getMigrationManagement,
     getLatest,
-    paths: { identitiesFile, latestFile, registryRoot, revisionsRoot },
+    paths: { identitiesFile, latestFile, registryRoot, retiredProviderDefinitionsFile, revisionsRoot },
+    retireProviderDefinition,
+    retiredProviderDefinitions,
     scan
   };
 }
@@ -1559,6 +1656,7 @@ module.exports = {
   readFoxosMigrationManagement,
   readAdoptedProviderDefinitions,
   readCachedProviderDefinitions,
+  ResourceRegistryError,
   resolveResourceId,
   roleFor,
   safeLabels,
