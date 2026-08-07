@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Play, RotateCw, Settings as SettingsIcon, Square, X } from 'lucide-react';
 import './index.css';
 import { WindowProvider, useWindowManager } from './contexts/WindowContext';
@@ -34,6 +34,53 @@ import {
   updateConfirmationMessage
 } from './utils/applicationUpdates';
 
+const createDesktopPointerPreview = (draggedItems, fileElements) => {
+  const sources = draggedItems.map((item) => ({
+    item,
+    element: fileElements[item.id],
+    rect: fileElements[item.id] && fileElements[item.id].getBoundingClientRect()
+  })).filter((source) => source.element && source.rect);
+  if (sources.length === 0) return null;
+
+  const left = Math.min(...sources.map((source) => source.rect.left));
+  const top = Math.min(...sources.map((source) => source.rect.top));
+  const right = Math.max(...sources.map((source) => source.rect.right));
+  const bottom = Math.max(...sources.map((source) => source.rect.bottom));
+  const preview = document.createElement('div');
+  Object.assign(preview.style, {
+    position: 'fixed',
+    left: '0',
+    top: '0',
+    width: `${right - left}px`,
+    height: `${bottom - top}px`,
+    pointerEvents: 'none',
+    zIndex: '10000',
+    opacity: '0.85',
+    contain: 'layout paint style',
+    willChange: 'transform',
+    transform: `translate3d(${left}px, ${top}px, 0)`
+  });
+
+  sources.forEach(({ element, rect }) => {
+    const clone = element.cloneNode(true);
+    Object.assign(clone.style, {
+      position: 'absolute',
+      left: `${rect.left - left}px`,
+      top: `${rect.top - top}px`,
+      width: `${rect.width}px`,
+      minHeight: `${rect.height}px`,
+      margin: '0',
+      transform: 'none',
+      transition: 'none',
+      pointerEvents: 'none'
+    });
+    preview.appendChild(clone);
+  });
+
+  document.body.appendChild(preview);
+  return { element: preview, left, top };
+};
+
 const Desktop = () => {
   const { windows, openWindow } = useWindowManager();
   const { showDialog } = useDialog();
@@ -45,10 +92,12 @@ const Desktop = () => {
     setDesktopShortcut,
     setDesktopShortcutLocation
   } = useApplicationInventory();
-  const visibleDesktopApplications = applications.filter((application) => application.desktopShortcutVisible !== false);
-  const desktopApplications = visibleDesktopApplications.filter((application) => (
+  const visibleDesktopApplications = useMemo(() => applications.filter((application) => (
+    application.desktopShortcutVisible !== false
+  )), [applications]);
+  const desktopApplications = useMemo(() => visibleDesktopApplications.filter((application) => (
     applicationShortcutPath(application) === DESKTOP_ROOT
-  ));
+  )), [visibleDesktopApplications]);
   const [desktopMenu, setDesktopMenu] = useState(null);
   const [desktopFiles, setDesktopFiles] = useState([]);
   const [selectedIds, setSelectedIds] = useState([]);
@@ -56,6 +105,8 @@ const Desktop = () => {
   const gridRef = useRef(null);
   const fileRefs = useRef({});
   const isDraggingMarquee = useRef(false);
+  const activePointerDrag = useRef(null);
+  const suppressDesktopClick = useRef(false);
 
   const [windowSize, setWindowSize] = useState({ width: window.innerWidth, height: window.innerHeight });
 
@@ -112,7 +163,8 @@ const Desktop = () => {
         changed = true;
       });
 
-      if (changed) localStorage.setItem('desktop_positions_v3', JSON.stringify(updated));
+      if (!changed) return current;
+      localStorage.setItem('desktop_positions_v3', JSON.stringify(updated));
       return updated;
     });
   };
@@ -188,6 +240,8 @@ const Desktop = () => {
     };
   }, []);
 
+  useEffect(() => () => activePointerDrag.current?.cleanup(), []);
+
   useEffect(() => {
     persistNewItemPositions(desktopApplications.map((application) => ({
       positionKey: `application:${application.id}`
@@ -220,28 +274,26 @@ const Desktop = () => {
     setDesktopMenu({ x: e.clientX, y: e.clientY, type: item ? item.desktopKind : 'grid', item });
   };
 
-  const handleDragStart = (e, item) => {
-    const dragElement = fileRefs.current[item.desktopId] || e.currentTarget;
+  const desktopDragData = (item, pointerX, pointerY) => {
+    const dragElement = fileRefs.current[item.desktopId];
+    if (!dragElement) return null;
     const rect = dragElement.getBoundingClientRect();
-    const offsetX = e.clientX - rect.left;
-    const offsetY = e.clientY - rect.top;
-
-    let draggedItems = [];
+    let draggedItems;
     if (selectedIds.includes(item.desktopId) && selectedIds.length > 1) {
-      const anchorPos = getDesktopItemPosition(item);
+      const anchorPosition = getDesktopItemPosition(item);
       draggedItems = desktopItems
         .filter((candidate) => selectedIds.includes(candidate.desktopId))
         .map((candidate) => {
-           const pos = getDesktopItemPosition(candidate);
-           return {
-             id: candidate.desktopId,
-             name: candidate.name,
-             positionKey: candidate.positionKey,
-             desktopKind: candidate.desktopKind,
-             applicationId: candidate.desktopKind === 'application' ? candidate.application.id : null,
-             relX: pos.left - anchorPos.left,
-             relY: pos.top - anchorPos.top
-           };
+          const position = getDesktopItemPosition(candidate);
+          return {
+            id: candidate.desktopId,
+            name: candidate.name,
+            positionKey: candidate.positionKey,
+            desktopKind: candidate.desktopKind,
+            applicationId: candidate.desktopKind === 'application' ? candidate.application.id : null,
+            relX: position.left - anchorPosition.left,
+            relY: position.top - anchorPosition.top
+          };
         });
     } else {
       draggedItems = [{
@@ -254,49 +306,12 @@ const Desktop = () => {
         relY: 0
       }];
     }
-
-    e.dataTransfer.setData('text/plain', JSON.stringify({
+    return {
       files: draggedItems,
       sourcePath: 'Masaüstü',
-      offsetX,
-      offsetY
-    }));
-    e.dataTransfer.effectAllowed = 'move';
-    
-    // Custom drag image for multiple files
-    if (draggedItems.length > 1) {
-      const dragContainer = document.createElement('div');
-      dragContainer.style.position = 'absolute';
-      dragContainer.style.top = '-9999px';
-      dragContainer.style.left = '-9999px';
-      
-      let minX = 0, minY = 0;
-      draggedItems.forEach(f => {
-        if (f.relX < minX) minX = f.relX;
-        if (f.relY < minY) minY = f.relY;
-      });
-
-      draggedItems.forEach(f => {
-        const fileEl = fileRefs.current[f.id];
-        if (fileEl) {
-           const clone = fileEl.cloneNode(true);
-           clone.style.position = 'absolute';
-           clone.style.left = (f.relX - minX) + 'px';
-           clone.style.top = (f.relY - minY) + 'px';
-           clone.style.background = 'transparent';
-           clone.style.border = 'none';
-           clone.style.width = fileEl.offsetWidth + 'px';
-           clone.style.height = fileEl.offsetHeight + 'px';
-           dragContainer.appendChild(clone);
-        }
-      });
-      
-      document.body.appendChild(dragContainer);
-      e.dataTransfer.setDragImage(dragContainer, offsetX - minX, offsetY - minY);
-      setTimeout(() => document.body.removeChild(dragContainer), 0);
-    } else {
-      e.dataTransfer.setDragImage(dragElement, offsetX, offsetY);
-    }
+      offsetX: pointerX - rect.left,
+      offsetY: pointerY - rect.top
+    };
   };
 
   const handleDragOver = (e) => {
@@ -304,106 +319,107 @@ const Desktop = () => {
     e.dataTransfer.dropEffect = 'move';
   };
 
+  const moveDesktopItemsToPath = (data, targetPath) => {
+    const filesToMove = data.files || (data.name ? [{ name: data.name }] : []);
+    if (filesToMove.length === 0 || typeof targetPath !== 'string') return;
+    const targetDesktopPath = canonicalDesktopPath(targetPath);
+    const comparablePath = (value) => {
+      const segments = String(value || '/').split('/').filter(Boolean);
+      return segments.length === 0 ? '/' : `/${segments.join('/')}`;
+    };
+    const sourceDirectory = comparablePath(data.sourcePath);
+    const targetDirectory = comparablePath(targetPath);
+    const movesFilesystemItems = filesToMove.some((file) => file.desktopKind !== 'application');
+    const promises = filesToMove.map((file) => {
+      if (file.desktopKind === 'application' && file.applicationId) {
+        const application = applications.find((candidate) => candidate.id === file.applicationId);
+        if (!application || !targetDesktopPath) {
+          return Promise.reject(new Error('Uygulama yalnız Masaüstü klasörlerine taşınabilir'));
+        }
+        return setDesktopShortcutLocation(application, targetDesktopPath);
+      }
+      if (sourceDirectory === targetDirectory) return Promise.resolve();
+      const sourcePath = data.sourcePath;
+      const sourceFile = sourcePath === '/'
+        ? `/${file.name}`
+        : `${sourcePath === 'Masaüstü' ? '/Masaüstü' : sourcePath}/${file.name}`;
+      if (comparablePath(sourceFile) === targetDirectory) return Promise.resolve();
+      return apiFetch('/api/move', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sourcePath: sourceFile, targetPath })
+      });
+    });
+
+    Promise.all(promises).then(() => {
+      if (movesFilesystemItems) {
+        window.dispatchEvent(new Event('refresh_files'));
+        refreshApplications({ quiet: true }).catch(() => {});
+      }
+    }).catch((error) => {
+      console.error('Taşıma hatası:', error);
+      showDialog({ title: 'Hata', message: 'Öğeler taşınamadı.', type: 'error' });
+    });
+  };
+
+  const applyDesktopDrop = (data, clientX, clientY, desktopRect) => {
+    const filesToMove = data.files || (data.name ? [{
+      name: data.name,
+      positionKey: data.name,
+      desktopKind: 'file',
+      relX: 0,
+      relY: 0
+    }] : []);
+    if (filesToMove.length === 0) return;
+    if (data.sourcePath && data.sourcePath !== 'Masaüstü') {
+      moveDesktopItemsToPath(data, DESKTOP_ROOT);
+      return;
+    }
+
+    const marginX = 20;
+    const marginY = 20;
+    const taskbarHeight = 80;
+    const availableWidth = desktopRect.width - (2 * marginX);
+    const availableHeight = desktopRect.height - taskbarHeight - (2 * marginY);
+    const maxColumns = Math.max(1, Math.floor(availableWidth / 100));
+    const maxRows = Math.max(1, Math.floor(availableHeight / 100));
+    const cellWidth = availableWidth / maxColumns;
+    const cellHeight = availableHeight / maxRows;
+    const rawX = (clientX - desktopRect.left) - data.offsetX;
+    const rawY = (clientY - desktopRect.top) - data.offsetY;
+    const column = Math.min(maxColumns - 1, Math.max(0, Math.round((rawX - marginX) / cellWidth)));
+    const row = Math.min(maxRows - 1, Math.max(0, Math.round((rawY - marginY) / cellHeight)));
+
+    const placements = filesToMove.map((file) => ({
+      file,
+      column: Math.min(maxColumns - 1, Math.max(0, column + Math.round((file.relX || 0) / cellWidth))),
+      row: Math.min(maxRows - 1, Math.max(0, row + Math.round((file.relY || 0) / cellHeight)))
+    }));
+    const collides = placements.some((placement) => desktopItems.some((existing) => {
+      if (filesToMove.some((dragged) => (
+        (dragged.positionKey || dragged.name) === existing.positionKey
+      ))) return false;
+      const existingPosition = positions[existing.positionKey] || {};
+      return existingPosition.col === placement.column && existingPosition.row === placement.row;
+    }));
+    if (collides) return;
+
+    const nextPositions = { ...positions };
+    placements.forEach(({ file, column: nextColumn, row: nextRow }) => {
+      nextPositions[file.positionKey || file.name] = { col: nextColumn, row: nextRow };
+    });
+    setPositions(nextPositions);
+    localStorage.setItem('desktop_positions_v3', JSON.stringify(nextPositions));
+  };
+
   const handleDesktopDrop = (e) => {
     e.preventDefault();
-    const dataStr = e.dataTransfer.getData('text/plain');
-    if (!dataStr) return;
-    
+    const dataString = e.dataTransfer.getData('text/plain');
+    if (!dataString) return;
     try {
-      const data = JSON.parse(dataStr);
-      // Tek dosyalı drag payload'larını da normalize et.
-      const filesToMove = data.files || (data.name ? [{
-        name: data.name,
-        positionKey: data.name,
-        desktopKind: 'file',
-        relX: 0,
-        relY: 0
-      }] : []);
-      if (filesToMove.length === 0) return;
-
-      const MARGIN_X = 20;
-      const MARGIN_Y = 20;
-      const TASKBAR_H = 80;
-
-      const desktopRect = e.currentTarget.getBoundingClientRect();
-      const availableW = desktopRect.width - (2 * MARGIN_X);
-      const availableH = desktopRect.height - TASKBAR_H - (2 * MARGIN_Y);
-
-      const maxCols = Math.max(1, Math.floor(availableW / 100));
-      const maxRows = Math.max(1, Math.floor(availableH / 100));
-
-      const cellW = availableW / maxCols;
-      const cellH = availableH / maxRows;
-
-      let rawX = (e.clientX - desktopRect.left) - data.offsetX;
-      let rawY = (e.clientY - desktopRect.top) - data.offsetY;
-
-      const col = Math.min(maxCols - 1, Math.max(0, Math.round((rawX - MARGIN_X) / cellW)));
-      const row = Math.min(maxRows - 1, Math.max(0, Math.round((rawY - MARGIN_Y) / cellH)));
-
-      if (data.sourcePath && data.sourcePath !== 'Masaüstü') {
-        const movesFilesystemItems = filesToMove.some((file) => file.desktopKind !== 'application');
-        const promises = filesToMove.map(f => {
-          if (f.desktopKind === 'application' && f.applicationId) {
-            const application = applications.find((candidate) => candidate.id === f.applicationId);
-            return application
-              ? setDesktopShortcutLocation(application, DESKTOP_ROOT)
-              : Promise.reject(new Error('Uygulama artık sunucuda bulunamıyor'));
-          }
-          const sourceFile = data.sourcePath === '/' ? `/${f.name}` : `${data.sourcePath}/${f.name}`;
-          return apiFetch('/api/move', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sourcePath: sourceFile, targetPath: '/Masaüstü' })
-          });
-        });
-
-        Promise.all(promises).then(() => {
-          if (movesFilesystemItems) {
-            window.dispatchEvent(new Event('refresh_files'));
-            refreshApplications({ quiet: true }).catch(() => {});
-          }
-        }).catch(err => {
-          console.error("Taşıma hatası:", err);
-          showDialog({ title: 'Hata', message: 'Dosyalar Masaüstüne taşınamadı.', type: 'error' });
-        });
-        return;
-      }
-
-      let anyCollision = false;
-      filesToMove.forEach(f => {
-        // Multi-file drag is rare for now, assuming relX/relY map roughly to col/row offsets
-        const dCol = Math.round((f.relX || 0) / cellW);
-        const dRow = Math.round((f.relY || 0) / cellH);
-        const finalCol = Math.min(maxCols - 1, Math.max(0, col + dCol));
-        const finalRow = Math.min(maxRows - 1, Math.max(0, row + dRow));
-        
-        const isOccupied = desktopItems.some((existing) => {
-          if (filesToMove.find((dragged) => (
-            (dragged.positionKey || dragged.name) === existing.positionKey
-          ))) return false;
-          const existingPos = positions[existing.positionKey] || {};
-          return existingPos.col === finalCol && existingPos.row === finalRow;
-        });
-        if (isOccupied) anyCollision = true;
-      });
-
-      if (anyCollision) return; // İkonlardan biri bile dolu bir yere geliyorsa işlemi iptal et
-
-      const newPositions = { ...positions };
-      filesToMove.forEach(f => {
-        const dCol = Math.round((f.relX || 0) / cellW);
-        const dRow = Math.round((f.relY || 0) / cellH);
-        const finalCol = Math.min(maxCols - 1, Math.max(0, col + dCol));
-        const finalRow = Math.min(maxRows - 1, Math.max(0, row + dRow));
-        
-        newPositions[f.positionKey || f.name] = { col: finalCol, row: finalRow };
-      });
-      
-      setPositions(newPositions);
-      localStorage.setItem('desktop_positions_v3', JSON.stringify(newPositions));
-    } catch (err) {
-      console.error("Sürükle bırak parse hatası:", err);
+      applyDesktopDrop(JSON.parse(dataString), e.clientX, e.clientY, e.currentTarget.getBoundingClientRect());
+    } catch (error) {
+      console.error('Sürükle bırak parse hatası:', error);
     }
   };
 
@@ -415,44 +431,88 @@ const Desktop = () => {
     
     try {
       const data = JSON.parse(dataStr);
-      const filesToMove = data.files || (data.name ? [{ name: data.name }] : []);
-      if (filesToMove.length === 0) return;
-      
-      if (filesToMove.some(f => f.desktopKind !== 'application' && f.name === targetFolder.name)) return;
-      
       const targetPath = canonicalDesktopPath(`/Masaüstü/${targetFolder.name}`);
-      const movesFilesystemItems = filesToMove.some((file) => file.desktopKind !== 'application');
-      
-      const promises = filesToMove.map(f => {
-        if (f.desktopKind === 'application' && f.applicationId) {
-          const application = applications.find((candidate) => candidate.id === f.applicationId);
-          return application
-            ? setDesktopShortcutLocation(application, targetPath)
-            : Promise.reject(new Error('Uygulama artık sunucuda bulunamıyor'));
-        }
-        const srcPath = data.sourcePath;
-        let sourceFile = srcPath === 'Masaüstü' ? `/Masaüstü/${f.name}` : `${srcPath === '/' ? '' : srcPath}/${f.name}`;
-        
-        if (sourceFile === `${targetPath}/${f.name}`) return Promise.resolve();
-
-        return apiFetch('/api/move', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sourcePath: sourceFile, targetPath: targetPath })
-        });
-      });
-
-      Promise.all(promises).then(() => {
-        if (movesFilesystemItems) {
-          window.dispatchEvent(new Event('refresh_files'));
-          refreshApplications({ quiet: true }).catch(() => {});
-        }
-      }).catch(() => {
-        showDialog({ title: 'Hata', message: 'Dosyalar klasöre taşınamadı.', type: 'error' });
-      });
+      moveDesktopItemsToPath(data, targetPath);
     } catch (err) {
       console.error(err);
     }
+  };
+
+  const handleDesktopPointerDown = (e, item) => {
+    if (e.button !== 0 || e.ctrlKey || e.metaKey) return;
+    const data = desktopDragData(item, e.clientX, e.clientY);
+    if (!data) return;
+    activePointerDrag.current?.cleanup();
+
+    const pointerId = e.pointerId;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const sourceElement = fileRefs.current[item.desktopId];
+    let latestX = startX;
+    let latestY = startY;
+    let preview = null;
+    let animationFrame = null;
+    let dragging = false;
+
+    const renderPreview = () => {
+      animationFrame = null;
+      if (!preview) return;
+      const x = preview.left + latestX - startX;
+      const y = preview.top + latestY - startY;
+      preview.element.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+    };
+    const cleanup = () => {
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('pointercancel', onPointerCancel);
+      window.removeEventListener('blur', onPointerCancel);
+      if (animationFrame !== null) window.cancelAnimationFrame(animationFrame);
+      if (preview && preview.element.isConnected) preview.element.remove();
+      if (sourceElement?.hasPointerCapture(pointerId)) sourceElement.releasePointerCapture(pointerId);
+      if (activePointerDrag.current?.cleanup === cleanup) activePointerDrag.current = null;
+    };
+    const beginDrag = () => {
+      dragging = true;
+      if (!selectedIds.includes(item.desktopId)) setSelectedIds([item.desktopId]);
+      setDesktopMenu(null);
+      preview = createDesktopPointerPreview(data.files, fileRefs.current);
+    };
+    const onPointerMove = (moveEvent) => {
+      if (moveEvent.pointerId !== pointerId) return;
+      latestX = moveEvent.clientX;
+      latestY = moveEvent.clientY;
+      if (!dragging && Math.hypot(latestX - startX, latestY - startY) < 4) return;
+      if (!dragging) beginDrag();
+      moveEvent.preventDefault();
+      if (animationFrame === null) animationFrame = window.requestAnimationFrame(renderPreview);
+    };
+    const finishDrag = (upEvent, cancelled) => {
+      if (upEvent.pointerId !== undefined && upEvent.pointerId !== pointerId) return;
+      const dropX = upEvent.clientX ?? latestX;
+      const dropY = upEvent.clientY ?? latestY;
+      cleanup();
+      if (!dragging || cancelled) return;
+      suppressDesktopClick.current = true;
+      window.setTimeout(() => { suppressDesktopClick.current = false; }, 250);
+      const hitElement = document.elementFromPoint(dropX, dropY);
+      const pathTarget = hitElement && hitElement.closest('[data-foxos-drop-path]');
+      if (pathTarget) {
+        moveDesktopItemsToPath(data, pathTarget.dataset.foxosDropPath);
+        return;
+      }
+      const desktopGrid = hitElement && hitElement.closest('[data-foxos-desktop-grid="true"]');
+      const desktop = desktopGrid && desktopGrid.closest('.desktop');
+      if (desktop) applyDesktopDrop(data, dropX, dropY, desktop.getBoundingClientRect());
+    };
+    const onPointerUp = (upEvent) => finishDrag(upEvent, false);
+    const onPointerCancel = (cancelEvent) => finishDrag(cancelEvent, true);
+
+    if (sourceElement?.setPointerCapture) sourceElement.setPointerCapture(pointerId);
+    window.addEventListener('pointermove', onPointerMove, { passive: false });
+    window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('pointercancel', onPointerCancel);
+    window.addEventListener('blur', onPointerCancel);
+    activePointerDrag.current = { cleanup };
   };
 
   const handleDelete = (file) => {
@@ -523,6 +583,11 @@ const Desktop = () => {
 
   const handleDesktopItemClick = (e, id) => {
     e.stopPropagation();
+    if (suppressDesktopClick.current) {
+      suppressDesktopClick.current = false;
+      e.preventDefault();
+      return;
+    }
     if (e.ctrlKey || e.metaKey) {
       setSelectedIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
     } else {
@@ -640,6 +705,7 @@ const Desktop = () => {
   };
 
   const handleDesktopItemDoubleClick = (item) => {
+    if (suppressDesktopClick.current) return;
     if (item.desktopKind === 'application') {
       handleOpenApplication(item.application);
       return;
@@ -805,6 +871,7 @@ const Desktop = () => {
       {/* Masaüstü İkon Izgarası (Grid) */}
       <div 
         ref={gridRef}
+        data-foxos-desktop-grid="true"
         onPointerDown={startSelection}
         style={{
           position: 'absolute',
@@ -832,8 +899,11 @@ const Desktop = () => {
               key={item.desktopId}
               className="desktop-file"
               ref={el => fileRefs.current[item.desktopId] = el}
-              draggable={true}
-              onDragStart={(e) => handleDragStart(e, item)}
+              draggable={false}
+              data-foxos-drop-path={item.desktopKind === 'file' && item.type === 'folder'
+                ? canonicalDesktopPath(`/Masaüstü/${item.name}`)
+                : undefined}
+              onPointerDown={(e) => handleDesktopPointerDown(e, item)}
               onDragOver={item.desktopKind === 'file' && item.type === 'folder' ? handleDragOver : undefined}
               onDrop={item.desktopKind === 'file' && item.type === 'folder'
                 ? (e) => handleDesktopFolderDrop(e, item.file)

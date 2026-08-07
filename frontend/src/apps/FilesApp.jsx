@@ -879,6 +879,7 @@ const FilesApp = ({ initialPath = 'Masaüstü' }) => {
         {/* File Container */}
         <div 
           ref={gridRef}
+          data-foxos-drop-path={currentPath}
           onPointerDown={startSelection}
           onContextMenu={(e) => handleContextMenu(e, null)}
           onDragOver={handleDragOver}
@@ -931,6 +932,9 @@ const FilesApp = ({ initialPath = 'Masaüstü' }) => {
                 key={file.id} 
                 className="file-item"
                 ref={el => fileRefs.current[file.id] = el}
+                data-foxos-drop-path={file.type === 'folder'
+                  ? `${currentPath === '/' ? '' : currentPath}/${file.name}`
+                  : undefined}
                 draggable={true}
                 onDragStart={(e) => handleDragStart(e, file)}
                 onDragOver={file.type === 'folder' ? handleDragOver : undefined}
