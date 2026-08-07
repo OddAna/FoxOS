@@ -2402,8 +2402,14 @@ app.post('/api/application-domain-operations/:operationId/rollback', async (req,
 
 app.get('/api/apps/:appId/icon', async (req, res) => {
   try {
-    const appState = (await getCatalogState()).find((candidate) => candidate.id === req.params.appId);
-    if (!appState || !appState.installed || !appState.externalUrl) {
+    const inventoryState = (await getApplicationInventory()).applications
+      .find((candidate) => candidate.id === req.params.appId);
+    const appState = inventoryState || (await getCatalogState())
+      .find((candidate) => candidate.id === req.params.appId);
+    const runtimePresent = Boolean(
+      appState && (appState.installed === true || appState.runtime && appState.runtime.present === true)
+    );
+    if (!appState || !runtimePresent || !appState.externalUrl) {
       return res.status(404).json({ error: 'Application icon source is not available' });
     }
 

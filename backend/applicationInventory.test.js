@@ -1,10 +1,27 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
+  applicationLogoUrl,
   buildApplicationInventory,
   canonicalApplicationName,
   operationalStateForRuntime
 } = require('./applicationInventory');
+
+test('canonical application icons keep reviewed static logos and rebind dynamic favicon routes', () => {
+  const applicationId = 'res_' + 'f'.repeat(32);
+  assert.equal(
+    applicationLogoUrl({ logoUrl: 'https://icons.example.test/app.svg' }, applicationId, 'https://app.example.test'),
+    'https://icons.example.test/app.svg'
+  );
+  assert.equal(
+    applicationLogoUrl({ logoUrl: '/api/apps/discovered-old/icon' }, applicationId, 'https://app.example.test'),
+    '/api/apps/' + applicationId + '/icon'
+  );
+  assert.equal(
+    applicationLogoUrl({ logoUrl: null }, applicationId, 'https://app.example.test'),
+    '/api/apps/' + applicationId + '/icon'
+  );
+});
 
 test('runtime state maps to the existing FoxOS desktop status contract', () => {
   assert.equal(operationalStateForRuntime({ state: 'running', status: 'Up 1 minute', healthStatus: 'healthy' }), 'running');
@@ -105,7 +122,7 @@ test('a migrated source and active candidate become one server-owned application
   assert.equal(applications[0].managedByServer, true);
   assert.equal(applications[0].authority, 'server');
   assert.equal(applications[0].provenance.importedFrom, 'coolify');
-  assert.equal(applications[0].logoUrl, '/api/apps/discovered-custom-source/icon');
+  assert.equal(applications[0].logoUrl, '/api/apps/' + resourceId + '/icon');
 });
 
 test('a source-cleaned candidate keeps the logical application identity and absorbs its inactive definition', () => {
@@ -172,6 +189,7 @@ test('a source-cleaned candidate keeps the logical application identity and abso
   assert.equal(applications[0].runtime.containerId, candidateId);
   assert.equal(applications[0].runtime.operationalState, 'running');
   assert.equal(applications[0].externalUrl, 'https://defter.example.com');
+  assert.equal(applications[0].logoUrl, '/api/apps/' + logicalResourceId + '/icon');
   assert.equal(applications[0].desktopShortcutDefaultVisible, true);
   assert.equal(applications[0].managedByServer, true);
   assert.equal(applications[0].provenance.importedFrom, 'coolify');

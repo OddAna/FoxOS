@@ -93,6 +93,14 @@ function preferredMetadata(appStates, candidateContainerId) {
   };
 }
 
+function applicationLogoUrl(app, applicationId, externalUrl) {
+  const existing = app && app.logoUrl || null;
+  const dynamicIcon = /^\/api\/apps\/[^/]+\/icon$/.test(String(existing || ''));
+  if (existing && !dynamicIcon) return existing;
+  if (!externalUrl) return existing;
+  return '/api/apps/' + encodeURIComponent(applicationId) + '/icon';
+}
+
 function applicationProjection({
   app,
   canonicalResource,
@@ -122,7 +130,7 @@ function applicationProjection({
     summary: app.summary || null,
     description: app.description || null,
     image: container && container.Image || app.image || null,
-    logoUrl: app.logoUrl || null,
+    logoUrl: applicationLogoUrl(app, id, externalUrl),
     externalUrl: externalUrl || null,
     hostPort: app.hostPort || null,
     bindAddress: app.bindAddress || null,
@@ -453,6 +461,7 @@ function buildApplicationInventory({ appStates = [], containers = [], resources 
 
 module.exports = {
   APPLICATION_INVENTORY_SCHEMA_VERSION,
+  applicationLogoUrl,
   buildApplicationInventory,
   canonicalApplicationName,
   definitionApplicationProjection,
