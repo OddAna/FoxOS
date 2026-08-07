@@ -27,6 +27,10 @@ const {
   createMigrationRunManager
 } = require('./migrationRunManager');
 const {
+  MaintenanceSessionError,
+  createMaintenanceSessionManager
+} = require('./maintenanceSessionManager');
+const {
   StatelessMigrationError,
   createStatelessMigrationManager
 } = require('./statelessMigrationManager');
@@ -287,6 +291,11 @@ function requireAuth(req, res, next) {
   }
   req.session = session;
   next();
+}
+
+function isLoopbackRequest(req) {
+  const address = String(req.socket && req.socket.remoteAddress || '');
+  return ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(address);
 }
 
 function readAuthRecord() {
@@ -707,6 +716,7 @@ function runExactApplicationCompose({ operation, project, services, overrideFile
 const dockerClient = createDockerClient(DOCKER_SOCKET);
 const dockerRequest = dockerClient.request;
 const encryptionStore = createEncryptionStore({ dataRoot: DATA_ROOT });
+const maintenanceSessionManager = createMaintenanceSessionManager({ dataRoot: DATA_ROOT });
 const desktopShortcutManager = createDesktopShortcutManager({ dataRoot: DATA_ROOT });
 const coolifyMigrationReader = createCoolifyMigrationReader({
   dataRoot: DATA_ROOT,
@@ -1452,6 +1462,25 @@ app.post('/api/auth/login', (req, res) => {
   loginAttempts.delete(loginKey(req));
   createSession(res, authRecord.username);
   res.json({ success: true, username: authRecord.username });
+});
+
+app.post('/api/auth/maintenance-session', (req, res) => {
+  if (!isLoopbackRequest(req)) return res.status(404).json({ error: 'Not found' });
+  try {
+    const authRecord = readAuthRecord();
+    if (!authRecord) return res.status(409).json({ error: 'FoxOS has not been configured' });
+    maintenanceSessionManager.consume(req.body && req.body.token);
+    createSession(res, authRecord.username);
+    res.json({ success: true, username: authRecord.username, localOnly: true });
+  } catch (error) {
+    const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+    res.status(status).json({
+      error: status >= 500 && !(error instanceof MaintenanceSessionError)
+        ? 'Maintenance session failed'
+        : error.message,
+      code: error.code || 'maintenance-session-error'
+    });
+  }
 });
 
 app.post('/api/auth/logout', requireAuth, (req, res) => {
