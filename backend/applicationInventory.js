@@ -138,9 +138,7 @@ function applicationProjection({
     managedByServer,
     provenance: {
       source: managedByServer ? 'server' : app.installationSource || 'docker',
-      importedFrom: managedByServer && canonicalResource && canonicalResource.provider !== 'foxos'
-        ? canonicalResource.provider
-        : null
+      importedFrom: null
     },
     runtime: {
       present: Boolean(containerId),

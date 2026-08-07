@@ -121,7 +121,7 @@ test('a migrated source and active candidate become one server-owned application
   assert.equal(applications[0].externalUrl, 'https://defter.example.com');
   assert.equal(applications[0].managedByServer, true);
   assert.equal(applications[0].authority, 'server');
-  assert.equal(applications[0].provenance.importedFrom, 'coolify');
+  assert.equal(applications[0].provenance.importedFrom, null);
   assert.equal(applications[0].logoUrl, '/api/apps/' + resourceId + '/icon');
 });
 
@@ -233,7 +233,7 @@ test('a source-cleaned candidate keeps the logical application identity and abso
   assert.equal(applications[0].logoUrl, '/api/apps/' + logicalResourceId + '/icon');
   assert.equal(applications[0].desktopShortcutDefaultVisible, true);
   assert.equal(applications[0].managedByServer, true);
-  assert.equal(applications[0].provenance.importedFrom, 'coolify');
+  assert.equal(applications[0].provenance.importedFrom, null);
 });
 
 test('a verified server domain preference changes the primary URL without changing application identity', () => {
