@@ -138,10 +138,14 @@ function readFoxosMigrationManagement(dataRoot, resources = []) {
 
   function recordManagement(resourceId, management) {
     const current = managementByResourceId.get(resourceId);
+    const replacesDefinitionOnlyAdoption = Boolean(
+      current && current.lifecycle === 'inactive-definition-transfer' &&
+      management.lifecycle === 'inactive-definition-runtime'
+    );
     const currentPriority = current && current.state === 'active' ? 1 : 0;
     const nextPriority = management.state === 'active' ? 1 : 0;
     if (
-      !current || nextPriority > currentPriority ||
+      !current || replacesDefinitionOnlyAdoption || nextPriority > currentPriority ||
       (nextPriority === currentPriority && String(management.completedAt).localeCompare(String(current.completedAt)) > 0)
     ) managementByResourceId.set(resourceId, management);
   }

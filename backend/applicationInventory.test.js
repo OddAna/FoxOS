@@ -535,3 +535,70 @@ test('a recovered inactive definition runtime replaces the stopped definition ca
   assert.equal(applications[0].capabilities.stop, true);
   assert.equal(applications[0].capabilities.start, false);
 });
+
+test('a stopped recovered runtime remains one logical application instead of revealing its old definition card', () => {
+  const logicalResourceId = 'res_' + '5'.repeat(32);
+  const candidateResourceId = 'res_' + '6'.repeat(32);
+  const candidateContainerId = '7'.repeat(64);
+  const applications = buildApplicationInventory({
+    appStates: [{
+      id: 'discovered-firefox',
+      installed: true,
+      canManage: true,
+      managedByFoxOS: true,
+      installationSource: 'foxos',
+      name: 'firefox',
+      publisher: 'Sunucu',
+      externalUrl: null,
+      containerId: candidateContainerId,
+      containerName: 'firefox',
+      state: 'exited',
+      status: 'Exited (0) 1 minute ago'
+    }],
+    containers: [{
+      Id: candidateContainerId,
+      Image: 'jlesage/firefox@sha256:' + '8'.repeat(64),
+      Names: ['/firefox'],
+      State: 'exited',
+      Status: 'Exited (0) 1 minute ago'
+    }],
+    resources: [{
+      id: logicalResourceId,
+      kind: 'provider-definition',
+      name: 'firefox',
+      provider: 'coolify',
+      ownership: 'observed',
+      provenance: { externalDefinition: { providerKind: 'service', serviceType: 'firefox' } },
+      runtime: { containerId: null, state: 'stopped' },
+      management: {
+        owner: 'foxos',
+        state: 'attention-required',
+        lifecycle: 'inactive-definition-runtime',
+        candidateContainerId,
+        candidateResourceId,
+        domains: ['firefox.example.com'],
+        authorityActive: false
+      }
+    }, {
+      id: candidateResourceId,
+      kind: 'container',
+      name: 'firefox',
+      provider: 'foxos',
+      ownership: 'foxos-managed',
+      runtime: {
+        containerId: candidateContainerId,
+        state: 'exited',
+        health: { status: 'unhealthy' }
+      }
+    }]
+  });
+
+  assert.equal(applications.length, 1);
+  assert.equal(applications[0].id, logicalResourceId);
+  assert.equal(applications[0].name, 'firefox.example.com');
+  assert.equal(applications[0].runtime.containerId, candidateContainerId);
+  assert.equal(applications[0].runtime.operationalState, 'stopped');
+  assert.equal(applications[0].managedByServer, true);
+  assert.equal(applications[0].capabilities.start, true);
+  assert.equal(applications[0].desktopShortcutDefaultVisible, true);
+});

@@ -928,6 +928,74 @@ test('inactive definition runtime projects its verified candidate onto the logic
   assert.equal(management.trafficVerified, true);
 });
 
+test('a stopped inactive-definition runtime supersedes its earlier definition-only adoption', () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-registry-stopped-inactive-runtime-'));
+  const resourceId = 'res_' + 'a'.repeat(32);
+  const candidateResourceId = 'res_' + 'b'.repeat(32);
+  const candidateContainerId = 'c'.repeat(64);
+  const adoptionOperationId = 'rtop_' + 'd'.repeat(32);
+  const runtimeOperationId = 'rtop_' + 'e'.repeat(32);
+  const routeId = 'smroute_' + 'f'.repeat(24);
+  const domain = 'firefox.example.com';
+  fs.mkdirSync(path.join(dataRoot, 'runtime-transfers', 'operations'), { recursive: true });
+  fs.mkdirSync(path.join(dataRoot, 'inactive-definition-runtimes', 'operations'), { recursive: true });
+  fs.mkdirSync(path.join(dataRoot, 'ingress'), { recursive: true });
+  fs.writeFileSync(path.join(
+    dataRoot,
+    'runtime-transfers',
+    'operations',
+    adoptionOperationId + '.json'
+  ), JSON.stringify({
+    operationId: adoptionOperationId,
+    resourceId,
+    memberResourceIds: [resourceId],
+    status: 'server-definition-adopted',
+    completedAt: '2026-08-07T12:00:00.000Z',
+    routes: [],
+    manifests: [{ resourceId, name: 'firefox', provenance: { importedFrom: 'coolify' } }]
+  }));
+  fs.writeFileSync(path.join(
+    dataRoot,
+    'inactive-definition-runtimes',
+    'operations',
+    runtimeOperationId + '.json'
+  ), JSON.stringify({
+    schemaVersion: 1,
+    operationId: runtimeOperationId,
+    resourceId,
+    status: 'server-definition-runtime-active',
+    candidateContainerId,
+    candidateResourceId,
+    application: { name: 'firefox' },
+    route: { routeId, domain, path: '/', privatePort: 5800 },
+    runtimeState: 'stopped',
+    trafficProof: { healthy: false, tlsValid: true, expectedRoute: false, statusCode: 503 },
+    completedAt: '2026-08-07T14:00:00.000Z'
+  }));
+  fs.writeFileSync(path.join(dataRoot, 'ingress', 'authority.json'), JSON.stringify({
+    owner: 'foxos',
+    publicAuthorityActive: true,
+    domains: { [domain]: 'foxos' },
+    routes: {},
+    inactiveDomains: { [domain]: { resourceId, responseStatus: 503 } }
+  }));
+
+  try {
+    const management = readFoxosMigrationManagement(dataRoot, [{
+      id: candidateResourceId,
+      runtime: { containerId: candidateContainerId, state: 'exited' }
+    }]).get(resourceId);
+    assert.equal(management.lifecycle, 'inactive-definition-runtime');
+    assert.equal(management.state, 'attention-required');
+    assert.equal(management.candidateContainerId, candidateContainerId);
+    assert.equal(management.candidateResourceId, candidateResourceId);
+    assert.equal(management.candidateRunning, false);
+    assert.equal(management.authorityActive, false);
+  } finally {
+    fs.rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
 test('route-less inactive definition runtime becomes active from candidate and internal HTTP proof', () => {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-registry-inactive-runtime-'));
   const resourceId = 'res_' + '6'.repeat(32);
