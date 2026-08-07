@@ -339,23 +339,23 @@ function readFoxosMigrationManagement(dataRoot, resources = []) {
     const route = operation.route || {};
     const authorityRoute = route.routeId && authority && authority.routes && authority.routes[route.routeId] || null;
     const domains = route.domain ? [route.domain] : [];
-    const routeAuthorityActive = Boolean(
-      route.domain && authority && authority.owner === 'foxos' &&
-      authority.publicAuthorityActive === true && authorityRoute &&
+    const routeAuthorityActive = !route.domain || Boolean(
+      authority && authority.owner === 'foxos' && authority.publicAuthorityActive === true && authorityRoute &&
       authorityRoute.operationId === operation.operationId && authorityRoute.status === 'active' &&
       authority.domains && authority.domains[route.domain] === 'foxos'
     );
     const candidateRunning = Boolean(
       candidateResource && candidateResource.runtime && candidateResource.runtime.state === 'running'
     );
-    const trafficVerified = Boolean(
-      operation.trafficProof && operation.trafficProof.healthy === true &&
-      operation.trafficProof.tlsValid === true && operation.trafficProof.expectedRoute === true
-    );
+    const trafficVerified = Boolean(operation.trafficProof && operation.trafficProof.healthy === true && (
+      route.domain
+        ? operation.trafficProof.tlsValid === true && operation.trafficProof.expectedRoute === true
+        : operation.trafficProof.internal === true
+    ));
     recordManagement(operation.resourceId, {
       owner: 'foxos',
       logicalResourceId: operation.resourceId,
-      state: routeAuthorityActive && trafficVerified ? 'active' : 'attention-required',
+      state: routeAuthorityActive && candidateRunning && trafficVerified ? 'active' : 'attention-required',
       lifecycle: 'inactive-definition-runtime',
       operationId: operation.operationId,
       routeId: route.routeId || null,

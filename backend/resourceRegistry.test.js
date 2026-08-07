@@ -927,3 +927,39 @@ test('inactive definition runtime projects its verified candidate onto the logic
   assert.equal(management.candidateRunning, true);
   assert.equal(management.trafficVerified, true);
 });
+
+test('route-less inactive definition runtime becomes active from candidate and internal HTTP proof', () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-registry-inactive-runtime-'));
+  const resourceId = 'res_' + '6'.repeat(32);
+  const candidateResourceId = 'res_' + '7'.repeat(32);
+  const candidateContainerId = '8'.repeat(64);
+  const operationId = 'rtop_' + '9'.repeat(32);
+  fs.mkdirSync(path.join(dataRoot, 'inactive-definition-runtimes', 'operations'), { recursive: true });
+  fs.writeFileSync(path.join(
+    dataRoot,
+    'inactive-definition-runtimes',
+    'operations',
+    operationId + '.json'
+  ), JSON.stringify({
+    schemaVersion: 1,
+    operationId,
+    resourceId,
+    status: 'server-definition-runtime-active',
+    candidateContainerId,
+    candidateResourceId,
+    application: { name: 'route-less-app' },
+    route: { routeId: null, domain: null, path: '/', privatePort: 3000 },
+    trafficProof: { healthy: true, internal: true, statusCode: 200 },
+    completedAt: '2026-08-07T14:00:00.000Z'
+  }));
+
+  const management = readFoxosMigrationManagement(dataRoot, [{
+    id: candidateResourceId,
+    runtime: { containerId: candidateContainerId, state: 'running' }
+  }]).get(resourceId);
+  assert.equal(management.state, 'active');
+  assert.deepEqual(management.domains, []);
+  assert.equal(management.authorityActive, true);
+  assert.equal(management.candidateRunning, true);
+  assert.equal(management.trafficVerified, true);
+});

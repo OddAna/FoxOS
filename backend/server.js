@@ -957,6 +957,16 @@ const inactiveDefinitionRuntimeManager = createInactiveDefinitionRuntimeManager(
   readRecoveryArtifact: (artifact) => coolifyMigrationReader.readRecoveryArtifact(artifact),
   certificateImporter,
   ingressAuthority: ingressAuthorityManager,
+  internalHttpProbe: async ({ alias, privatePort, requestPath }) => {
+    const infrastructure = await ingressAuthorityManager.inspectOwnedInfrastructure();
+    const gatewayId = infrastructure && infrastructure.gateway && infrastructure.gateway.Id;
+    const result = await dockerClient.exec(gatewayId, [
+      'wget', '--server-response', '--output-document=/dev/null', '--timeout=2',
+      `http://${alias}:${privatePort}${requestPath}`
+    ], { timeoutMs: 5000, maxResponseBytes: 64 * 1024 });
+    const match = String(result.output || '').match(/HTTP\/1\.[01]\s+([0-9]{3})/i);
+    return { statusCode: match ? Number.parseInt(match[1], 10) : null };
+  },
   routingNetwork: process.env.FOXOS_ROUTE_NETWORK || 'foxos-routing'
 });
 const statelessMigrationManager = createStatelessMigrationManager({
