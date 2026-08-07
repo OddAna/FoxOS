@@ -987,6 +987,7 @@ function createResourceRegistry({
   dockerRequest,
   hostResourceReader = null,
   providerResourceReader = null,
+  volumeCapacityReader = null,
   clock = () => new Date(),
   randomUUID = () => crypto.randomUUID()
 }) {
@@ -1088,6 +1089,51 @@ function createResourceRegistry({
       resources.push(normalizeObservedResource(observation, resourceId));
     }
 
+    const capacityCandidates = resources.filter((resource) => (
+      resource.kind === 'container' && resource.classification &&
+      resource.classification.workloadRole === 'application' &&
+      resource.classification.stateClass === 'stateful' &&
+      Array.isArray(resource.mounts) && resource.mounts.length >= 1 && resource.mounts.length <= 4 &&
+      resource.mounts.every((mount) => (
+        mount.type === 'volume' && mount.name && mount.destination && mount.readOnly !== true
+      ))
+    ));
+    if (typeof volumeCapacityReader === 'function') {
+      await mapLimit(capacityCandidates, 2, async (resource) => {
+        try {
+          const evidence = await volumeCapacityReader({
+            volumes: resource.mounts.map((mount) => ({ name: mount.name }))
+          });
+          const blockerCode = evidence && evidence.supported !== true
+            ? 'stateful-storage-layout-unsupported'
+            : evidence && evidence.withinTransactionLimit !== true
+              ? 'stateful-presync-required'
+              : evidence && evidence.capacitySufficient !== true
+                ? 'stateful-storage-capacity-insufficient'
+                : null;
+          resource.migrationStorage = {
+            status: blockerCode ? 'blocked' : 'ready',
+            blockerCode,
+            totalBytes: Number(evidence && evidence.totalBytes) || 0,
+            maximumTransactionBytes: Number(evidence && evidence.maximumTransactionBytes) || 0,
+            withinTransactionLimit: evidence && evidence.withinTransactionLimit === true,
+            capacitySufficient: evidence && evidence.capacitySufficient === true,
+            inspectedReadOnly: true
+          };
+        } catch {
+          resource.migrationStorage = {
+            status: 'blocked',
+            blockerCode: 'stateful-capacity-inspection-failed',
+            totalBytes: null,
+            maximumTransactionBytes: null,
+            withinTransactionLimit: false,
+            capacitySufficient: false,
+            inspectedReadOnly: true
+          };
+        }
+      });
+    }
+
     resources.sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
     const migrationManagement = readFoxosMigrationManagement(dataRoot, resources);
     attachFoxosMigrationManagement(resources, migrationManagement);
@@ -1145,7 +1191,8 @@ function createResourceRegistry({
         classificationMethod: 'deterministic-local-evidence',
         classificationDoesNotImplyOwnership: true,
         foxosManagementDerivedFromVerifiedLocalAuthority: true,
-        statelessDoesNotProveApplicationDataFree: true
+        statelessDoesNotProveApplicationDataFree: true,
+        volumeCapacityInspectedReadOnly: typeof volumeCapacityReader === 'function'
       },
       ...snapshotCore
     };

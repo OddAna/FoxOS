@@ -156,12 +156,39 @@ function harness() {
     managed,
     manager,
     protectedCore,
+    resources,
     root,
     secretValue,
     stateful,
     stateless: resources.find((entry) => entry.id === stateless.id)
   };
 }
+
+test('stateful storage evidence blocks selection without pretending the adapter is unimplemented', () => {
+  const { manager, resources, root } = harness();
+  try {
+    const stateful = resources.find((entry) => entry.name === 'stateful-app');
+    stateful.migrationStorage = {
+      status: 'blocked',
+      blockerCode: 'stateful-presync-required',
+      totalBytes: 42 * 1024 * 1024 * 1024,
+      maximumTransactionBytes: 256 * 1024 * 1024,
+      withinTransactionLimit: false,
+      capacitySufficient: false,
+      inspectedReadOnly: true
+    };
+    const plan = manager.createPlan({ confirmation: PLAN_SERVER_MIGRATION_CONFIRMATION });
+    const projected = plan.resources.find((entry) => entry.resourceId === stateful.id);
+    assert.equal(projected.readiness.reviewEligible, false);
+    assert.equal(projected.readiness.applyImplemented, true);
+    assert.equal(projected.availability.currentMode, 'stateful-presync-required');
+    assert.equal(projected.blockers.implementation.some((entry) => (
+      entry.code === 'stateful-presync-required'
+    )), true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('whole-server planning is deterministic, class-aware, redacted and plan-only', () => {
   const { database, managed, manager, protectedCore, root, secretValue, stateful, stateless } = harness();

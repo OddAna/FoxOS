@@ -76,6 +76,13 @@ const dockerMock = http.createServer((req, res) => {
       Warnings: []
     });
   }
+  if (req.method === 'GET' && req.url.startsWith('/volumes/')) {
+    const volumeMount = mockContainer && (mockContainer.Mounts || [])
+      .find((mount) => mount.Type === 'volume' && mount.Name === decodeURIComponent(req.url.slice('/volumes/'.length)));
+    return volumeMount
+      ? respond(200, { Name: volumeMount.Name, Mountpoint: volumeMount.Source })
+      : respond(404, { message: 'No such volume' });
+  }
   if (req.method === 'POST' && req.url.startsWith('/images/create?')) {
     return respond(200, '{"status":"downloaded"}\n{"status":"complete"}\n');
   }
@@ -747,6 +754,9 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   assert.equal(stoppedCustomApp.hostPort, 18085);
 
   const registrySecret = 'http-registry-secret-value';
+  const registryVolumePath = path.join(testRoot, 'var/lib/docker/volumes/registry-data/_data');
+  fs.mkdirSync(registryVolumePath, { recursive: true });
+  fs.writeFileSync(path.join(registryVolumePath, 'registry.db'), 'test-data');
   mockContainer = {
     Id: 'e'.repeat(64),
     Image: 'example/registry-web:latest',

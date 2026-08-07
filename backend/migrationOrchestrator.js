@@ -393,7 +393,7 @@ function createMigrationOrchestrator({
       classification && classification.independenceAudit &&
       classification.independenceAudit.eligibleForReadOnlyAudit === true
     );
-    const statefulReviewEligible = Boolean(
+    const statefulAdapterEligible = Boolean(
       resource.kind === 'container' && migrationRequired &&
       strategy === 'shadow-refresh-bounded-quiesce' &&
       (!providerGroup || providerGroup.memberResourceIds.length === 1) &&
@@ -406,8 +406,12 @@ function createMigrationOrchestrator({
         mount.type === 'volume' && mount.name && mount.destination && mount.readOnly !== true
       ))
     );
+    const statefulStorageReady = Boolean(
+      !resource.migrationStorage || resource.migrationStorage.status === 'ready'
+    );
+    const statefulReviewEligible = statefulAdapterEligible && statefulStorageReady;
     const reviewEligible = statelessReviewEligible || statefulReviewEligible;
-    const applyImplemented = statelessReviewEligible || statefulReviewEligible;
+    const applyImplemented = statelessReviewEligible || statefulAdapterEligible;
     const conflicts = (currentSnapshot.conflicts || []).filter((entry) => (
       (entry.resourceIds || []).includes(resource.id)
     )).map((entry) => ({
@@ -462,6 +466,16 @@ function createMigrationOrchestrator({
     ]) : [];
     const gaps = migrationRequired ? implementationGaps(resource, strategy, conflicts, applyImplemented) : [];
     if (
+      migrationRequired && strategy === 'shadow-refresh-bounded-quiesce' &&
+      statefulAdapterEligible && resource.migrationStorage && resource.migrationStorage.status !== 'ready'
+    ) {
+      gaps.push(blocker(
+        resource.migrationStorage.blockerCode || 'stateful-capacity-inspection-failed',
+        'storage',
+        'The source volume does not satisfy the direct bounded-pause migration storage gate.'
+      ));
+    }
+    if (
       migrationRequired && providerGroup && providerGroup.parentResourceId === resource.id &&
       providerGroup.memberResourceIds.length > 1
     ) {
@@ -511,7 +525,12 @@ function createMigrationOrchestrator({
         : null,
       classification,
       strategy,
-      availability: availabilityPolicy(resource, strategy, applyImplemented),
+      availability: {
+        ...availabilityPolicy(resource, strategy, applyImplemented),
+        ...(strategy === 'shadow-refresh-bounded-quiesce' && resource.migrationStorage && resource.migrationStorage.status !== 'ready'
+          ? { currentMode: resource.migrationStorage?.blockerCode || 'stateful-capacity-inspection-failed' }
+          : {})
+      },
       evidence: {
         registrySnapshotId: currentSnapshot.snapshotId,
         manifestRevisionId: manifest && manifest.revisionId || null,
@@ -519,6 +538,7 @@ function createMigrationOrchestrator({
         sourceType: manifest && manifest.desired && manifest.desired.source && manifest.desired.source.type || null,
         routeCount: (resource.routes || []).length + (resource.declaredRoutes || []).length,
         mountCount: (resource.mounts || []).length,
+        migrationStorage: resource.migrationStorage || null,
         environmentVariableCount: resource.runtime && resource.runtime.environmentVariableCount,
         secretValuesIncluded: false
       },

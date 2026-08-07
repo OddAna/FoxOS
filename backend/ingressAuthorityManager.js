@@ -196,6 +196,7 @@ function createIngressAuthorityManager({
     }
 
     let bridge = null;
+    let effectiveLegacyNetwork = legacyNetwork;
     try {
       bridge = await dockerRequest('GET', '/containers/' + encodeURIComponent(legacyBridgeContainer) + '/json');
     } catch (error) {
@@ -203,13 +204,19 @@ function createIngressAuthorityManager({
     }
     if (bridge) {
       const labels = bridge.Config && bridge.Config.Labels || {};
+      const recordedLegacyNetwork = labels['com.foxos.legacy.network'];
+      const existingBridgeNetworks = bridge.NetworkSettings && bridge.NetworkSettings.Networks || {};
       if (
         labels['com.foxos.migration.bridge'] !== 'true' ||
         labels['com.foxos.legacy.proxy'] !== proxyContainerId ||
-        labels['com.foxos.legacy.network'] !== legacyNetwork
+        !NETWORK_NAME_PATTERN.test(String(recordedLegacyNetwork || '')) ||
+        !proxyNetworks[recordedLegacyNetwork] ||
+        !existingBridgeNetworks[recordedLegacyNetwork] ||
+        !existingBridgeNetworks[routingNetwork]
       ) {
         throw new IngressAuthorityError('The legacy bridge name is occupied by another object', 409, 'legacy-bridge-conflict');
       }
+      effectiveLegacyNetwork = recordedLegacyNetwork;
       if (!bridge.State || bridge.State.Running !== true) {
         await dockerRequest('POST', '/containers/' + bridge.Id + '/start');
       }
@@ -263,14 +270,14 @@ function createIngressAuthorityManager({
       bridge = await dockerRequest('GET', '/containers/' + created.Id + '/json');
     }
     const bridgeNetworks = bridge.NetworkSettings && bridge.NetworkSettings.Networks || {};
-    if (!bridgeNetworks[legacyNetwork] || !bridgeNetworks[routingNetwork]) {
+    if (!bridgeNetworks[effectiveLegacyNetwork] || !bridgeNetworks[routingNetwork]) {
       throw new IngressAuthorityError('Legacy bridge network proof failed', 503, 'legacy-bridge-network-failed');
     }
     const current = state();
     current.legacyBridge = {
       containerId: bridge.Id,
       proxyContainerId,
-      legacyNetwork,
+      legacyNetwork: effectiveLegacyNetwork,
       sourcePreserved: true,
       providerStateMutated: false
     };

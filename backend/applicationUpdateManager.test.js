@@ -49,6 +49,10 @@ test('stateful update snapshot streams encrypted volume data and restores the ex
     dockerRequest: async () => ({ Mountpoint: '/var/lib/docker/volumes/example-data/_data' })
   });
   const volume = { name: 'example-data' };
+  const capacity = await adapter.inspectCapacity({ volumes: [volume], maximumTransactionBytes: 1024 * 1024 });
+  assert.equal(capacity.supported, true);
+  assert.equal(capacity.withinTransactionLimit, true);
+  assert.equal(capacity.capacitySufficient, true);
   const snapshot = await adapter.create({ operationId: 'auop_' + 'c'.repeat(32), volume });
   assert.equal(fs.readFileSync(path.join(dataRoot, snapshot.file)).includes(Buffer.from('before-update')), false);
   fs.writeFileSync(path.join(mountedData, 'database.sqlite'), 'after-update');

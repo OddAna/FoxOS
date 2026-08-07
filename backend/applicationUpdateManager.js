@@ -178,6 +178,43 @@ function childResult(child, label) {
   });
 }
 
+function filesystemAvailableBytes(target) {
+  const stats = fs.statfsSync(target, { bigint: true });
+  const bytes = stats.bavail * stats.bsize;
+  return Number(bytes > BigInt(Number.MAX_SAFE_INTEGER) ? BigInt(Number.MAX_SAFE_INTEGER) : bytes);
+}
+
+function nearestExistingDirectory(target) {
+  let current = path.resolve(target);
+  while (!fs.existsSync(current)) {
+    const parent = path.dirname(current);
+    if (parent === current) throw new Error('No existing filesystem root is available for capacity inspection');
+    current = parent;
+  }
+  if (!fs.statSync(current).isDirectory()) current = path.dirname(current);
+  return current;
+}
+
+async function directoryArchiveBytes(root, maximumEntries = 1000000) {
+  const stack = [root];
+  let bytes = 20n * 1024n;
+  let entries = 0;
+  while (stack.length) {
+    const directory = stack.pop();
+    const children = await fs.promises.readdir(directory, { withFileTypes: true });
+    for (const child of children) {
+      entries += 1;
+      if (entries > maximumEntries) throw new Error('Volume contains too many entries for bounded capacity inspection');
+      const target = path.join(directory, child.name);
+      const stats = await fs.promises.lstat(target, { bigint: true });
+      bytes += stats.size + 1024n;
+      if (child.isDirectory()) stack.push(target);
+      if (bytes > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('Volume size exceeds the safe numeric range');
+    }
+  }
+  return Number(bytes);
+}
+
 function hashPassThrough(hash, counter, maximumBytes = MAX_SNAPSHOT_BYTES) {
   return new Transform({
     transform(chunk, encoding, callback) {
@@ -216,6 +253,59 @@ function createEncryptedVolumeSnapshotAdapter({
     }
     const details = await dockerRequest('GET', '/volumes/' + encodeURIComponent(name));
     return normalizeMountpoint(hostRoot, details && details.Mountpoint);
+  }
+
+  async function inspectCapacity({ volumes, maximumTransactionBytes = maximumSnapshotBytes }) {
+    if (
+      !Array.isArray(volumes) || volumes.length < 1 ||
+      !Number.isSafeInteger(maximumTransactionBytes) || maximumTransactionBytes < 1
+    ) throw new Error('Volume capacity inspection policy is invalid');
+    const capacityRoot = nearestExistingDirectory(fs.existsSync(snapshotsRoot) ? snapshotsRoot : dataRoot);
+    const mountpoints = [];
+    let totalBytes = 0;
+    for (const volume of volumes) {
+      const mountpoint = await volumeMountpoint(volume.name);
+      const bytes = await directoryArchiveBytes(mountpoint);
+      mountpoints.push(mountpoint);
+      totalBytes += bytes;
+      if (!Number.isSafeInteger(totalBytes)) throw new Error('Combined volume size exceeds the safe numeric range');
+    }
+    const volumeDevices = new Set(mountpoints.map((mountpoint) => String(fs.statSync(mountpoint, { bigint: true }).dev)));
+    if (volumeDevices.size !== 1) {
+      return {
+        supported: false,
+        reason: 'multiple-volume-filesystems',
+        totalBytes,
+        maximumTransactionBytes,
+        withinTransactionLimit: false,
+        capacitySufficient: false
+      };
+    }
+    const snapshotDevice = String(fs.statSync(capacityRoot, { bigint: true }).dev);
+    const volumeDevice = [...volumeDevices][0];
+    const snapshotAvailableBytes = filesystemAvailableBytes(capacityRoot);
+    const volumeAvailableBytes = filesystemAvailableBytes(mountpoints[0]);
+    const reserveBytes = Math.max(256 * 1024 * 1024, Math.ceil(totalBytes * 0.05));
+    const sharedFilesystem = snapshotDevice === volumeDevice;
+    const requiredSnapshotBytes = totalBytes + reserveBytes;
+    const requiredTargetBytes = totalBytes + reserveBytes;
+    const capacitySufficient = sharedFilesystem
+      ? snapshotAvailableBytes >= requiredSnapshotBytes + requiredTargetBytes
+      : snapshotAvailableBytes >= requiredSnapshotBytes && volumeAvailableBytes >= requiredTargetBytes;
+    return {
+      supported: true,
+      totalBytes,
+      maximumTransactionBytes,
+      withinTransactionLimit: totalBytes <= maximumTransactionBytes,
+      capacitySufficient,
+      sharedFilesystem,
+      snapshotAvailableBytes,
+      volumeAvailableBytes,
+      requiredFreeBytes: sharedFilesystem
+        ? requiredSnapshotBytes + requiredTargetBytes
+        : Math.max(requiredSnapshotBytes, requiredTargetBytes),
+      reserveBytes
+    };
   }
 
   async function create({ operationId, volume }) {
@@ -345,7 +435,7 @@ function createEncryptedVolumeSnapshotAdapter({
     };
   }
 
-  return { create, restore, paths: { snapshotsRoot } };
+  return { create, inspectCapacity, restore, paths: { snapshotsRoot } };
 }
 
 function createApplicationUpdateManager({

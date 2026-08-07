@@ -48,7 +48,10 @@ const {
 } = require('./statelessMigrationReviewManager');
 const { createIngressAuthorityManager } = require('./ingressAuthorityManager');
 const { createProductionStatelessMigrationAdapter } = require('./productionStatelessMigrationAdapter');
-const { createProductionStatefulMigrationAdapter } = require('./productionStatefulMigrationAdapter');
+const {
+  MAX_DIRECT_STATEFUL_TRANSACTION_BYTES,
+  createProductionStatefulMigrationAdapter
+} = require('./productionStatefulMigrationAdapter');
 const { createTraefikCertificateImporter } = require('./traefikCertificateImporter');
 const { createUiApprovalManager } = require('./uiApprovalManager');
 const { createBackupManager } = require('./backupManager');
@@ -704,6 +707,14 @@ const coolifyMigrationReader = createCoolifyMigrationReader({
   dataRoot: DATA_ROOT,
   encryptionStore
 });
+const statefulMigrationVolumeSnapshots = createEncryptedVolumeSnapshotAdapter({
+  dataRoot: DATA_ROOT,
+  hostRoot: HOST_ROOT,
+  dockerRequest,
+  encryptionStore,
+  snapshotsDirectory: path.join('stateful-migrations', 'snapshots'),
+  snapshotPurpose: 'stateful-final-volume'
+});
 
 const resourceRegistry = createResourceRegistry({
   dataRoot: DATA_ROOT,
@@ -712,7 +723,11 @@ const resourceRegistry = createResourceRegistry({
     hostRoot: HOST_ROOT,
     hostRead: runExactHostObservation
   }),
-  providerResourceReader: () => coolifyMigrationReader.scan()
+  providerResourceReader: () => coolifyMigrationReader.scan(),
+  volumeCapacityReader: ({ volumes }) => statefulMigrationVolumeSnapshots.inspectCapacity({
+    volumes,
+    maximumTransactionBytes: MAX_DIRECT_STATEFUL_TRANSACTION_BYTES
+  })
 });
 const hostServiceManager = createHostServiceManager({
   resourceRegistry,
@@ -801,14 +816,6 @@ const applicationUpdateVolumeSnapshots = createEncryptedVolumeSnapshotAdapter({
   hostRoot: HOST_ROOT,
   dockerRequest,
   encryptionStore
-});
-const statefulMigrationVolumeSnapshots = createEncryptedVolumeSnapshotAdapter({
-  dataRoot: DATA_ROOT,
-  hostRoot: HOST_ROOT,
-  dockerRequest,
-  encryptionStore,
-  snapshotsDirectory: path.join('stateful-migrations', 'snapshots'),
-  snapshotPurpose: 'stateful-final-volume'
 });
 const applicationUpdateManager = createApplicationUpdateManager({
   dataRoot: DATA_ROOT,

@@ -117,6 +117,10 @@ const CLASS_LABELS = {
 const AVAILABILITY_LABELS = {
   'zero-downtime-required': 'Kesintisiz geçiş gerekli',
   'bounded-quiesce-budget-required': 'Onaylı kısa duraklama bütçesi gerekli',
+  'stateful-presync-required': 'Çalışırken ön eşitleme gerekli',
+  'stateful-storage-capacity-insufficient': 'Yeterli boş depolama yok',
+  'stateful-storage-layout-unsupported': 'Depolama düzeni desteklenmiyor',
+  'stateful-capacity-inspection-failed': 'Depolama doğrulaması tamamlanamadı',
   'bounded-quiesce-ready': 'Kontrollü kısa duraklama ve otomatik geri alma',
   'database-aware-handoff-required': 'Veritabanı tutarlılığı korunmalı',
   'already-managed': 'Mevcut çalışma korunacak',
@@ -170,8 +174,23 @@ const BLOCKER_LABELS = {
   'provider-resource-group-transaction-required': 'Uygulama ve aynı kurulum grubundaki veritabanı/runner tek doğrulanmış işlemde geçirilmelidir.',
   'host-service-manifest-missing': 'Host servisi için sunucuya ait manifest ve geri alma sürümü eksik.',
   'host-network-service-adoption-not-implemented': 'Host ağ servisi için anahtar koruması ve birebir geri alma işlemi hazırlanıyor.',
-  'host-service-adoption-not-implemented': 'systemd servisi için yapılandırma yakalama ve geri alma işlemi hazırlanıyor.'
+  'host-service-adoption-not-implemented': 'systemd servisi için yapılandırma yakalama ve geri alma işlemi hazırlanıyor.',
+  'stateful-presync-required': 'Veri, kısa duraklamalı doğrudan kopyalama için fazla büyük. Kaynak çalışırken ön eşitleme yapılmadan geçiş başlatılamaz.',
+  'stateful-storage-capacity-insufficient': 'Şifreli anlık görüntü ve yeni çalışma kopyası için sunucuda yeterli boş alan yok.',
+  'stateful-storage-layout-unsupported': 'Veri birimleri bu otomatik geçiş yönteminin güvenle doğrulayamadığı depolama düzeninde.',
+  'stateful-capacity-inspection-failed': 'Veri boyutu ve kullanılabilir depolama güvenle doğrulanamadığı için geçiş başlatılmadı.',
+  'legacy-bridge-conflict': 'Mevcut sunucu yönlendirme köprüsü doğrulanamadığı için kaynak değiştirilmeden işlem durduruldu.'
 };
+
+function runBlocker(run) {
+  return run?.error || run?.blockers?.[0] ||
+    run?.resources?.flatMap((resource) => resource.blockers || [])[0] || null;
+}
+
+function runBlockerText(run) {
+  const blocker = runBlocker(run);
+  return blocker && (BLOCKER_LABELS[blocker.code] || blocker.message || blocker.code);
+}
 
 function reviewState(resource) {
   if (resource.protected) return 'protected';
@@ -356,9 +375,12 @@ const MigrationSettings = () => {
               text: `Geçiş güvenlik kapısında durdu. ${payload.run.summary.blocked} kaynakta tamamlanması gereken önkoşul var; hiçbir kaynak çalıştırılmadı.`
             });
           } else {
+            const detail = runBlockerText(payload.run);
             setMessage({
               type: 'error',
-              text: 'Geçiş sırası durduruldu. Ayrıntılı işlem kaydı sunucuda korundu.'
+              text: detail
+                ? `Geçiş sırası durduruldu. ${detail}`
+                : 'Geçiş sırası durduruldu. Ayrıntılı işlem kaydı sunucuda korundu.'
             });
           }
         }
@@ -809,6 +831,7 @@ const MigrationSettings = () => {
       return current?.management?.owner === 'foxos' && current.management.state === 'active';
     })
   );
+  const latestRunBlockerText = runBlockerText(latestRun);
 
   return (
     <div ref={rootRef}>
@@ -923,9 +946,14 @@ const MigrationSettings = () => {
             </div>
             {latestRun && (
               <div style={{ marginBottom: '14px', color: '#888', fontSize: '12px' }}>
-                {latestRunAlreadyManaged
-                ? `Son durum: Sunucu yönetiminde · ${latestRun.resources.length}/${latestRun.resources.length} tamamlandı`
-                  : `Son işlem: ${RUN_STATUS_LABELS[latestRun.status] || latestRun.status} · ${latestRun.summary?.completed || 0}/${latestRun.summary?.selected || 0} tamamlandı`}
+                <div>
+                  {latestRunAlreadyManaged
+                    ? `Son durum: Sunucu yönetiminde · ${latestRun.resources.length}/${latestRun.resources.length} tamamlandı`
+                    : `Son işlem: ${RUN_STATUS_LABELS[latestRun.status] || latestRun.status} · ${latestRun.summary?.completed || 0}/${latestRun.summary?.selected || 0} tamamlandı`}
+                </div>
+                {!latestRunAlreadyManaged && latestRunBlockerText && (
+                  <div style={{ marginTop: '5px', color: '#ff8a84', lineHeight: 1.45 }}>{latestRunBlockerText}</div>
+                )}
               </div>
             )}
             <button

@@ -16,7 +16,7 @@ const RESOURCE_ID = 'res_' + '1'.repeat(32);
 const OPERATION_ID = 'stmop_' + '2'.repeat(32);
 const ROUTE_ID = 'smroute_' + '3'.repeat(24);
 
-function harness({ localDependency = false } = {}) {
+function harness({ localDependency = false, capacity = null } = {}) {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-production-stateful-'));
   const calls = [];
   const volumes = new Map();
@@ -174,6 +174,18 @@ function harness({ localDependency = false } = {}) {
       ]
     },
     volumeSnapshots: {
+      inspectCapacity: async () => capacity || ({
+        supported: true,
+        totalBytes: 128,
+        maximumTransactionBytes: 256 * 1024 * 1024,
+        withinTransactionLimit: true,
+        capacitySufficient: true,
+        sharedFilesystem: true,
+        snapshotAvailableBytes: 1024 * 1024 * 1024,
+        volumeAvailableBytes: 1024 * 1024 * 1024,
+        requiredFreeBytes: 512 * 1024 * 1024,
+        reserveBytes: 256 * 1024 * 1024
+      }),
       create: async ({ operationId, volume }) => {
         const record = {
           operationId,
@@ -285,6 +297,36 @@ test('preflight rejects a local companion dependency before pausing or creating 
     );
     assert.equal(context.source.State.Paused, false);
     assert.equal(context.volumes.size, 0);
+    assert.equal(context.calls.some((entry) => entry[1] && entry[1].includes('/containers/create')), false);
+  } finally {
+    fs.rmSync(context.dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('preflight rejects an oversized stateful source before ingress, pause, snapshot or candidate mutation', async () => {
+  const context = harness({
+    capacity: {
+      supported: true,
+      totalBytes: 42 * 1024 * 1024 * 1024,
+      maximumTransactionBytes: 256 * 1024 * 1024,
+      withinTransactionLimit: false,
+      capacitySufficient: false,
+      sharedFilesystem: true,
+      snapshotAvailableBytes: 40 * 1024 * 1024 * 1024,
+      volumeAvailableBytes: 40 * 1024 * 1024 * 1024,
+      requiredFreeBytes: 86 * 1024 * 1024 * 1024,
+      reserveBytes: 2 * 1024 * 1024 * 1024
+    }
+  });
+  try {
+    await assert.rejects(
+      context.adapter.preflight({ plan: context.plan, operationId: OPERATION_ID }),
+      (error) => error.code === 'stateful-presync-required'
+    );
+    assert.equal(context.source.State.Paused, false);
+    assert.equal(context.snapshots.length, 0);
+    assert.equal(context.volumes.size, 0);
+    assert.equal(context.ingressCalls.length, 0);
     assert.equal(context.calls.some((entry) => entry[1] && entry[1].includes('/containers/create')), false);
   } finally {
     fs.rmSync(context.dataRoot, { recursive: true, force: true });

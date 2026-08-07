@@ -9,6 +9,7 @@ const CONTAINER_ID_PATTERN = /^[a-f0-9]{12,64}$/;
 const IMAGE_ID_PATTERN = /^sha256:[a-f0-9]{64}$/;
 const DEFAULT_HEALTH_ATTEMPTS = 60;
 const DEFAULT_HEALTH_INTERVAL_MS = 500;
+const MAX_DIRECT_STATEFUL_TRANSACTION_BYTES = 256 * 1024 * 1024;
 
 class ProductionStatefulMigrationError extends Error {
   constructor(message, statusCode = 409, code = 'production-stateful-migration-error') {
@@ -63,7 +64,8 @@ function createProductionStatefulMigrationAdapter({
     !dataRoot || typeof dockerRequest !== 'function' || typeof dockerExec !== 'function' ||
     !resourceRegistry || typeof resourceRegistry.getLatest !== 'function' ||
     !secretManager || typeof secretManager.resolveEnvironment !== 'function' ||
-    !volumeSnapshots || typeof volumeSnapshots.create !== 'function' || typeof volumeSnapshots.restore !== 'function' ||
+    !volumeSnapshots || typeof volumeSnapshots.create !== 'function' ||
+    typeof volumeSnapshots.inspectCapacity !== 'function' || typeof volumeSnapshots.restore !== 'function' ||
     !certificateImporter || typeof certificateImporter.importDomain !== 'function' ||
     !ingressAuthority || typeof ingressAuthority.stageRoutes !== 'function' ||
     typeof ingressAuthority.verifyLegacyDomain !== 'function' ||
@@ -205,8 +207,42 @@ function createProductionStatefulMigrationAdapter({
     if (dependencies.length) {
       throw new ProductionStatefulMigrationError('A local companion service requires an atomic group migration', 409, 'stateful-dependency-transaction-required');
     }
-    const proxy = routeProxy(snapshot, resource);
     const contract = plan.executionContract;
+    let capacity;
+    try {
+      capacity = await volumeSnapshots.inspectCapacity({
+        volumes: contract.candidate.volumes.map((volume) => ({ name: volume.sourceName })),
+        maximumTransactionBytes: MAX_DIRECT_STATEFUL_TRANSACTION_BYTES
+      });
+    } catch {
+      throw new ProductionStatefulMigrationError(
+        'The source volume size and available storage could not be verified',
+        503,
+        'stateful-capacity-inspection-failed'
+      );
+    }
+    if (!capacity || capacity.supported !== true) {
+      throw new ProductionStatefulMigrationError(
+        'The source volume storage layout requires a dedicated migration adapter',
+        409,
+        'stateful-storage-layout-unsupported'
+      );
+    }
+    if (capacity.withinTransactionLimit !== true) {
+      throw new ProductionStatefulMigrationError(
+        'The source data is too large for a bounded-pause direct copy and requires pre-synchronization',
+        409,
+        'stateful-presync-required'
+      );
+    }
+    if (capacity.capacitySufficient !== true) {
+      throw new ProductionStatefulMigrationError(
+        'The host does not have enough free storage for the encrypted snapshot and restored candidate',
+        507,
+        'stateful-storage-capacity-insufficient'
+      );
+    }
+    const proxy = routeProxy(snapshot, resource);
     const application = contract.application;
     await requireAbsent('/containers/' + encodeURIComponent(application.name) + '/json', 'candidate-name-conflict');
     for (const volume of contract.candidate.volumes) {
@@ -249,6 +285,16 @@ function createProductionStatefulMigrationAdapter({
       },
       proxy: { containerId: proxy.proxy.runtime.containerId, legacyNetwork: proxy.legacyNetwork },
       environmentRevision: environment.revision,
+      capacity: {
+        totalBytes: capacity.totalBytes,
+        maximumTransactionBytes: capacity.maximumTransactionBytes,
+        capacitySufficient: capacity.capacitySufficient,
+        sharedFilesystem: capacity.sharedFilesystem,
+        snapshotAvailableBytes: capacity.snapshotAvailableBytes,
+        volumeAvailableBytes: capacity.volumeAvailableBytes,
+        requiredFreeBytes: capacity.requiredFreeBytes,
+        reserveBytes: capacity.reserveBytes
+      },
       application,
       snapshots: [],
       targetVolumes: [],
@@ -658,6 +704,7 @@ function createProductionStatefulMigrationAdapter({
       productionRouteCutover: true,
       automaticRollback: true,
       exactSourcePreserved: true,
+      storageCapacityGate: true,
       providerDetach: false
     },
     cleanupCandidate,
@@ -678,6 +725,7 @@ function createProductionStatefulMigrationAdapter({
 }
 
 module.exports = {
+  MAX_DIRECT_STATEFUL_TRANSACTION_BYTES,
   PRODUCTION_STATEFUL_ADAPTER_SCHEMA_VERSION,
   ProductionStatefulMigrationError,
   createProductionStatefulMigrationAdapter,

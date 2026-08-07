@@ -306,3 +306,59 @@ test('legacy bridge overrides the agent healthcheck with its own listening ports
   assert.deepEqual(probeCommands.at(-1).command.slice(-2), ['app.example.com', '/healthz']);
   fs.rmSync(dataRoot, { recursive: true, force: true });
 });
+
+test('legacy bridge reuses its verified proxy network across application-specific source networks', async () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-ingress-shared-legacy-bridge-'));
+  const proxyId = '1'.repeat(64);
+  const agentId = '2'.repeat(64);
+  const bridgeId = '3'.repeat(64);
+  const requests = [];
+  const manager = createIngressAuthorityManager({
+    dataRoot,
+    dockerRequest: async (method, requestPath) => {
+      requests.push([method, requestPath]);
+      if (method === 'GET' && requestPath === '/containers/' + proxyId + '/json') {
+        return {
+          Id: proxyId,
+          Name: '/legacy-proxy',
+          State: { Running: true },
+          NetworkSettings: { Networks: { 'app-network': {}, 'proxy-control': {} } }
+        };
+      }
+      if (method === 'GET' && requestPath === '/containers/foxos/json') {
+        return { Id: agentId, Image: 'sha256:' + 'f'.repeat(64) };
+      }
+      if (method === 'GET' && requestPath === '/containers/foxos-legacy-ingress-bridge/json') {
+        return {
+          Id: bridgeId,
+          State: { Running: true },
+          Config: {
+            Labels: {
+              'com.foxos.migration.bridge': 'true',
+              'com.foxos.legacy.proxy': proxyId,
+              'com.foxos.legacy.network': 'proxy-control'
+            }
+          },
+          NetworkSettings: { Networks: { 'proxy-control': {}, 'foxos-routing': {} } }
+        };
+      }
+      throw new Error('Unexpected Docker request: ' + method + ' ' + requestPath);
+    },
+    dockerExec: async () => ({ exitCode: 0, output: '' }),
+    hostCommand: async () => ({ success: true })
+  });
+
+  try {
+    const bridge = await manager.ensureLegacyBridge({
+      proxyContainerId: proxyId,
+      legacyNetwork: 'app-network'
+    });
+    assert.equal(bridge.containerId, bridgeId);
+    assert.equal(bridge.legacyNetwork, 'proxy-control');
+    assert.equal(requests.some(([method, requestPath]) => (
+      method === 'POST' && requestPath.startsWith('/containers/create?name=')
+    )), false);
+  } finally {
+    fs.rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
