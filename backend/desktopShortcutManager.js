@@ -2,8 +2,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { atomicWriteJson } = require('./resourceRegistry');
 
-const DESKTOP_SHORTCUT_SCHEMA_VERSION = 2;
+const DESKTOP_SHORTCUT_SCHEMA_VERSION = 3;
 const APPLICATION_ID_PATTERN = /^(?:app|res)_[a-f0-9]{24,64}$/;
+const DESKTOP_ROOT = '/Masaüstü';
 
 class DesktopShortcutError extends Error {
   constructor(message, statusCode = 400, code = 'desktop-shortcut-error') {
@@ -28,8 +29,42 @@ function createDesktopShortcutManager({ dataRoot, clock = () => new Date() }) {
       schemaVersion: DESKTOP_SHORTCUT_SCHEMA_VERSION,
       updatedAt: null,
       hiddenApplicationIds: [],
-      visibleApplicationIds: []
+      visibleApplicationIds: [],
+      applicationLocations: {}
     };
+  }
+
+  function normalizeLocation(value) {
+    if (typeof value !== 'string' || value.includes('\0')) {
+      throw new DesktopShortcutError('Masaüstü klasörü geçersiz.', 400, 'invalid-shortcut-location');
+    }
+    const slashPath = value.trim().replace(/\\/g, '/');
+    const segments = slashPath.split('/').filter(Boolean);
+    if (
+      segments[0] !== DESKTOP_ROOT.slice(1) ||
+      segments.some((segment) => segment === '.' || segment === '..')
+    ) {
+      throw new DesktopShortcutError(
+        'Uygulama kısayolu yalnız Masaüstü içindeki bir klasöre taşınabilir.',
+        400,
+        'invalid-shortcut-location'
+      );
+    }
+    return '/' + segments.join('/');
+  }
+
+  function writeState(value) {
+    const updated = {
+      schemaVersion: DESKTOP_SHORTCUT_SCHEMA_VERSION,
+      updatedAt: now(),
+      hiddenApplicationIds: [...new Set(value.hiddenApplicationIds)].sort(),
+      visibleApplicationIds: [...new Set(value.visibleApplicationIds)].sort(),
+      applicationLocations: Object.fromEntries(
+        Object.entries(value.applicationLocations || {}).sort(([left], [right]) => left.localeCompare(right))
+      )
+    };
+    atomicWriteJson(stateFile, updated);
+    return updated;
   }
 
   function state() {
@@ -41,13 +76,19 @@ function createDesktopShortcutManager({ dataRoot, clock = () => new Date() }) {
       throw error;
     }
     const legacy = value.schemaVersion === 1;
+    const withoutLocations = value.schemaVersion === 1 || value.schemaVersion === 2;
     const hiddenApplicationIds = value.hiddenApplicationIds;
     const visibleApplicationIds = legacy ? [] : value.visibleApplicationIds;
+    const applicationLocations = withoutLocations ? {} : value.applicationLocations;
     if (
-      (!legacy && value.schemaVersion !== DESKTOP_SHORTCUT_SCHEMA_VERSION) ||
+      ![1, 2, DESKTOP_SHORTCUT_SCHEMA_VERSION].includes(value.schemaVersion) ||
       !Array.isArray(hiddenApplicationIds) || !Array.isArray(visibleApplicationIds) ||
+      !applicationLocations || Array.isArray(applicationLocations) || typeof applicationLocations !== 'object' ||
       [...hiddenApplicationIds, ...visibleApplicationIds]
-        .some((id) => !APPLICATION_ID_PATTERN.test(String(id)))
+        .some((id) => !APPLICATION_ID_PATTERN.test(String(id))) ||
+      Object.entries(applicationLocations).some(([id, location]) => (
+        !APPLICATION_ID_PATTERN.test(String(id)) || normalizeLocation(location) !== location
+      ))
     ) {
       throw new DesktopShortcutError(
         'Masaüstü kısayol tercihleri okunamadı.',
@@ -59,7 +100,8 @@ function createDesktopShortcutManager({ dataRoot, clock = () => new Date() }) {
       schemaVersion: DESKTOP_SHORTCUT_SCHEMA_VERSION,
       updatedAt: value.updatedAt || null,
       hiddenApplicationIds: [...new Set(hiddenApplicationIds)].sort(),
-      visibleApplicationIds: [...new Set(visibleApplicationIds)].sort()
+      visibleApplicationIds: [...new Set(visibleApplicationIds)].sort(),
+      applicationLocations: { ...applicationLocations }
     };
   }
 
@@ -89,13 +131,11 @@ function createDesktopShortcutManager({ dataRoot, clock = () => new Date() }) {
       shown.delete(applicationId);
       hidden.add(applicationId);
     }
-    const updated = {
-      schemaVersion: DESKTOP_SHORTCUT_SCHEMA_VERSION,
-      updatedAt: now(),
-      hiddenApplicationIds: [...hidden].sort(),
-      visibleApplicationIds: [...shown].sort()
-    };
-    atomicWriteJson(stateFile, updated);
+    const updated = writeState({
+      ...current,
+      hiddenApplicationIds: [...hidden],
+      visibleApplicationIds: [...shown]
+    });
     return {
       applicationId,
       visible,
@@ -103,9 +143,71 @@ function createDesktopShortcutManager({ dataRoot, clock = () => new Date() }) {
     };
   }
 
+  function location(applicationId) {
+    if (!APPLICATION_ID_PATTERN.test(String(applicationId || ''))) return DESKTOP_ROOT;
+    return state().applicationLocations[applicationId] || DESKTOP_ROOT;
+  }
+
+  function setLocation(applicationId, requestedLocation) {
+    if (!APPLICATION_ID_PATTERN.test(String(applicationId || ''))) {
+      throw new DesktopShortcutError('Uygulama kimliği geçersiz.', 400, 'invalid-application-id');
+    }
+    const shortcutLocation = normalizeLocation(requestedLocation);
+    const current = state();
+    const applicationLocations = { ...current.applicationLocations };
+    if (shortcutLocation === DESKTOP_ROOT) delete applicationLocations[applicationId];
+    else applicationLocations[applicationId] = shortcutLocation;
+    const updated = writeState({ ...current, applicationLocations });
+    return { applicationId, path: shortcutLocation, updatedAt: updated.updatedAt };
+  }
+
+  function relocateDirectory(sourceLocation, targetLocation) {
+    const source = normalizeLocation(sourceLocation);
+    const target = normalizeLocation(targetLocation);
+    if (source === DESKTOP_ROOT) {
+      throw new DesktopShortcutError('Masaüstü kökü taşınamaz.', 400, 'desktop-root-location-protected');
+    }
+    const current = state();
+    let moved = 0;
+    const applicationLocations = Object.fromEntries(
+      Object.entries(current.applicationLocations).map(([applicationId, applicationLocation]) => {
+        if (applicationLocation !== source && !applicationLocation.startsWith(source + '/')) {
+          return [applicationId, applicationLocation];
+        }
+        moved += 1;
+        return [applicationId, target + applicationLocation.slice(source.length)];
+      })
+    );
+    if (moved > 0) writeState({ ...current, applicationLocations });
+    return { moved, source, target };
+  }
+
+  function releaseDirectory(sourceLocation) {
+    const source = normalizeLocation(sourceLocation);
+    if (source === DESKTOP_ROOT) {
+      throw new DesktopShortcutError('Masaüstü kökü bırakılamaz.', 400, 'desktop-root-location-protected');
+    }
+    const current = state();
+    let released = 0;
+    const applicationLocations = { ...current.applicationLocations };
+    Object.entries(applicationLocations).forEach(([applicationId, applicationLocation]) => {
+      if (applicationLocation === source || applicationLocation.startsWith(source + '/')) {
+        delete applicationLocations[applicationId];
+        released += 1;
+      }
+    });
+    if (released > 0) writeState({ ...current, applicationLocations });
+    return { released, source, target: DESKTOP_ROOT };
+  }
+
   return {
     isVisible,
+    location,
+    normalizeLocation,
     paths: { stateFile },
+    releaseDirectory,
+    relocateDirectory,
+    setLocation,
     setVisible,
     state
   };
@@ -113,6 +215,7 @@ function createDesktopShortcutManager({ dataRoot, clock = () => new Date() }) {
 
 module.exports = {
   APPLICATION_ID_PATTERN,
+  DESKTOP_ROOT,
   DESKTOP_SHORTCUT_SCHEMA_VERSION,
   DesktopShortcutError,
   createDesktopShortcutManager

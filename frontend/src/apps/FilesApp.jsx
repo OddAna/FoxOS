@@ -1,13 +1,35 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { HardDrive, Download, Image as ImageIcon, FileText, Monitor, Trash2, ArrowLeft, ArrowUp, ArrowRight, RefreshCw, Grid, List, Search, ArrowDownAZ } from 'lucide-react';
+import { HardDrive, Download, Image as ImageIcon, FileText, Monitor, Trash2, ArrowLeft, ArrowUp, ArrowRight, RefreshCw, Grid, List, Search, ArrowDownAZ, Play, RotateCw, Settings as SettingsIcon, Square, X } from 'lucide-react';
 import { useWindowManager } from '../contexts/WindowContext';
 import { useDialog } from '../contexts/DialogContext';
 import { getFileIcon } from '../utils/fileIcons';
 import { apiFetch } from '../api';
+import ApplicationLogo from '../components/ApplicationLogo';
+import { useApplicationInventory } from '../contexts/ApplicationContext';
+import { APPLICATION_STATUS, applicationOperationalState } from '../utils/applicationStatus';
+import {
+  DESKTOP_ROOT,
+  applicationsAtShortcutPath,
+  canonicalDesktopPath,
+  folderApplicationOperationalState
+} from '../utils/desktopShortcuts';
+import {
+  applyApplicationUpdate,
+  checkAndPlanApplicationUpdate,
+  updateConfirmationMessage
+} from '../utils/applicationUpdates';
 
 const FilesApp = ({ initialPath = 'Masaüstü' }) => {
   const { showDialog } = useDialog();
+  const {
+    actions: applicationActions,
+    applications,
+    refreshApplications,
+    runApplicationAction: executeApplicationAction,
+    setDesktopShortcut,
+    setDesktopShortcutLocation
+  } = useApplicationInventory();
   const [currentPath, setCurrentPath] = useState(initialPath);
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -31,6 +53,24 @@ const FilesApp = ({ initialPath = 'Masaüstü' }) => {
   const fileRefs = useRef({});
   const searchTimeoutRef = useRef(null);
   const sortBtnRef = useRef(null);
+
+  const currentDesktopPath = canonicalDesktopPath(currentPath);
+  const currentApplications = currentDesktopPath
+    ? applicationsAtShortcutPath(applications, currentDesktopPath)
+    : [];
+  const entries = [
+    ...files.map((file) => ({ ...file, desktopKind: 'file' })),
+    ...currentApplications.map((application) => ({
+      id: `application:${application.id}`,
+      name: application.name,
+      type: 'application',
+      ext: null,
+      size: 0,
+      mtime: null,
+      desktopKind: 'application',
+      application
+    }))
+  ];
 
   const sidebarItems = [
     { id: 'desktop', icon: <Monitor size={16} />, label: 'Masaüstü', path: 'Masaüstü' },
@@ -188,8 +228,127 @@ const FilesApp = ({ initialPath = 'Masaüstü' }) => {
     }
   };
 
+  const openApplication = (application) => {
+    if (application.runtime.operationalState !== 'running') {
+      showDialog({
+        title: 'Servis Kapalı',
+        message: 'Bu uygulama şu anda kapalı. Sağ tıklayarak servisi başlatabilirsiniz.',
+        type: 'warning'
+      });
+      return;
+    }
+    if (application.externalUrl) {
+      window.open(application.externalUrl, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    if (!application.hostPort) {
+      showDialog({
+        title: 'Erişim Adresi Bulunamadı',
+        message: 'Bu uygulama için açılabilir bir alan adı veya yayın portu bulunamadı.',
+        type: 'info'
+      });
+      return;
+    }
+    const localFoxOS = ['127.0.0.1', 'localhost'].includes(window.location.hostname);
+    if (application.bindAddress === '127.0.0.1' && !localFoxOS) {
+      showDialog({
+        title: 'Özel Erişim',
+        message: `Bu uygulama 127.0.0.1:${application.hostPort} üzerinde çalışıyor. Aynı portu SSH tüneliyle açın.`,
+        type: 'info'
+      });
+      return;
+    }
+    const hostname = application.bindAddress === '127.0.0.1'
+      ? '127.0.0.1'
+      : window.location.hostname;
+    window.open(`http://${hostname}:${application.hostPort}`, '_blank', 'noopener,noreferrer');
+  };
+
+  const runApplicationAction = async (application, action) => {
+    setContextMenu(null);
+    try {
+      await executeApplicationAction(application, action);
+    } catch (actionError) {
+      showDialog({ title: 'İşlem Hatası', message: actionError.message, type: 'error' });
+    }
+  };
+
+  const openApplicationSettings = (application) => {
+    setContextMenu(null);
+    openWindow({
+      id: 'settings',
+      type: 'settings',
+      title: 'Ayarlar',
+      component: null,
+      width: 1000,
+      height: 680,
+      navigation: {
+        tab: 'applications',
+        applicationId: application.id,
+        requestId: Date.now()
+      }
+    });
+  };
+
+  const removeApplicationShortcut = async (application) => {
+    setContextMenu(null);
+    try {
+      await setDesktopShortcut(application, false);
+      setSelectedFileIds((current) => current.filter((id) => id !== `application:${application.id}`));
+    } catch (shortcutError) {
+      showDialog({ title: 'Kısayol Kaldırılamadı', message: shortcutError.message, type: 'error' });
+    }
+  };
+
+  const moveApplicationToDesktop = async (application) => {
+    setContextMenu(null);
+    try {
+      await setDesktopShortcutLocation(application, DESKTOP_ROOT);
+    } catch (shortcutError) {
+      showDialog({ title: 'Kısayol Taşınamadı', message: shortcutError.message, type: 'error' });
+    }
+  };
+
+  const checkApplicationUpdate = async (application) => {
+    setContextMenu(null);
+    try {
+      const { update: result, plan } = await checkAndPlanApplicationUpdate(application.id);
+      if (plan) {
+        showDialog({
+          title: 'Güncellemeyi Uygula',
+          message: updateConfirmationMessage(plan),
+          type: 'confirm',
+          confirmText: 'Güncelle',
+          cancelText: 'Vazgeç',
+          onConfirm: async () => {
+            try {
+              const operation = await applyApplicationUpdate(plan.planId);
+              await refreshApplications();
+              showDialog({ title: 'Güncelleme Tamamlandı', message: operation.message, type: 'success' });
+            } catch (updateError) {
+              showDialog({ title: 'Güncelleme Tamamlanamadı', message: updateError.message, type: 'error' });
+            }
+          }
+        });
+        return;
+      }
+      showDialog({
+        title: result.status === 'update-available' ? 'Güncelleme Bulundu' : 'Güncelleme Denetimi',
+        message: result.message,
+        type: 'info',
+        confirmText: 'Tamam'
+      });
+    } catch (updateError) {
+      showDialog({ title: 'Güncelleme Denetimi', message: updateError.message, type: 'error' });
+    }
+  };
+
   const handleDoubleClick = (e, file) => {
     e.stopPropagation();
+    if (file.desktopKind === 'application') {
+      openApplication(file.application);
+      return;
+    }
     if (file.type === 'folder') {
       navigateTo(currentPath === '/' ? file.name : `${currentPath}/${file.name}`);
     } else {
@@ -239,7 +398,7 @@ const FilesApp = ({ initialPath = 'Masaüstü' }) => {
     setContextMenu({
       x: e.clientX,
       y: e.clientY,
-      type: file ? 'file' : 'grid',
+      type: file ? file.desktopKind : 'grid',
       file: file
     });
   };
@@ -328,7 +487,7 @@ const FilesApp = ({ initialPath = 'Masaüstü' }) => {
     
     let dragFilesData = [];
     if (selectedFileIds.includes(file.id) && selectedFileIds.length > 1) {
-      dragFilesData = files
+      dragFilesData = entries
         .filter(f => selectedFileIds.includes(f.id))
         .map(f => {
            const el = fileRefs.current[f.id];
@@ -336,12 +495,21 @@ const FilesApp = ({ initialPath = 'Masaüstü' }) => {
            return {
              id: f.id,
              name: f.name,
+             desktopKind: f.desktopKind,
+             applicationId: f.desktopKind === 'application' ? f.application.id : null,
              relX: elRect.left - rect.left,
              relY: elRect.top - rect.top
            };
         });
     } else {
-      dragFilesData = [{ id: file.id, name: file.name, relX: 0, relY: 0 }];
+      dragFilesData = [{
+        id: file.id,
+        name: file.name,
+        desktopKind: file.desktopKind,
+        applicationId: file.desktopKind === 'application' ? file.application.id : null,
+        relX: 0,
+        relY: 0
+      }];
     }
 
     e.dataTransfer.setData('text/plain', JSON.stringify({
@@ -407,6 +575,13 @@ const FilesApp = ({ initialPath = 'Masaüstü' }) => {
       if (srcPath === currentPath) return; // Same directory
       
       const promises = filesToMove.map(f => {
+        if (f.desktopKind === 'application' && f.applicationId) {
+          const application = applications.find((candidate) => candidate.id === f.applicationId);
+          if (!application || !currentDesktopPath) {
+            return Promise.reject(new Error('Uygulama yalnız Masaüstü klasörlerine taşınabilir'));
+          }
+          return setDesktopShortcutLocation(application, currentDesktopPath);
+        }
         let sourceFile = srcPath === 'Masaüstü' ? `/Masaüstü/${f.name}` : `${srcPath === '/' ? '' : srcPath}/${f.name}`;
         return apiFetch('/api/move', {
           method: 'POST',
@@ -436,13 +611,21 @@ const FilesApp = ({ initialPath = 'Masaüstü' }) => {
       if (filesToMove.length === 0) return;
       
       // Target folder can't be one of the dragged items
-      if (filesToMove.some(f => f.name === targetFolder.name)) return;
+      if (filesToMove.some(f => f.desktopKind !== 'application' && f.name === targetFolder.name)) return;
       
       const srcPath = data.sourcePath;
       const targetPath = `${currentPath === '/' ? '' : currentPath}/${targetFolder.name}`;
+      const targetDesktopPath = canonicalDesktopPath(targetPath);
       if (srcPath === targetPath) return;
       
       const promises = filesToMove.map(f => {
+        if (f.desktopKind === 'application' && f.applicationId) {
+          const application = applications.find((candidate) => candidate.id === f.applicationId);
+          if (!application || !targetDesktopPath) {
+            return Promise.reject(new Error('Uygulama yalnız Masaüstü klasörlerine taşınabilir'));
+          }
+          return setDesktopShortcutLocation(application, targetDesktopPath);
+        }
         let sourceFile = srcPath === 'Masaüstü' ? `/Masaüstü/${f.name}` : `${srcPath === '/' ? '' : srcPath}/${f.name}`;
         return apiFetch('/api/move', {
           method: 'POST',
@@ -470,7 +653,7 @@ const FilesApp = ({ initialPath = 'Masaüstü' }) => {
       const newQuery = typeSelectQuery + e.key.toLowerCase();
       setTypeSelectQuery(newQuery);
       
-      const match = files.find(f => f.name.toLowerCase().startsWith(newQuery));
+      const match = entries.find(f => f.name.toLowerCase().startsWith(newQuery));
       if (match) {
         setSelectedFileIds([match.id]);
         const el = fileRefs.current[match.id];
@@ -486,7 +669,7 @@ const FilesApp = ({ initialPath = 'Masaüstü' }) => {
     }
   };
 
-  const sortedFiles = [...files].sort((a, b) => {
+  const sortedFiles = [...entries].sort((a, b) => {
     const isFolderA = a.type === 'folder';
     const isFolderB = b.type === 'folder';
     
@@ -697,7 +880,7 @@ const FilesApp = ({ initialPath = 'Masaüstü' }) => {
         >
           {loading && <div style={{ color: '#ccc', fontSize: '14px', width: '100%', textAlign: 'center' }}>Yükleniyor...</div>}
           {error && <div style={{ color: '#ff5f56', fontSize: '14px', width: '100%', textAlign: 'center' }}>{error}</div>}
-          {!loading && !error && files.length === 0 && (
+          {!loading && !error && entries.length === 0 && (
             <div style={{ color: '#ccc', fontSize: '14px', width: '100%', textAlign: 'center' }}>Klasör boş.</div>
           )}
           
@@ -706,7 +889,7 @@ const FilesApp = ({ initialPath = 'Masaüstü' }) => {
           )}
           
           {/* List View Header */}
-          {!loading && !error && viewMode === 'list' && files.length > 0 && (
+          {!loading && !error && viewMode === 'list' && entries.length > 0 && (
             <div style={{ display: 'flex', width: '100%', padding: '0 12px 8px 12px', borderBottom: '1px solid rgba(255,255,255,0.1)', color: '#ccc', fontSize: '12px', fontWeight: 'bold' }}>
               <span style={{ flex: 1, paddingLeft: '32px' }}>Ad</span>
               <div style={{ display: 'flex', minWidth: '280px', textAlign: 'left' }}>
@@ -720,6 +903,16 @@ const FilesApp = ({ initialPath = 'Masaüstü' }) => {
           {/* Files */}
           {!loading && !error && filteredFiles.map(file => {
             const isSelected = selectedFileIds.includes(file.id);
+            const applicationState = file.desktopKind === 'application'
+              ? applicationOperationalState(file.application, applicationActions[file.application.id])
+              : null;
+            const folderState = file.type === 'folder' && currentDesktopPath
+              ? folderApplicationOperationalState(
+                  canonicalDesktopPath(`${currentDesktopPath}/${file.name}`),
+                  applications,
+                  applicationActions
+                )
+              : null;
             return (
               <div 
                 key={file.id} 
@@ -750,7 +943,39 @@ const FilesApp = ({ initialPath = 'Masaüstü' }) => {
               >
                 {/* Scale icon down if list mode */}
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: viewMode === 'list' ? '24px' : 'auto', height: viewMode === 'list' ? '24px' : 'auto' }}>
-                  {React.cloneElement(getFileIcon(file), { size: viewMode === 'list' ? 24 : 48 })}
+                  {file.desktopKind === 'application' ? (
+                    <div style={{ position: 'relative', width: viewMode === 'list' ? '24px' : '48px', height: viewMode === 'list' ? '24px' : '48px' }}>
+                      <div style={{ width: '100%', height: '100%', background: 'rgba(255,255,255,0.9)', borderRadius: viewMode === 'list' ? '6px' : '10px', padding: viewMode === 'list' ? '4px' : '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }}>
+                        <ApplicationLogo app={file.application} size={viewMode === 'list' ? 16 : 32} />
+                      </div>
+                      <div
+                        style={{
+                          position: 'absolute', right: viewMode === 'list' ? '-3px' : '-4px', bottom: viewMode === 'list' ? '-3px' : '-4px',
+                          width: viewMode === 'list' ? '9px' : '14px', height: viewMode === 'list' ? '9px' : '14px',
+                          borderRadius: '50%',
+                          background: (APPLICATION_STATUS[applicationState] || APPLICATION_STATUS.stopped).color,
+                          border: `${viewMode === 'list' ? 1 : 2}px solid rgba(20, 20, 25, 0.9)`,
+                          boxShadow: '0 2px 4px rgba(0,0,0,0.3)', zIndex: 2
+                        }}
+                        title={`Durum: ${applicationState}`}
+                      />
+                    </div>
+                  ) : folderState ? (
+                    <div style={{ position: 'relative', width: viewMode === 'list' ? '24px' : '48px', height: viewMode === 'list' ? '24px' : '48px' }}>
+                      {getFileIcon(file, viewMode === 'list' ? 24 : 48)}
+                      <div
+                        style={{
+                          position: 'absolute', right: viewMode === 'list' ? '-3px' : '-4px', bottom: viewMode === 'list' ? '-3px' : '-4px',
+                          width: viewMode === 'list' ? '9px' : '14px', height: viewMode === 'list' ? '9px' : '14px',
+                          borderRadius: '50%',
+                          background: (APPLICATION_STATUS[folderState] || APPLICATION_STATUS.stopped).color,
+                          border: `${viewMode === 'list' ? 1 : 2}px solid rgba(20, 20, 25, 0.9)`,
+                          boxShadow: '0 2px 4px rgba(0,0,0,0.3)', zIndex: 2
+                        }}
+                        title={`Klasör durumu: ${folderState}`}
+                      />
+                    </div>
+                  ) : getFileIcon(file, viewMode === 'list' ? 24 : 48)}
                 </div>
                 <span style={{ 
                   fontSize: '13px', 
@@ -774,8 +999,8 @@ const FilesApp = ({ initialPath = 'Masaüstü' }) => {
                 
                 {viewMode === 'list' && (
                   <div style={{ display: 'flex', minWidth: '280px', color: '#ccc', fontSize: '12px', textAlign: 'left', alignItems: 'center' }}>
-                    <span style={{ width: '100px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.type === 'folder' ? 'Klasör' : file.ext?.toUpperCase().replace('.', '') || 'Dosya'}</span>
-                    <span style={{ width: '60px', textAlign: 'right' }}>{file.type === 'folder' ? '--' : formatSize(file.size)}</span>
+                    <span style={{ width: '100px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.type === 'folder' ? 'Klasör' : file.desktopKind === 'application' ? 'Uygulama' : file.ext?.toUpperCase().replace('.', '') || 'Dosya'}</span>
+                    <span style={{ width: '60px', textAlign: 'right' }}>{file.type === 'folder' || file.desktopKind === 'application' ? '--' : formatSize(file.size)}</span>
                     <span style={{ width: '120px', textAlign: 'right' }}>{formatDate(file.mtime)}</span>
                   </div>
                 )}
@@ -820,7 +1045,27 @@ const FilesApp = ({ initialPath = 'Masaüstü' }) => {
           onClick={(e) => e.stopPropagation()}
           onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
         >
-          {contextMenu.type === 'file' ? (
+          {contextMenu.type === 'application' ? (
+            <>
+              <div className="context-item" onClick={() => openApplication(contextMenu.file.application)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>Aç</div>
+              <div className="context-item" onClick={() => openApplicationSettings(contextMenu.file.application)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><SettingsIcon size={14} /> Ayarlar'a Git</div>
+              {contextMenu.file.application.capabilities.checkUpdates && (
+                <div className="context-item" onClick={() => checkApplicationUpdate(contextMenu.file.application)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><RotateCw size={14} /> Güncellemeleri Denetle</div>
+              )}
+              <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '4px 0' }} />
+              {contextMenu.file.application.capabilities.stop ? (
+                <div className="context-item" onClick={() => runApplicationAction(contextMenu.file.application, 'stop')} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><Square size={14} /> Durdur</div>
+              ) : contextMenu.file.application.capabilities.start ? (
+                <div className="context-item" onClick={() => runApplicationAction(contextMenu.file.application, 'start')} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><Play size={14} /> Başlat</div>
+              ) : null}
+              {contextMenu.file.application.capabilities.restart && (
+                <div className="context-item" onClick={() => runApplicationAction(contextMenu.file.application, 'restart')} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><RotateCw size={14} /> Yeniden Başlat</div>
+              )}
+              <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '4px 0' }} />
+              <div className="context-item" onClick={() => moveApplicationToDesktop(contextMenu.file.application)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>Masaüstüne Taşı</div>
+              <div className="context-item" onClick={() => removeApplicationShortcut(contextMenu.file.application)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', color: '#ff8a84', display: 'flex', alignItems: 'center', gap: '6px' }}><X size={14} /> Masaüstünden Kaldır</div>
+            </>
+          ) : contextMenu.type === 'file' ? (
             <>
               <div className="context-item" onClick={(e) => { handleDoubleClick(e, contextMenu.file); setContextMenu(null); }} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>Aç</div>
               <div className="context-item" onClick={() => handleRename(contextMenu.file)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>Yeniden Adlandır</div>

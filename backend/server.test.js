@@ -506,6 +506,9 @@ test('health is public while management APIs require a session', async () => {
   assert.equal((await fetch(baseUrl() + '/api/applications/' + applicationOperationsId + '/desktop-shortcut', {
     method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{"visible":false}'
   })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/applications/' + applicationOperationsId + '/desktop-shortcut-location', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{"path":"/Masaüstü/Projeler"}'
+  })).status, 401);
   const migrationRunStartResponse = await fetch(baseUrl() + '/api/migration-runs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -720,6 +723,7 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   assert.equal(applicationInventory.applications[0].capabilities.start, true);
   assert.equal(applicationInventory.applications[0].capabilities.stop, false);
   assert.equal(applicationInventory.applications[0].desktopShortcutVisible, true);
+  assert.equal(applicationInventory.applications[0].desktopShortcutPath, '/Masaüstü');
 
   const applicationId = applicationInventory.applications[0].id;
   const hideShortcutResponse = await fetch(baseUrl() + '/api/applications/' + applicationId + '/desktop-shortcut', {
@@ -736,6 +740,49 @@ test('setup creates an authenticated session and unlocks the workspace', async (
     body: JSON.stringify({ visible: true })
   });
   assert.equal(showShortcutResponse.status, 200);
+
+  const createShortcutFolderResponse = await fetch(baseUrl() + '/api/mkdir', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: '/Masaüstü', name: 'Projeler' })
+  });
+  assert.equal(createShortcutFolderResponse.status, 201);
+  const moveShortcutResponse = await fetch(
+    baseUrl() + '/api/applications/' + applicationId + '/desktop-shortcut-location',
+    {
+      method: 'PUT',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: '/Masaüstü/Projeler' })
+    }
+  );
+  assert.equal(moveShortcutResponse.status, 200);
+  assert.equal((await moveShortcutResponse.json()).shortcut.path, '/Masaüstü/Projeler');
+  const movedShortcutInventory = await (await fetch(baseUrl() + '/api/applications', {
+    headers: { Cookie: cookie }
+  })).json();
+  assert.equal(movedShortcutInventory.applications[0].desktopShortcutPath, '/Masaüstü/Projeler');
+
+  const renameShortcutFolderResponse = await fetch(baseUrl() + '/api/rename', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filePath: '/Masaüstü/Projeler', newName: 'Müşteriler' })
+  });
+  assert.equal(renameShortcutFolderResponse.status, 200);
+  const renamedShortcutInventory = await (await fetch(baseUrl() + '/api/applications', {
+    headers: { Cookie: cookie }
+  })).json();
+  assert.equal(renamedShortcutInventory.applications[0].desktopShortcutPath, '/Masaüstü/Müşteriler');
+
+  const deleteShortcutFolderResponse = await fetch(baseUrl() + '/api/delete', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filePath: '/Masaüstü/Müşteriler' })
+  });
+  assert.equal(deleteShortcutFolderResponse.status, 200);
+  const releasedShortcutInventory = await (await fetch(baseUrl() + '/api/applications', {
+    headers: { Cookie: cookie }
+  })).json();
+  assert.equal(releasedShortcutInventory.applications[0].desktopShortcutPath, '/Masaüstü');
 
   const composeFilesResponse = await fetch(baseUrl() + '/api/applications/' + applicationId + '/compose-files', {
     headers: { Cookie: cookie }

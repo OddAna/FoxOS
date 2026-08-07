@@ -17,6 +17,12 @@ import TerminalApp from './apps/TerminalApp';
 import AppStoreApp from './apps/AppStoreApp';
 import ApplicationLogo from './components/ApplicationLogo';
 import { APPLICATION_STATUS, applicationOperationalState } from './utils/applicationStatus';
+import {
+  DESKTOP_ROOT,
+  applicationShortcutPath,
+  canonicalDesktopPath,
+  folderApplicationOperationalState
+} from './utils/desktopShortcuts';
 import { ApplicationProvider, useApplicationInventory } from './contexts/ApplicationContext';
 import { useAuth } from './contexts/AuthContext';
 import SetupScreen from './components/auth/SetupScreen';
@@ -36,9 +42,13 @@ const Desktop = () => {
     applications,
     refreshApplications,
     runApplicationAction: executeApplicationAction,
-    setDesktopShortcut
+    setDesktopShortcut,
+    setDesktopShortcutLocation
   } = useApplicationInventory();
-  const desktopApplications = applications.filter((application) => application.desktopShortcutVisible !== false);
+  const visibleDesktopApplications = applications.filter((application) => application.desktopShortcutVisible !== false);
+  const desktopApplications = visibleDesktopApplications.filter((application) => (
+    applicationShortcutPath(application) === DESKTOP_ROOT
+  ));
   const [desktopMenu, setDesktopMenu] = useState(null);
   const [desktopFiles, setDesktopFiles] = useState([]);
   const [selectedIds, setSelectedIds] = useState([]);
@@ -227,6 +237,7 @@ const Desktop = () => {
              name: candidate.name,
              positionKey: candidate.positionKey,
              desktopKind: candidate.desktopKind,
+             applicationId: candidate.desktopKind === 'application' ? candidate.application.id : null,
              relX: pos.left - anchorPos.left,
              relY: pos.top - anchorPos.top
            };
@@ -237,6 +248,7 @@ const Desktop = () => {
         name: item.name,
         positionKey: item.positionKey,
         desktopKind: item.desktopKind,
+        applicationId: item.desktopKind === 'application' ? item.application.id : null,
         relX: 0,
         relY: 0
       }];
@@ -330,6 +342,12 @@ const Desktop = () => {
 
       if (data.sourcePath && data.sourcePath !== 'Masaüstü') {
         const promises = filesToMove.map(f => {
+          if (f.desktopKind === 'application' && f.applicationId) {
+            const application = applications.find((candidate) => candidate.id === f.applicationId);
+            return application
+              ? setDesktopShortcutLocation(application, DESKTOP_ROOT)
+              : Promise.reject(new Error('Uygulama artık sunucuda bulunamıyor'));
+          }
           const sourceFile = data.sourcePath === '/' ? `/${f.name}` : `${data.sourcePath}/${f.name}`;
           return apiFetch('/api/move', {
             method: 'POST',
@@ -394,13 +412,18 @@ const Desktop = () => {
       const data = JSON.parse(dataStr);
       const filesToMove = data.files || (data.name ? [{ name: data.name }] : []);
       if (filesToMove.length === 0) return;
-      if (filesToMove.some((file) => file.desktopKind === 'application')) return;
       
-      if (filesToMove.some(f => f.name === targetFolder.name)) return;
+      if (filesToMove.some(f => f.desktopKind !== 'application' && f.name === targetFolder.name)) return;
       
-      const targetPath = `/Masaüstü/${targetFolder.name}`;
+      const targetPath = canonicalDesktopPath(`/Masaüstü/${targetFolder.name}`);
       
       const promises = filesToMove.map(f => {
+        if (f.desktopKind === 'application' && f.applicationId) {
+          const application = applications.find((candidate) => candidate.id === f.applicationId);
+          return application
+            ? setDesktopShortcutLocation(application, targetPath)
+            : Promise.reject(new Error('Uygulama artık sunucuda bulunamıyor'));
+        }
         const srcPath = data.sourcePath;
         let sourceFile = srcPath === 'Masaüstü' ? `/Masaüstü/${f.name}` : `${srcPath === '/' ? '' : srcPath}/${f.name}`;
         
@@ -783,6 +806,13 @@ const Desktop = () => {
         {desktopItems.map((item) => {
           const isSelected = selectedIds.includes(item.desktopId);
           const pos = getDesktopItemPosition(item);
+          const folderState = item.desktopKind === 'file' && item.type === 'folder'
+            ? folderApplicationOperationalState(
+                canonicalDesktopPath(`/Masaüstü/${item.name}`),
+                visibleDesktopApplications,
+                applicationActions
+              )
+            : null;
 
           return (
             <div
@@ -840,7 +870,21 @@ const Desktop = () => {
                     />
                   </div>
                 );
-              })() : getFileIcon(item.file)}
+              })() : folderState ? (
+                <div style={{ position: 'relative', width: '48px', height: '48px' }}>
+                  {getFileIcon(item.file)}
+                  <div
+                    style={{
+                      position: 'absolute', right: '-4px', bottom: '-4px', width: '14px', height: '14px',
+                      borderRadius: '50%',
+                      background: (APPLICATION_STATUS[folderState] || APPLICATION_STATUS.stopped).color,
+                      border: '2px solid rgba(20, 20, 25, 0.9)',
+                      boxShadow: '0 2px 4px rgba(0,0,0,0.3)', zIndex: 2
+                    }}
+                    title={`Klasör durumu: ${folderState}`}
+                  />
+                </div>
+              ) : getFileIcon(item.file)}
               <span style={{
                 color: '#fff',
                 fontSize: '12px',

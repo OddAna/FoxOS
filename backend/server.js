@@ -127,6 +127,7 @@ const {
   createEncryptedVolumeSnapshotAdapter
 } = require('./applicationUpdateManager');
 const {
+  DESKTOP_ROOT,
   DesktopShortcutError,
   createDesktopShortcutManager
 } = require('./desktopShortcutManager');
@@ -723,6 +724,50 @@ const dockerRequest = dockerClient.request;
 const encryptionStore = createEncryptionStore({ dataRoot: DATA_ROOT });
 const maintenanceSessionManager = createMaintenanceSessionManager({ dataRoot: DATA_ROOT });
 const desktopShortcutManager = createDesktopShortcutManager({ dataRoot: DATA_ROOT });
+
+function desktopShortcutPathForWorkspaceTarget(target) {
+  const desktopDirectory = path.join(DISK_ROOT, DESKTOP_ROOT.slice(1));
+  const relative = path.relative(desktopDirectory, target);
+  if (relative === '') return DESKTOP_ROOT;
+  if (relative.startsWith('..' + path.sep) || relative === '..' || path.isAbsolute(relative)) return null;
+  return DESKTOP_ROOT + '/' + relative.split(path.sep).join('/');
+}
+
+function validatedDesktopShortcutFolder(requestedPath) {
+  const shortcutPath = desktopShortcutManager.normalizeLocation(requestedPath);
+  const target = resolveWorkspacePath(shortcutPath);
+  if (!fs.existsSync(target) || !fs.statSync(target).isDirectory()) {
+    throw new DesktopShortcutError('Hedef masaüstü klasörü bulunamadı.', 404, 'shortcut-folder-not-found');
+  }
+  const desktopDirectory = path.join(DISK_ROOT, DESKTOP_ROOT.slice(1));
+  const realDesktop = fs.realpathSync(desktopDirectory);
+  const realTarget = fs.realpathSync(target);
+  const relative = path.relative(realDesktop, realTarget);
+  if (relative.startsWith('..' + path.sep) || relative === '..' || path.isAbsolute(relative)) {
+    throw new DesktopShortcutError(
+      'Uygulama kısayolu yalnız gerçek bir Masaüstü klasöründe tutulabilir.',
+      400,
+      'shortcut-folder-outside-desktop'
+    );
+  }
+  return shortcutPath;
+}
+
+function projectedDesktopShortcutLocation(applicationId) {
+  const configured = desktopShortcutManager.location(applicationId);
+  try {
+    return validatedDesktopShortcutFolder(configured);
+  } catch {
+    if (configured !== DESKTOP_ROOT) {
+      try {
+        desktopShortcutManager.setLocation(applicationId, DESKTOP_ROOT);
+      } catch {
+        // Keep inventory available even if stale shortcut state cannot be repaired.
+      }
+    }
+    return DESKTOP_ROOT;
+  }
+}
 const coolifyMigrationReader = createCoolifyMigrationReader({
   dataRoot: DATA_ROOT,
   encryptionStore
@@ -1449,7 +1494,8 @@ async function getApplicationInventory() {
         desktopShortcutVisible: desktopShortcutManager.isVisible(
           application.id,
           application.desktopShortcutDefaultVisible !== false
-        )
+        ),
+        desktopShortcutPath: projectedDesktopShortcutLocation(application.id)
       };
     })
   };
@@ -1607,11 +1653,17 @@ app.post('/api/delete', (req, res) => {
       return res.status(400).json({ error: 'This FoxOS system entry cannot be deleted' });
     }
 
+    const releasedShortcutDirectory = fs.statSync(target).isDirectory()
+      ? desktopShortcutPathForWorkspaceTarget(target)
+      : null;
     if (target.startsWith(trashRoot + path.sep)) {
       fs.rmSync(target, { recursive: true, force: false });
     } else {
       const destination = path.join(trashRoot, Date.now() + '_' + path.basename(target));
       movePath(target, destination);
+    }
+    if (releasedShortcutDirectory && releasedShortcutDirectory !== DESKTOP_ROOT) {
+      desktopShortcutManager.releaseDirectory(releasedShortcutDirectory);
     }
     res.json({ success: true });
   } catch (error) {
@@ -1629,11 +1681,23 @@ app.post('/api/rename', (req, res) => {
     if (isProtectedWorkspaceEntry(target)) {
       return res.status(400).json({ error: 'This FoxOS system entry cannot be renamed' });
     }
+    const targetIsDirectory = fs.statSync(target).isDirectory();
+    const sourceShortcutDirectory = targetIsDirectory
+      ? desktopShortcutPathForWorkspaceTarget(target)
+      : null;
     const destination = path.join(path.dirname(target), name);
     if (fs.existsSync(destination)) {
       return res.status(409).json({ error: 'A file with that name already exists' });
     }
     fs.renameSync(target, destination);
+    if (sourceShortcutDirectory && sourceShortcutDirectory !== DESKTOP_ROOT) {
+      const destinationShortcutDirectory = desktopShortcutPathForWorkspaceTarget(destination);
+      if (destinationShortcutDirectory) {
+        desktopShortcutManager.relocateDirectory(sourceShortcutDirectory, destinationShortcutDirectory);
+      } else {
+        desktopShortcutManager.releaseDirectory(sourceShortcutDirectory);
+      }
+    }
     res.json({ success: true });
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -1651,6 +1715,10 @@ app.post('/api/move', (req, res) => {
       return res.status(400).json({ error: 'This FoxOS system entry cannot be moved' });
     }
 
+    const sourceIsDirectory = fs.statSync(source).isDirectory();
+    const sourceShortcutDirectory = sourceIsDirectory
+      ? desktopShortcutPathForWorkspaceTarget(source)
+      : null;
     const destination = fs.existsSync(target) && fs.statSync(target).isDirectory()
       ? path.join(target, path.basename(source))
       : target;
@@ -1658,6 +1726,14 @@ app.post('/api/move', (req, res) => {
       return res.status(409).json({ error: 'Destination already exists' });
     }
     movePath(source, destination);
+    if (sourceShortcutDirectory && sourceShortcutDirectory !== DESKTOP_ROOT) {
+      const destinationShortcutDirectory = desktopShortcutPathForWorkspaceTarget(destination);
+      if (destinationShortcutDirectory) {
+        desktopShortcutManager.relocateDirectory(sourceShortcutDirectory, destinationShortcutDirectory);
+      } else {
+        desktopShortcutManager.releaseDirectory(sourceShortcutDirectory);
+      }
+    }
     res.json({ success: true });
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -2570,6 +2646,20 @@ app.put('/api/applications/:applicationId/desktop-shortcut', async (req, res) =>
     ) });
   } catch (error) {
     sendDesktopShortcutError(res, error, 'Could not update desktop shortcut visibility');
+  }
+});
+
+app.put('/api/applications/:applicationId/desktop-shortcut-location', async (req, res) => {
+  try {
+    const inventory = await getApplicationInventory();
+    const exists = inventory.applications.some((application) => application.id === req.params.applicationId);
+    if (!exists) {
+      throw new DesktopShortcutError('Uygulama artık sunucuda bulunamıyor.', 404, 'application-not-found');
+    }
+    const shortcutPath = validatedDesktopShortcutFolder(req.body && req.body.path);
+    res.json({ shortcut: desktopShortcutManager.setLocation(req.params.applicationId, shortcutPath) });
+  } catch (error) {
+    sendDesktopShortcutError(res, error, 'Could not update desktop shortcut location');
   }
 });
 

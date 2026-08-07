@@ -87,6 +87,18 @@ export const ApplicationProvider = ({ children }) => {
     await refreshApplications({ quiet: true });
   }, [refreshApplications]);
 
+  const setDesktopShortcutLocation = useCallback(async (application, folderPath) => {
+    if (!application || typeof folderPath !== 'string') {
+      throw new Error('Masaüstü kısayol konumu geçersiz');
+    }
+    await apiFetch(`/api/applications/${application.id}/desktop-shortcut-location`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: folderPath })
+    });
+    await refreshApplications({ quiet: true });
+  }, [refreshApplications]);
+
   useEffect(() => {
     refreshApplications().catch(() => {});
     const refreshTimer = window.setInterval(() => {
@@ -102,8 +114,9 @@ export const ApplicationProvider = ({ children }) => {
     loading,
     refreshApplications,
     runApplicationAction,
-    setDesktopShortcut
-  }), [actions, applications, error, loading, refreshApplications, runApplicationAction, setDesktopShortcut]);
+    setDesktopShortcut,
+    setDesktopShortcutLocation
+  }), [actions, applications, error, loading, refreshApplications, runApplicationAction, setDesktopShortcut, setDesktopShortcutLocation]);
 
   return <ApplicationContext.Provider value={value}>{children}</ApplicationContext.Provider>;
 };
