@@ -911,7 +911,8 @@ const applicationUpdateManager = createApplicationUpdateManager({
   getApplicationInventory,
   checkApplicationUpdate: (applicationId) => applicationUpdateChecker.check(applicationId),
   composeRunner: runExactApplicationCompose,
-  volumeSnapshots: applicationUpdateVolumeSnapshots
+  volumeSnapshots: applicationUpdateVolumeSnapshots,
+  routeRuntime: ingressAuthorityManager
 });
 const productionStatelessMigrationAdapter = createProductionStatelessMigrationAdapter({
   dataRoot: DATA_ROOT,

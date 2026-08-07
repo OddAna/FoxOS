@@ -459,12 +459,22 @@ remote digest; selects the application service plus transitive reverse-dependent
 sidecars; and rejects scaled services, writable bind mounts, FoxOS core and
 `/opt/foxos`. Previous image IDs receive local recovery tags before build/pull.
 After preparation, the bounded service group stops and each writable named
-volume is streamed through AES-256-GCM into owner-only local state. Compose then
-recreates the exact service group and must prove Docker health plus the public
-endpoint. Any failed cutover restores the encrypted pre-update volume snapshots
-and prior images automatically. A completed operation retains the same evidence
-for an explicit manual rollback. Only one application update may mutate the
-server at a time.
+volume is streamed through AES-256-GCM into owner-only local state. Snapshotting
+starts only after Docker proves every selected service is stopped, observes a
+short filesystem-quiesce boundary and retries only the bounded `tar` changed-
+while-read transient once. Compose then recreates the exact service group. When
+the application already uses server-owned routes, the plan binds every route
+and alias attached to the selected primary runtime; the transaction reconnects
+the recreated primary container to the owned routing network and atomically
+rebinds those routes before it proves Docker health plus the public endpoint.
+Route drift fails closed. Any failed cutover performs the same route rebind for
+the rollback runtime, restores the encrypted pre-update volume snapshots and
+prior images automatically. The exact rollback Compose override remains beside
+the source files while that rollback state is current; internal rollback
+overrides are excluded from future source editing and update planning, and a
+later successful transaction removes only superseded internal overrides. A
+completed operation retains the same evidence for an explicit manual rollback.
+Only one application update may mutate the server at a time.
 
 The Compose editor is an authenticated source-file operation, not deployment or
 ownership adoption. File paths come only from `com.docker.compose.*` metadata;

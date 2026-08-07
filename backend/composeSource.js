@@ -5,6 +5,7 @@ const YAML = require('yaml');
 
 const MAX_COMPOSE_FILE_BYTES = 1024 * 1024;
 const COMPOSE_FILE_ID_PATTERN = /^compose_[a-f0-9]{32}$/;
+const APPLICATION_UPDATE_ROLLBACK_OVERRIDE_PATTERN = /(?:^|\/)\.server-update-[a-f0-9]{12}-rollback\.ya?ml$/i;
 
 class ComposeSourceError extends Error {
   constructor(message, statusCode = 400, code = 'compose-source-error') {
@@ -58,6 +59,10 @@ function parseComposeDocument(content, { requireServices = false } = {}) {
 
 function splitConfigFiles(value) {
   return String(value || '').split(',').map((entry) => entry.trim()).filter(Boolean);
+}
+
+function isApplicationUpdateRollbackOverride(hostPath) {
+  return APPLICATION_UPDATE_ROLLBACK_OVERRIDE_PATTERN.test(String(hostPath || '').replace(/\\/g, '/'));
 }
 
 function mountedPathForHostPath(hostRoot, hostPath) {
@@ -125,7 +130,10 @@ function resolveComposeProject(details, hostRoot) {
       ? path.normalize(configPath)
       : path.resolve(workingDirectory || '/', configPath)
   ));
-  const files = absoluteConfigPaths.map((hostPath) => readComposeFile(hostRoot, hostPath));
+  const ignoredConfigPaths = absoluteConfigPaths.filter(isApplicationUpdateRollbackOverride);
+  const sourceConfigPaths = absoluteConfigPaths.filter((hostPath) => !isApplicationUpdateRollbackOverride(hostPath));
+  if (!sourceConfigPaths.length) return null;
+  const files = sourceConfigPaths.map((hostPath) => readComposeFile(hostRoot, hostPath));
   let service = null;
   for (const file of files) {
     const parsed = parseComposeDocument(file.content);
@@ -137,6 +145,7 @@ function resolveComposeProject(details, hostRoot) {
   return {
     files,
     hostRoot: path.resolve(hostRoot),
+    ignoredConfigPaths,
     projectName,
     service,
     serviceName,
@@ -193,6 +202,7 @@ module.exports = {
   composeFileId,
   composeRevision,
   finalDockerfileBaseReference,
+  isApplicationUpdateRollbackOverride,
   mountedPathForHostPath,
   parseComposeDocument,
   readComposeFile,

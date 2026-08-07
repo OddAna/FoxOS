@@ -21,6 +21,8 @@ const N8N_CONTAINER = '5'.repeat(64);
 const RUNNER_CONTAINER = '6'.repeat(64);
 const NEW_N8N_CONTAINER = '7'.repeat(64);
 const NEW_RUNNER_CONTAINER = '8'.repeat(64);
+const ROLLBACK_N8N_CONTAINER = '9'.repeat(64);
+const ROLLBACK_RUNNER_CONTAINER = 'a'.repeat(64);
 
 test('reverse dependent graph includes sidecars that depend on the selected service, not its database dependencies', () => {
   const services = {
@@ -63,7 +65,7 @@ test('stateful update snapshot streams encrypted volume data and restores the ex
   assert.equal(fs.existsSync(path.join(mountedData, 'new-file')), false);
 });
 
-function harness({ failUp = false, failBuild = false, sharedVolume = false } = {}) {
+function harness({ failUp = false, failBuild = false, failPublicOnce = false, sharedVolume = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-app-update-'));
   const hostRoot = path.join(root, 'host');
   const dataRoot = path.join(root, 'data');
@@ -89,11 +91,13 @@ function harness({ failUp = false, failBuild = false, sharedVolume = false } = {
     ''
   ].join('\n'));
 
+  const staleRollbackOverride = '/srv/n8n/.server-update-deadbeefcafe-rollback.yml';
+  fs.writeFileSync(path.join(hostRoot, '.' + staleRollbackOverride), 'services: {}\n');
   const labelsFor = (service) => ({
     'com.docker.compose.project': 'n8n-project',
     'com.docker.compose.service': service,
     'com.docker.compose.project.working_dir': '/srv/n8n',
-    'com.docker.compose.project.config_files': composeHostPath,
+    'com.docker.compose.project.config_files': composeHostPath + ',' + staleRollbackOverride,
     'coolify.managed': 'true'
   });
   let runtime = 'old';
@@ -113,18 +117,33 @@ function harness({ failUp = false, failBuild = false, sharedVolume = false } = {
     n8n: { id: NEW_N8N_CONTAINER, image: NEW_N8N_IMAGE, name: 'n8n-project-n8n-1' },
     'task-runners': { id: NEW_RUNNER_CONTAINER, image: NEW_RUNNER_IMAGE, name: 'n8n-project-task-runners-1' }
   };
+  const rolledBack = {
+    n8n: { id: ROLLBACK_N8N_CONTAINER, image: OLD_N8N_IMAGE, name: 'n8n-project-n8n-1' },
+    'task-runners': { id: ROLLBACK_RUNNER_CONTAINER, image: OLD_RUNNER_IMAGE, name: 'n8n-project-task-runners-1' }
+  };
   const commands = [];
   const snapshots = [];
   const restores = [];
+  const routeRebinds = [];
+  let routeContainerId = N8N_CONTAINER;
+  let publicProbeCalls = 0;
   let uuidIndex = 0;
   const ids = ['a'.repeat(32), 'b'.repeat(32)];
+
+  function valuesForRuntime() {
+    if (runtime.includes('new')) return fresh;
+    if (runtime.includes('rollback')) return rolledBack;
+    return old;
+  }
 
   function detailsFor(service, current) {
     return {
       Id: current.id,
       Image: current.image,
       Config: { Image: service === 'n8n' ? 'n8n-built:latest' : 'n8nio/runners:latest', Labels: labelsFor(service) },
-      State: { Running: true, Health: { Status: 'healthy' } },
+      State: runtime.startsWith('stopped-')
+        ? { Running: false }
+        : { Running: true, Health: { Status: 'healthy' } },
       Mounts: service === 'n8n' ? [{
         Type: 'volume', Name: 'n8n-project_n8n-data', Destination: '/home/node/.n8n', RW: true
       }] : []
@@ -138,7 +157,7 @@ function harness({ failUp = false, failBuild = false, sharedVolume = false } = {
       id: APPLICATION_ID,
       name: 'n8n.example.test',
       externalUrl: 'https://n8n.example.test',
-      runtime: { containerId: runtime === 'old' ? old.n8n.id : fresh.n8n.id }
+      runtime: { containerId: valuesForRuntime().n8n.id }
     }] }),
     checkApplicationUpdate: async () => ({
       status: 'update-available', updateAvailable: true,
@@ -149,8 +168,14 @@ function harness({ failUp = false, failBuild = false, sharedVolume = false } = {
     }),
     dockerRequest: async (method, requestPath) => {
       if (requestPath.startsWith('/containers/json?')) {
-        const values = runtime === 'old' ? old : fresh;
+        const values = valuesForRuntime();
         const result = Object.entries(values).map(([service, current]) => summary(service, current));
+        if (runtime.startsWith('stopped-')) {
+          for (const container of result) {
+            container.State = 'exited';
+            container.Status = 'Exited (0)';
+          }
+        }
         if (requestPath === '/containers/json?all=true' && sharedVolume) {
           result.push({
             Id: 'f'.repeat(64), Names: ['/unrelated'], Labels: {}, State: 'running', Status: 'Up',
@@ -161,7 +186,7 @@ function harness({ failUp = false, failBuild = false, sharedVolume = false } = {
       }
       if (requestPath.startsWith('/containers/')) {
         const id = requestPath.split('/')[2];
-        const values = runtime === 'old' ? old : fresh;
+        const values = valuesForRuntime();
         const entry = Object.entries(values).find(([, current]) => current.id === id);
         if (!entry) throw new Error('unknown container ' + id);
         return detailsFor(entry[0], entry[1]);
@@ -179,7 +204,12 @@ function harness({ failUp = false, failBuild = false, sharedVolume = false } = {
         }
         runtime = 'new';
       }
-      if (input.operation === 'rollback') runtime = 'old';
+      if (input.operation === 'stop') {
+        if (runtime.includes('new')) runtime = 'stopped-new';
+        else if (runtime.includes('rollback')) runtime = 'stopped-rollback';
+        else runtime = 'stopped-old';
+      }
+      if (input.operation === 'rollback') runtime = 'rollback';
       return { success: true };
     },
     volumeSnapshots: {
@@ -190,15 +220,43 @@ function harness({ failUp = false, failBuild = false, sharedVolume = false } = {
       },
       restore: async ({ snapshot, volume }) => restores.push({ snapshot, volume })
     },
-    publicHealthProbe: async () => ({ status: 200 }),
+    routeRuntime: {
+      operationRuntimeBinding: (containerId) => {
+        assert.equal(containerId, N8N_CONTAINER);
+        return {
+          operationIds: ['rtop_' + 'c'.repeat(32)],
+          runtimeContainerId: N8N_CONTAINER,
+          routeIds: ['rt_' + 'd'.repeat(24)],
+          aliases: ['server-app'],
+          fingerprint: 'route-fingerprint'
+        };
+      },
+      assertOperationRuntimeBinding: (binding, expectedContainerId) => {
+        assert.equal(binding.fingerprint, 'route-fingerprint');
+        assert.equal(routeContainerId, expectedContainerId);
+      },
+      rebindOperationRuntime: async (binding, containerId, expectedContainerId) => {
+        assert.equal(binding.fingerprint, 'route-fingerprint');
+        assert.equal(routeContainerId, expectedContainerId);
+        routeRebinds.push({ from: expectedContainerId, to: containerId });
+        routeContainerId = containerId;
+        return { ...binding, runtimeContainerId: containerId };
+      }
+    },
+    publicHealthProbe: async () => {
+      publicProbeCalls += 1;
+      if (failPublicOnce && publicProbeCalls === 1) throw new Error('Public endpoint returned HTTP 502');
+      return { status: 200 };
+    },
+    quiesce: async () => {},
     clock: () => new Date('2026-08-07T12:00:00.000Z'),
     randomUUID: () => ids[uuidIndex++]
   });
-  return { commands, manager, restores, snapshots };
+  return { commands, dataRoot, hostRoot, manager, restores, routeRebinds, snapshots, staleRollbackOverride };
 }
 
 test('Compose update applies selected service and reverse-dependent runner as one health-gated transaction', async () => {
-  const { commands, manager, restores, snapshots } = harness();
+  const { commands, hostRoot, manager, restores, routeRebinds, snapshots, staleRollbackOverride } = harness();
   const plan = await manager.createPlan(APPLICATION_ID);
   assert.deepEqual(plan.services.map((service) => service.name), ['n8n', 'task-runners']);
   assert.deepEqual(plan.services.map((service) => service.action), ['build', 'pull']);
@@ -211,6 +269,8 @@ test('Compose update applies selected service and reverse-dependent runner as on
   assert.equal(snapshots.length, 1);
   assert.deepEqual(commands.map((command) => command.operation), ['build', 'pull', 'stop', 'up']);
   assert.deepEqual(operation.services.map((service) => service.health), ['healthy', 'healthy']);
+  assert.deepEqual(routeRebinds, [{ from: N8N_CONTAINER, to: NEW_N8N_CONTAINER }]);
+  assert.equal(fs.existsSync(path.join(hostRoot, '.' + staleRollbackOverride)), false);
 
   const rolledBack = await manager.rollbackOperation(operation.operationId, {
     confirmation: ROLLBACK_APPLICATION_UPDATE_CONFIRMATION
@@ -218,6 +278,11 @@ test('Compose update applies selected service and reverse-dependent runner as on
   assert.equal(rolledBack.status, 'rolled-back');
   assert.equal(restores.length, 1);
   assert.deepEqual(commands.slice(-2).map((command) => command.operation), ['stop', 'rollback']);
+  assert.deepEqual(routeRebinds[1], { from: NEW_N8N_CONTAINER, to: ROLLBACK_N8N_CONTAINER });
+  assert.equal(
+    fs.existsSync(path.join(hostRoot, 'srv/n8n/.server-update-' + operation.operationId.slice(-12) + '-rollback.yml')),
+    true
+  );
 });
 
 test('failed health-gated cutover automatically restores old images and stateful data', async () => {
@@ -231,6 +296,19 @@ test('failed health-gated cutover automatically restores old images and stateful
   assert.equal(current.status, 'rolled-back-after-failure');
   assert.equal(restores.length, 1);
   assert.deepEqual(commands.slice(-3).map((command) => command.operation), ['up', 'stop', 'rollback']);
+});
+
+test('public route failure after cutover rebinds the rollback runtime before public verification', async () => {
+  const { manager, routeRebinds } = harness({ failPublicOnce: true });
+  const plan = await manager.createPlan(APPLICATION_ID);
+  await assert.rejects(
+    manager.applyPlan(plan.planId, { confirmation: APPLY_APPLICATION_UPDATE_CONFIRMATION }),
+    (error) => error.code === 'application-update-rolled-back'
+  );
+  assert.deepEqual(routeRebinds, [
+    { from: N8N_CONTAINER, to: NEW_N8N_CONTAINER },
+    { from: NEW_N8N_CONTAINER, to: ROLLBACK_N8N_CONTAINER }
+  ]);
 });
 
 test('preparation failure leaves running services untouched', async () => {

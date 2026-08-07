@@ -30,12 +30,20 @@ test('staged routes switch through owned ingress and remove host authority on ro
   const ingressId = 'b'.repeat(64);
   const candidateId = 'c'.repeat(64);
   const replacementId = 'd'.repeat(64);
-  let replacementVisible = false;
+  let replacementAttached = false;
+  const networkCalls = [];
   const execContainerIds = [];
   const execCommands = [];
   const manager = createIngressAuthorityManager({
     dataRoot,
-    dockerRequest: async (method, requestPath) => {
+    dockerRequest: async (method, requestPath, body) => {
+      if (method === 'POST' && requestPath === '/networks/foxos-routing/connect') {
+        networkCalls.push({ method, requestPath, body });
+        assert.equal(body.Container, replacementId);
+        assert.deepEqual(body.EndpointConfig.Aliases, ['foxos-sm-candidate']);
+        replacementAttached = true;
+        return null;
+      }
       assert.equal(method, 'GET');
       if (requestPath === '/networks/foxos-routing') {
         return {
@@ -43,7 +51,7 @@ test('staged routes switch through owned ingress and remove host authority on ro
           Labels: { 'com.foxos.routing': 'true', 'com.foxos.core': 'true' },
           Containers: {
             [candidateId]: {},
-            ...(replacementVisible ? { [replacementId]: {} } : {})
+            ...(replacementAttached ? { [replacementId]: {} } : {})
           }
         };
       }
@@ -67,7 +75,9 @@ test('staged routes switch through owned ingress and remove host authority on ro
           Id: replacementId,
           State: { Running: true },
           NetworkSettings: {
-            Networks: { 'foxos-routing': { Aliases: ['foxos-sm-candidate'], IPAddress: '10.0.10.84' } }
+            Networks: replacementAttached
+              ? { 'foxos-routing': { Aliases: ['foxos-sm-candidate'], IPAddress: '10.0.10.84' } }
+              : {}
           }
         };
       }
@@ -100,7 +110,13 @@ test('staged routes switch through owned ingress and remove host authority on ro
     alias: 'foxos-sm-candidate',
     privatePort: 3000
   };
-  const staged = await manager.stageRoutes([route]);
+  const secondaryRoute = {
+    ...route,
+    routeId: 'smroute_' + 'c'.repeat(24),
+    operationId: 'rtop_' + 'd'.repeat(32),
+    domain: 'alternate.example.com'
+  };
+  const staged = await manager.stageRoutes([route, secondaryRoute]);
   assert.equal(staged[0].status, 'staged');
   assert.match(fs.readFileSync(manager.paths.routeMapFile, 'utf8'), /^foxos\.example\.com foxos$/m);
   const renderedRoutes = fs.readFileSync(manager.paths.caddyRoutesFile, 'utf8');
@@ -119,9 +135,11 @@ test('staged routes switch through owned ingress and remove host authority on ro
   assert.deepEqual(reconciliation.backends, { ipv4: 'iptables', ipv6: 'ip6tables' });
   assert.deepEqual([...firewallRules].sort(), ['ip6tables:public', 'iptables:public']);
 
-  replacementVisible = true;
-  const refreshed = await manager.refreshOperationRuntime(route.operationId, replacementId);
-  assert.equal(refreshed[0].runtimeContainerId, replacementId);
+  const binding = manager.operationRuntimeBinding(candidateId);
+  assert.deepEqual(binding.operationIds, [route.operationId, secondaryRoute.operationId].sort());
+  const refreshed = await manager.rebindOperationRuntime(binding, replacementId, candidateId);
+  assert.equal(refreshed.runtimeContainerId, replacementId);
+  assert.equal(networkCalls.length, 1);
   assert.match(fs.readFileSync(manager.paths.caddyRoutesFile, 'utf8'), /reverse_proxy 10\.0\.10\.84:3000/);
 
   await manager.switchDomain(route.domain, 'legacy');

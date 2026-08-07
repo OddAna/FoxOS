@@ -823,6 +823,148 @@ function createIngressAuthorityManager({
     return routes.map((route) => current.routes[route.routeId]);
   }
 
+  function routeBindingShape(route) {
+    return {
+      routeId: route.routeId,
+      operationId: route.operationId,
+      domain: route.domain,
+      path: route.path,
+      alias: route.alias,
+      privatePort: route.privatePort,
+      status: route.status
+    };
+  }
+
+  function routeBindingFingerprint(routes) {
+    const shapes = routes.map(routeBindingShape).sort((left, right) => left.routeId.localeCompare(right.routeId));
+    return crypto.createHash('sha256').update(JSON.stringify(shapes)).digest('hex');
+  }
+
+  function operationRuntimeBinding(containerId) {
+    if (!CONTAINER_ID_PATTERN.test(String(containerId || ''))) {
+      throw new IngressAuthorityError('Route runtime binding input is invalid', 400, 'invalid-route-runtime-binding');
+    }
+    const routes = Object.values(state().routes || {}).filter((route) => (
+      route.status !== 'removed' && route.runtimeContainerId === containerId
+    ));
+    if (!routes.length) return null;
+    const operationIds = [...new Set(routes.map((route) => route.operationId))];
+    if (operationIds.some((operationId) => !OPERATION_ID_PATTERN.test(String(operationId || '')))) {
+      throw new IngressAuthorityError(
+        'The selected runtime has an invalid route operation',
+        409,
+        'route-runtime-binding-invalid'
+      );
+    }
+    return {
+      operationIds: operationIds.sort(),
+      runtimeContainerId: containerId,
+      routeIds: routes.map((route) => route.routeId).sort(),
+      aliases: [...new Set(routes.map((route) => route.alias))].sort(),
+      fingerprint: routeBindingFingerprint(routes)
+    };
+  }
+
+  function assertOperationRuntimeBinding(binding, expectedContainerId = binding && binding.runtimeContainerId) {
+    if (!binding) return null;
+    if (
+      !Array.isArray(binding.operationIds) || !binding.operationIds.length ||
+      binding.operationIds.some((operationId) => !OPERATION_ID_PATTERN.test(String(operationId || ''))) ||
+      !CONTAINER_ID_PATTERN.test(String(expectedContainerId || '')) ||
+      !Array.isArray(binding.routeIds) || !binding.routeIds.length ||
+      typeof binding.fingerprint !== 'string'
+    ) {
+      throw new IngressAuthorityError('Route runtime binding is invalid', 400, 'invalid-route-runtime-binding');
+    }
+    const current = state();
+    const routes = binding.routeIds.map((routeId) => current.routes && current.routes[routeId]).filter(Boolean);
+    const boundRouteIds = Object.values(current.routes || {}).filter((route) => (
+      route.status !== 'removed' && route.runtimeContainerId === expectedContainerId
+    )).map((route) => route.routeId).sort();
+    if (
+      routes.length !== binding.routeIds.length ||
+      boundRouteIds.join(',') !== [...binding.routeIds].sort().join(',') ||
+      routes.some((route) => !binding.operationIds.includes(route.operationId) || route.status === 'removed') ||
+      [...new Set(routes.map((route) => route.operationId))].sort().join(',') !== binding.operationIds.join(',') ||
+      routeBindingFingerprint(routes) !== binding.fingerprint ||
+      routes.some((route) => route.runtimeContainerId !== expectedContainerId)
+    ) {
+      throw new IngressAuthorityError(
+        'The application route changed after the update plan was created',
+        409,
+        'route-runtime-binding-drift'
+      );
+    }
+    return binding;
+  }
+
+  async function rebindOperationRuntime(binding, containerId, expectedContainerId = binding && binding.runtimeContainerId) {
+    if (!binding) return null;
+    assertOperationRuntimeBinding(binding, expectedContainerId);
+    if (!CONTAINER_ID_PATTERN.test(String(containerId || ''))) {
+      throw new IngressAuthorityError('Route runtime target is invalid', 400, 'invalid-route-runtime-target');
+    }
+    const details = await dockerRequest('GET', '/containers/' + containerId + '/json');
+    if (!details.State || details.State.Running !== true || details.Id !== containerId) {
+      throw new IngressAuthorityError('The new route runtime is not running', 503, 'route-runtime-target-unavailable');
+    }
+    const networks = details.NetworkSettings && details.NetworkSettings.Networks || {};
+    const attachment = networks[routingNetwork] || null;
+    const originalAliases = attachment && Array.isArray(attachment.Aliases) ? attachment.Aliases.filter(Boolean) : [];
+    const requiredAliases = [...new Set([...(originalAliases || []), ...(binding.aliases || [])])].sort();
+    const needsAttachment = !attachment;
+    const needsAliases = !needsAttachment && (binding.aliases || []).some((alias) => !originalAliases.includes(alias));
+    let changedAttachment = false;
+    try {
+      if (needsAliases) {
+        await dockerRequest('POST', '/networks/' + encodeURIComponent(routingNetwork) + '/disconnect', {
+          Container: containerId,
+          Force: false
+        });
+        changedAttachment = true;
+      }
+      if (needsAttachment || needsAliases) {
+        await dockerRequest('POST', '/networks/' + encodeURIComponent(routingNetwork) + '/connect', {
+          Container: containerId,
+          EndpointConfig: { Aliases: requiredAliases }
+        });
+        changedAttachment = true;
+      }
+      const current = state();
+      const overrides = Object.fromEntries(binding.routeIds.map((routeId) => [routeId, containerId]));
+      current.routes = await reloadCaddy(current.routes, null, overrides);
+      persist(current);
+      const refreshed = binding.routeIds.map((routeId) => current.routes[routeId]);
+      return {
+        ...binding,
+        runtimeContainerId: containerId,
+        reboundAt: now(),
+        routes: refreshed.map((route) => ({
+          routeId: route.routeId,
+          runtimeAddress: route.runtimeAddress
+        }))
+      };
+    } catch (error) {
+      if (changedAttachment) {
+        try {
+          await dockerRequest('POST', '/networks/' + encodeURIComponent(routingNetwork) + '/disconnect', {
+            Container: containerId,
+            Force: true
+          });
+        } catch {}
+        if (attachment) {
+          try {
+            await dockerRequest('POST', '/networks/' + encodeURIComponent(routingNetwork) + '/connect', {
+              Container: containerId,
+              EndpointConfig: { Aliases: originalAliases }
+            });
+          } catch {}
+        }
+      }
+      throw error;
+    }
+  }
+
   async function deactivatePublicAuthorityIfUnused() {
     const current = state();
     if (Object.values(current.domains || {}).some((target) => target === 'foxos')) return false;
@@ -1052,6 +1194,9 @@ function createIngressAuthorityManager({
     removeRoutes,
     reconcilePublicAuthority,
     reconcileInactiveDomains,
+    operationRuntimeBinding,
+    assertOperationRuntimeBinding,
+    rebindOperationRuntime,
     refreshOperationRuntime,
     stageRoutes,
     state,

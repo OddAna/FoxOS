@@ -8,6 +8,7 @@ const YAML = require('yaml');
 const { atomicWriteJson } = require('./resourceRegistry');
 const {
   composeRevision,
+  isApplicationUpdateRollbackOverride,
   mountedPathForHostPath,
   parseComposeDocument,
   resolveComposeProject
@@ -308,7 +309,7 @@ function createEncryptedVolumeSnapshotAdapter({
     };
   }
 
-  async function create({ operationId, volume }) {
+  async function createOnce({ operationId, volume }) {
     const mountpoint = await volumeMountpoint(volume.name);
     ensureDirectory(snapshotsRoot);
     const target = path.join(snapshotsRoot, operationId + '-' + crypto.createHash('sha256').update(volume.name).digest('hex').slice(0, 16) + '.enc');
@@ -355,6 +356,15 @@ function createEncryptedVolumeSnapshotAdapter({
       tar.kill('SIGKILL');
       try { fs.unlinkSync(temporary); } catch {}
       throw error;
+    }
+  }
+
+  async function create(input) {
+    try {
+      return await createOnce(input);
+    } catch (error) {
+      if (!/file changed as we read it/i.test(String(error && error.message || ''))) throw error;
+      return createOnce(input);
     }
   }
 
@@ -446,12 +456,14 @@ function createApplicationUpdateManager({
   checkApplicationUpdate,
   composeRunner,
   volumeSnapshots,
+  routeRuntime = null,
   publicHealthProbe = async (url) => {
     if (!url) return { skipped: true };
     const response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(20000) });
     if (response.status < 200 || response.status >= 400) throw new Error('Public endpoint returned HTTP ' + response.status);
     return { skipped: false, status: response.status };
   },
+  quiesce = () => new Promise((resolve) => setTimeout(resolve, 1000)),
   clock = () => new Date(),
   randomUUID = () => crypto.randomUUID()
 }) {
@@ -462,6 +474,12 @@ function createApplicationUpdateManager({
   ) {
     throw new Error('Application update manager requires data, host, Docker, inventory, checker, Compose and snapshot adapters');
   }
+  if (routeRuntime && (
+    typeof routeRuntime.operationRuntimeBinding !== 'function' ||
+    typeof routeRuntime.assertOperationRuntimeBinding !== 'function' ||
+    typeof routeRuntime.rebindOperationRuntime !== 'function'
+  )) throw new Error('Application update route runtime adapter is invalid');
+  if (typeof quiesce !== 'function') throw new Error('Application update quiesce adapter is invalid');
   const root = path.join(dataRoot, 'application-updates');
   const plansRoot = path.join(root, 'plans');
   const operationsRoot = path.join(root, 'operations');
@@ -630,8 +648,10 @@ function createApplicationUpdateManager({
         files: resolved.project.files.map((file) => ({
           hostPath: file.hostPath,
           revision: file.revision
-        }))
+        })),
+        rollbackOverrides: [...(resolved.project.ignoredConfigPaths || [])]
       },
+      routeBinding: routeRuntime ? routeRuntime.operationRuntimeBinding(resolved.details.Id) : null,
       services: serviceRecords,
       volumes: [...volumes.values()],
       publicUrl: resolved.application.externalUrl || null,
@@ -717,6 +737,9 @@ function createApplicationUpdateManager({
         }
       }
     }
+    if (plan.routeBinding && routeRuntime) {
+      routeRuntime.assertOperationRuntimeBinding(plan.routeBinding, plan.routeBinding.runtimeContainerId);
+    }
     const update = await checkApplicationUpdate(plan.applicationId);
     if (
       update.updateAvailable !== true ||
@@ -744,7 +767,7 @@ function createApplicationUpdateManager({
     }
   }
 
-  async function verifyRuntime(plan) {
+  async function verifyRuntime(plan, operation) {
     const byService = await exactProjectContainers(plan.project.projectName, plan.services.map((service) => service.name));
     const verified = [];
     for (const service of plan.services) {
@@ -762,8 +785,48 @@ function createApplicationUpdateManager({
         health: health || 'running'
       });
     }
+    if (plan.routeBinding && routeRuntime) {
+      const primary = verified.find((service) => service.name === plan.project.serviceName);
+      if (!primary) throw new Error('Primary application runtime was not recreated');
+      const expectedContainerId = operation.routeRuntime && operation.routeRuntime.runtimeContainerId ||
+        plan.routeBinding.runtimeContainerId;
+      operation.routeRuntime = await routeRuntime.rebindOperationRuntime(
+        plan.routeBinding,
+        primary.containerId,
+        expectedContainerId
+      );
+      atomicWriteJson(recordPath(operationsRoot, operation.operationId), operation);
+    }
     await publicHealthProbe(plan.publicUrl);
     return verified;
+  }
+
+  async function assertServicesStopped(plan) {
+    const byService = await exactProjectContainers(plan.project.projectName, plan.services.map((service) => service.name));
+    for (const service of plan.services) {
+      const container = byService.get(service.name);
+      if (!container) continue;
+      const details = await dockerRequest('GET', '/containers/' + container.Id + '/json');
+      if (details.State && details.State.Running === true) {
+        throw new ApplicationUpdateError(
+          service.name + ' servisi durmadı; veri yedeği alınmadan işlem iptal edildi.',
+          409,
+          'application-update-service-stop-unproven'
+        );
+      }
+    }
+  }
+
+  function cleanupSupersededRollbackOverrides(plan, retainedHostPath = null) {
+    const failures = [];
+    for (const hostPath of plan.project.rollbackOverrides || []) {
+      if (hostPath === retainedHostPath || !isApplicationUpdateRollbackOverride(hostPath)) continue;
+      const mountedPath = mountedPathForHostPath(hostRoot, hostPath);
+      try { fs.unlinkSync(mountedPath); } catch (error) {
+        if (error.code !== 'ENOENT') failures.push({ hostPath, error: error.message });
+      }
+    }
+    return failures;
   }
 
   function writeRollbackOverride(plan, operation) {
@@ -777,12 +840,19 @@ function createApplicationUpdateManager({
       if (service.rollbackImage) services[service.name] = { image: service.rollbackImage };
     }
     if (!Object.keys(services).length) throw new Error('No previous images were retained for rollback');
-    fs.writeFileSync(mountedPath, YAML.stringify({ services }), { flag: 'wx', mode: 0o600 });
+    const content = YAML.stringify({ services });
+    try {
+      fs.writeFileSync(mountedPath, content, { flag: 'wx', mode: 0o600 });
+    } catch (error) {
+      if (error.code !== 'EEXIST' || fs.readFileSync(mountedPath, 'utf8') !== content) throw error;
+    }
     return { hostPath, mountedPath };
   }
 
   async function restoreOperation(plan, operation, { restoreVolumes = true } = {}) {
     await composeRunner({ operation: 'stop', project: plan.project, services: plan.services.map((service) => service.name) });
+    await assertServicesStopped(plan);
+    if (restoreVolumes && plan.volumes.length) await quiesce();
     if (restoreVolumes) {
       for (const volume of plan.volumes) {
         const snapshot = operation.volumeSnapshots.find((candidate) => candidate.volumeName === volume.name);
@@ -791,17 +861,17 @@ function createApplicationUpdateManager({
       }
     }
     const override = writeRollbackOverride(plan, operation);
-    try {
-      await composeRunner({
-        operation: 'rollback',
-        project: plan.project,
-        services: plan.services.map((service) => service.name),
-        overrideFile: override.hostPath
-      });
-    } finally {
-      try { fs.unlinkSync(override.mountedPath); } catch {}
-    }
-    return verifyRuntime(plan);
+    operation.rollbackOverrideFile = override.hostPath;
+    atomicWriteJson(recordPath(operationsRoot, operation.operationId), operation);
+    await composeRunner({
+      operation: 'rollback',
+      project: plan.project,
+      services: plan.services.map((service) => service.name),
+      overrideFile: override.hostPath
+    });
+    const verified = await verifyRuntime(plan, operation);
+    operation.rollbackOverrideCleanup = cleanupSupersededRollbackOverrides(plan, override.hostPath);
+    return verified;
   }
 
   async function assertRollbackRuntime(plan, operation) {
@@ -882,6 +952,8 @@ function createApplicationUpdateManager({
       atomicWriteJson(recordPath(operationsRoot, operationId), operation);
       await composeRunner({ operation: 'stop', project: plan.project, services: plan.services.map((service) => service.name) });
       servicesStopped = true;
+      await assertServicesStopped(plan);
+      if (plan.volumes.length) await quiesce();
       for (const volume of plan.volumes) {
         const snapshot = await volumeSnapshots.create({ operationId, volume });
         operation.volumeSnapshots.push(snapshot);
@@ -895,7 +967,8 @@ function createApplicationUpdateManager({
       atomicWriteJson(recordPath(operationsRoot, operationId), operation);
       updatedRuntimeStarted = true;
       await composeRunner({ operation: 'up', project: plan.project, services: plan.services.map((service) => service.name) });
-      operation.services = await verifyRuntime(plan);
+      operation.services = await verifyRuntime(plan, operation);
+      operation.rollbackOverrideCleanup = cleanupSupersededRollbackOverrides(plan);
       operation.status = 'completed';
       operation.completedAt = nowIso(clock);
       operation.message = 'Güncelleme uygulandı; bağlı servisler ve erişim adresi sağlıklı.';

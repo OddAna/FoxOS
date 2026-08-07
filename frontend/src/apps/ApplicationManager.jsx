@@ -431,6 +431,7 @@ const ApplicationManager = ({ target }) => {
           type: 'confirm',
           confirmText: 'Güncelle',
           cancelText: 'Vazgeç',
+          pendingText: 'Güncelleniyor…',
           onConfirm: () => runApplicationUpdate(plan)
         });
       }
@@ -471,6 +472,7 @@ const ApplicationManager = ({ target }) => {
       type: 'warning',
       confirmText: 'Geri Al',
       cancelText: 'Vazgeç',
+      pendingText: 'Geri alınıyor…',
       onConfirm: async () => {
         setUpdateApplying(true);
         setMessage(null);

@@ -326,6 +326,7 @@ const FilesApp = ({ initialPath = 'Masaüstü' }) => {
           type: 'confirm',
           confirmText: 'Güncelle',
           cancelText: 'Vazgeç',
+          pendingText: 'Güncelleniyor…',
           onConfirm: async () => {
             try {
               const operation = await applyApplicationUpdate(plan.planId);
