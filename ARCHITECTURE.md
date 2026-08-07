@@ -404,6 +404,18 @@ and restoring a definition creates neither a runtime nor a new shortcut choice.
 Provider-definition removal requires a future explicit server-owned retirement
 operation; absence or timeout from an optional reader is never deletion intent.
 
+An adopted inactive definition with a declared public domain also receives an
+exact FoxOS-owned stopped route before the legacy proxy can retire. FoxOS imports
+the existing browser-trusted certificate once from verified readable Traefik
+storage, loads a domain-specific Caddy response with no runtime upstream, proves
+trusted TLS and exact HTTP `503` directly at the owned gateway, and only then
+atomically changes the HAProxy map to `foxos`. The record and certificate remain
+in server storage so later startup and certificate renewal do not require the
+provider or its proxy. Active application routes always take precedence over the
+stopped response. Conflicting resource ownership, missing certificate evidence,
+invalid TLS or any status other than `503` fails before public map activation and
+restores the prior Caddy and ingress state.
+
 Host-native records discovered by the Linux reader are projected into the same
 Application Manager with their stable resource ID, systemd unit and observed
 active/failed/stopped state. They remain off the desktop by default, are marked

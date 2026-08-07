@@ -62,6 +62,7 @@ const {
   createRuntimeTransferManager
 } = require('./runtimeTransferManager');
 const { createTraefikCertificateImporter } = require('./traefikCertificateImporter');
+const { createInactiveDefinitionIngressReconciler } = require('./inactiveDefinitionIngressReconciler');
 const { createUiApprovalManager } = require('./uiApprovalManager');
 const { createBackupManager } = require('./backupManager');
 const {
@@ -803,6 +804,10 @@ const ingressAuthorityManager = createIngressAuthorityManager({
   ingressHttpPort: Number.parseInt(process.env.FOXOS_INGRESS_HTTP_PORT || '9080', 10),
   ingressHttpsPort: Number.parseInt(process.env.FOXOS_INGRESS_HTTPS_PORT || '9443', 10),
   panelBaseUrl: process.env.FOXOS_ROUTE_BASE_URL || null
+});
+const inactiveDefinitionIngressReconciler = createInactiveDefinitionIngressReconciler({
+  certificateImporter,
+  ingressAuthority: ingressAuthorityManager
 });
 const applicationDomainManager = createApplicationDomainManager({
   dataRoot: DATA_ROOT,
@@ -2943,11 +2948,22 @@ if (require.main === module) {
 
         if (process.env.FOXOS_RESOURCE_SCAN_ON_STARTUP === 'false') return;
         resourceRegistry.scan()
-          .then((snapshot) => {
+          .then(async (snapshot) => {
             console.log(
               'Resource Registry snapshot ' + snapshot.snapshotId +
               ' recorded ' + snapshot.summary.resources + ' resources using read-only Docker, host and optional provider observations'
             );
+            try {
+              const inactiveIngress = await inactiveDefinitionIngressReconciler.reconcile(snapshot);
+              if (inactiveIngress.reconciled) {
+                console.log(
+                  'Server ingress retained trusted stopped responses for ' +
+                  inactiveIngress.addedDomains.length + ' inactive application domains'
+                );
+              }
+            } catch (error) {
+              console.error('Initial inactive application ingress reconciliation failed:', error.message);
+            }
             if (snapshot.summary.foxosMigrated > 0) {
               const plan = migrationOrchestrator.createPlan({ confirmation: PLAN_SERVER_MIGRATION_CONFIRMATION });
               console.log('Server migration plan ' + plan.planId + ' reconciled from verified FoxOS migration state');

@@ -8,6 +8,7 @@ const { atomicWriteJson } = require('./resourceRegistry');
 const INGRESS_AUTHORITY_SCHEMA_VERSION = 1;
 const DOMAIN_PATTERN = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 const OPERATION_ID_PATTERN = /^(?:smop|stmop|rtop)_[a-f0-9]{32}$/;
+const RESOURCE_ID_PATTERN = /^res_[a-f0-9]{32}$/;
 const CONTAINER_ID_PATTERN = /^[a-f0-9]{12,64}$/;
 const NETWORK_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/;
 const ROUTE_PATH_PATTERN = /^\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$/;
@@ -117,6 +118,7 @@ function createIngressAuthorityManager({
       legacyBridge: null,
       domains: {},
       routes: {},
+      inactiveDomains: {},
       updatedAt: null
     });
   }
@@ -285,7 +287,7 @@ function createIngressAuthorityManager({
     return current.legacyBridge;
   }
 
-  function renderCaddyRoutes(routes) {
+  function renderCaddyRoutes(routes, inactiveDomains = {}) {
     const grouped = new Map();
     for (const route of Object.values(routes || {}).filter((entry) => entry.status !== 'removed')) {
       grouped.set(route.domain, [...(grouped.get(route.domain) || []), route]);
@@ -306,6 +308,23 @@ function createIngressAuthorityManager({
       }
       lines.push('}');
       blocks.push(lines.join('\n'));
+    }
+    for (const [domain, fallback] of Object.entries(inactiveDomains || {})
+      .sort(([left], [right]) => left.localeCompare(right))) {
+      if (grouped.has(domain)) continue;
+      if (
+        !DOMAIN_PATTERN.test(domain) || !fallback ||
+        !RESOURCE_ID_PATTERN.test(String(fallback.resourceId || ''))
+      ) {
+        throw new IngressAuthorityError('Inactive FoxOS domain state is invalid', 409, 'inactive-domain-state-invalid');
+      }
+      blocks.push([
+        domain + ' {',
+        '\tencode zstd gzip',
+        '\theader X-FoxOS-Inactive "true"',
+        '\trespond 503',
+        '}'
+      ].join('\n'));
     }
     return blocks.join('\n\n') + (blocks.length ? '\n' : '');
   }
@@ -373,7 +392,7 @@ function createIngressAuthorityManager({
     return hydrated;
   }
 
-  async function reloadCaddy(routes, gatewayContainerId = null, runtimeOverrides = {}) {
+  async function reloadCaddy(routes, gatewayContainerId = null, runtimeOverrides = {}, inactiveDomains = null) {
     let exactGatewayContainerId = gatewayContainerId;
     if (!CONTAINER_ID_PATTERN.test(String(exactGatewayContainerId || ''))) {
       const infrastructure = await inspectOwnedInfrastructure();
@@ -381,7 +400,10 @@ function createIngressAuthorityManager({
     }
     const hydratedRoutes = await hydrateRouteRuntimes(routes, runtimeOverrides);
     ensureDirectory(caddyRuntimeRoot);
-    atomicWrite(caddyRoutesFile, renderCaddyRoutes(hydratedRoutes));
+    const exactInactiveDomains = inactiveDomains === null
+      ? state().inactiveDomains || {}
+      : inactiveDomains;
+    atomicWrite(caddyRoutesFile, renderCaddyRoutes(hydratedRoutes, exactInactiveDomains));
     const validate = await dockerExec(exactGatewayContainerId, [
       'caddy', 'validate', '--config', '/etc/caddy/Caddyfile', '--adapter', 'caddyfile'
     ], { timeoutMs: 30000 });
@@ -396,6 +418,109 @@ function createIngressAuthorityManager({
       throw new IngressAuthorityError('FoxOS route configuration reload failed', 503, 'caddy-route-reload-failed');
     }
     return hydratedRoutes;
+  }
+
+  async function reconcileInactiveDomains(entries) {
+    if (!Array.isArray(entries)) {
+      throw new IngressAuthorityError('Inactive FoxOS domains are invalid', 400, 'invalid-inactive-domains');
+    }
+    const desired = new Map();
+    for (const entry of entries) {
+      const domain = String(entry && entry.domain || '').toLowerCase();
+      const resourceId = String(entry && entry.resourceId || '');
+      if (!DOMAIN_PATTERN.test(domain) || !RESOURCE_ID_PATTERN.test(resourceId)) {
+        throw new IngressAuthorityError('Inactive FoxOS domain is invalid', 400, 'invalid-inactive-domain');
+      }
+      const existing = desired.get(domain);
+      if (existing && existing.resourceId !== resourceId) {
+        throw new IngressAuthorityError('Inactive FoxOS domain ownership is ambiguous', 409, 'inactive-domain-conflict');
+      }
+      desired.set(domain, { domain, resourceId });
+    }
+
+    const infrastructure = await inspectOwnedInfrastructure();
+    const previous = state();
+    const activeDomains = new Set(Object.values(previous.routes || {})
+      .filter((route) => route.status !== 'removed')
+      .map((route) => route.domain));
+    const next = JSON.parse(JSON.stringify(previous));
+    next.inactiveDomains = { ...(previous.inactiveDomains || {}) };
+    const pending = [];
+    for (const entry of desired.values()) {
+      if (activeDomains.has(entry.domain)) continue;
+      const existing = next.inactiveDomains[entry.domain];
+      if (existing && existing.resourceId !== entry.resourceId) {
+        throw new IngressAuthorityError('Inactive FoxOS domain ownership changed', 409, 'inactive-domain-conflict');
+      }
+      const needsActivation = !existing || next.domains[entry.domain] !== 'foxos';
+      if (!existing) {
+        next.inactiveDomains[entry.domain] = {
+          resourceId: entry.resourceId,
+          responseStatus: 503,
+          activatedAt: now()
+        };
+      }
+      next.domains[entry.domain] = 'foxos';
+      if (needsActivation) pending.push(entry);
+    }
+    if (!pending.length) {
+      return {
+        reconciled: false,
+        inactiveDomains: Object.keys(next.inactiveDomains).sort(),
+        addedDomains: []
+      };
+    }
+
+    const activated = [];
+    try {
+      next.routes = await reloadCaddy(
+        next.routes,
+        infrastructure.gateway.Id,
+        {},
+        next.inactiveDomains
+      );
+      for (const entry of pending) {
+        const proof = await httpsProbe({
+          hostname: entry.domain,
+          connectHost: gatewayContainer,
+          port: 443,
+          requestPath: '/'
+        });
+        if (proof.tlsValid !== true || proof.statusCode !== 503) {
+          throw new IngressAuthorityError(
+            'Inactive FoxOS domain did not produce its trusted stopped response',
+            503,
+            'inactive-domain-proof-failed'
+          );
+        }
+      }
+      persist(next);
+      for (const entry of pending) {
+        await setRuntimeMap(entry.domain, 'foxos');
+        activated.push(entry.domain);
+      }
+      return {
+        reconciled: true,
+        inactiveDomains: Object.keys(next.inactiveDomains).sort(),
+        addedDomains: pending.map((entry) => entry.domain).sort()
+      };
+    } catch (error) {
+      try {
+        previous.routes = await reloadCaddy(
+          previous.routes,
+          infrastructure.gateway.Id,
+          {},
+          previous.inactiveDomains || {}
+        );
+        persist(previous);
+        for (const domain of activated) {
+          await setRuntimeMap(domain, previous.domains && previous.domains[domain] || 'legacy');
+        }
+      } catch {
+        // Preserve the original actionable failure; startup reconciliation can retry persisted state.
+      }
+      throw error;
+    }
   }
 
   function validateRoute(route) {
@@ -781,6 +906,7 @@ function createIngressAuthorityManager({
     paths: { root, authorityFile, routeMapFile, caddyRoutesFile },
     removeRoutes,
     reconcilePublicAuthority,
+    reconcileInactiveDomains,
     refreshOperationRuntime,
     stageRoutes,
     state,
