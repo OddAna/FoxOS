@@ -290,9 +290,13 @@ function isDiscoverableApplication(container) {
     labels['coolify.type'] === 'application' || labels['coolify.service.subType'] === 'application'
   );
   const hasUsableEndpoint = Boolean(externalUrlForContainer(container) || publishedPortForContainer(container));
+  const isManagedMigrationCandidate = labels[MANAGED_LABEL] === 'true' &&
+    /^res_[a-f0-9]{32}$/.test(String(labels['com.foxos.migration.source-resource-id'] || '')) &&
+    /^smop_[a-f0-9]{32}$/.test(String(labels['com.foxos.stateless-migration.id'] || ''));
 
   return Boolean(
     profile ||
+    isManagedMigrationCandidate ||
     (isCoolifyApplication && (hasUsableEndpoint || container.State !== 'running')) ||
     (hasUsableEndpoint && labels['coolify.managed'] !== 'true')
   );
@@ -357,6 +361,7 @@ function discoveredAppStates(containers, catalogApps) {
       const instanceName = hostnameForUrl(externalUrl) || humanizeName(stableName);
       const hasMultipleProfileInstances = profile && profileCounts.get(profile.id) > 1;
       const appId = 'discovered-' + (profile ? profile.id + '-' : '') + slugify(stableName);
+      const managedByFoxOS = labels[MANAGED_LABEL] === 'true';
 
       return {
         id: appId,
@@ -382,9 +387,11 @@ function discoveredAppStates(containers, catalogApps) {
         notes: [],
         installed: true,
         installable: false,
-        managedByFoxOS: false,
+        managedByFoxOS,
         canManage: true,
-        installationSource: labels['coolify.managed'] === 'true' ? 'coolify' : 'docker',
+        installationSource: managedByFoxOS
+          ? 'foxos'
+          : labels['coolify.managed'] === 'true' ? 'coolify' : 'docker',
         state: container.State || 'unknown',
         status: container.Status || null,
         containerId: container.Id,

@@ -149,6 +149,13 @@
   until a verifiable runtime exists. An explicit shortcut override may expose
   the record on the desktop but must not create or imply a runtime. Never use a
   provider UUID as its visible primary name.
+- A completed stateless migration keeps its logical application identity after
+  an explicitly cleaned cold source disappears. Registry may fall back only to
+  the exact operation-bound, FoxOS-managed candidate; Application Manager must
+  retain the operation's logical resource ID and collapse an inactive provider
+  definition that declares the same managed domain. Never let source cleanup
+  turn a running application into a stopped card or silently drop its desktop
+  shortcut.
 - The same inventory includes discovered administrator-owned systemd and
   WireGuard host-service records. Preserve the real unit and observed state,
   keep them off the desktop by default and expose no Docker lifecycle, update,

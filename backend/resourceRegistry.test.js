@@ -4,6 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const {
+  attachFoxosMigrationManagement,
   createResourceRegistry,
   detectConflicts,
   identityAliases,
@@ -73,6 +74,35 @@ test('verified FoxOS traffic authority projects a preserved provider source as F
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('verified migration management follows the running candidate after the cold source is removed', () => {
+  const logicalResourceId = 'res_' + '6'.repeat(32);
+  const candidateResourceId = 'res_' + '7'.repeat(32);
+  const candidateContainerId = '8'.repeat(64);
+  const resources = [{
+    id: candidateResourceId,
+    provider: 'foxos',
+    ownership: 'foxos-managed',
+    runtime: { containerId: candidateContainerId, state: 'running' }
+  }];
+  const management = new Map([[logicalResourceId, {
+    owner: 'foxos',
+    logicalResourceId,
+    state: 'active',
+    candidateContainerId,
+    candidateRunning: true,
+    sourceProvider: 'coolify',
+    sourceOwnership: 'observed'
+  }]]);
+
+  attachFoxosMigrationManagement(resources, management);
+
+  assert.equal(resources[0].id, candidateResourceId);
+  assert.equal(resources[0].management.logicalResourceId, logicalResourceId);
+  assert.equal(resources[0].management.sourceResourcePresent, false);
+  assert.equal(resources[0].management.sourceProvider, 'coolify');
+  assert.equal(resources[0].management.sourceOwnership, 'observed');
 });
 
 function container({ id, name, image, labels, port }) {

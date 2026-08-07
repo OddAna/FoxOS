@@ -108,6 +108,75 @@ test('a migrated source and active candidate become one server-owned application
   assert.equal(applications[0].logoUrl, '/api/apps/discovered-custom-source/icon');
 });
 
+test('a source-cleaned candidate keeps the logical application identity and absorbs its inactive definition', () => {
+  const candidateId = 'c'.repeat(64);
+  const logicalResourceId = 'res_' + '4'.repeat(32);
+  const candidateResourceId = 'res_' + '5'.repeat(32);
+  const applications = buildApplicationInventory({
+    appStates: [{
+      id: 'discovered-managed-candidate',
+      installed: true,
+      canManage: true,
+      managedByFoxOS: true,
+      installationSource: 'foxos',
+      name: 'defter-example-com',
+      containerId: candidateId,
+      containerName: 'defter-example-com',
+      state: 'running',
+      status: 'Up 1 hour'
+    }],
+    containers: [{
+      Id: candidateId,
+      Image: 'local/defter-example-com:current',
+      Names: ['/defter-example-com'],
+      State: 'running',
+      Status: 'Up 1 hour'
+    }],
+    resources: [{
+      id: candidateResourceId,
+      kind: 'container',
+      provider: 'foxos',
+      ownership: 'foxos-managed',
+      runtime: { containerId: candidateId, health: { status: null } },
+      management: {
+        owner: 'foxos',
+        logicalResourceId,
+        sourceResourcePresent: false,
+        sourceProvider: 'coolify',
+        sourceOwnership: 'observed',
+        state: 'active',
+        candidateContainerId: candidateId,
+        domains: ['defter.example.com'],
+        authorityActive: true
+      }
+    }, {
+      id: 'res_' + '6'.repeat(32),
+      kind: 'provider-definition',
+      name: 'Defter',
+      role: 'application',
+      provider: 'coolify',
+      ownership: 'observed',
+      provenance: {
+        externalDefinition: {
+          providerKind: 'application',
+          declaredRoutes: [{ domain: 'defter.example.com', scheme: 'https', path: '/' }]
+        }
+      },
+      runtime: { containerId: null, state: 'stopped', status: 'exited:unknown' }
+    }]
+  });
+
+  assert.equal(applications.length, 1);
+  assert.equal(applications[0].id, logicalResourceId);
+  assert.equal(applications[0].resourceId, logicalResourceId);
+  assert.equal(applications[0].runtime.containerId, candidateId);
+  assert.equal(applications[0].runtime.operationalState, 'running');
+  assert.equal(applications[0].externalUrl, 'https://defter.example.com');
+  assert.equal(applications[0].desktopShortcutDefaultVisible, true);
+  assert.equal(applications[0].managedByServer, true);
+  assert.equal(applications[0].provenance.importedFrom, 'coolify');
+});
+
 test('a verified server domain preference changes the primary URL without changing application identity', () => {
   const sourceId = 'a'.repeat(64);
   const candidateId = 'b'.repeat(64);

@@ -300,6 +300,29 @@ test('discovery returns user-facing applications and excludes dependencies', () 
   assert.equal(discovered[0].externalUrl, 'https://n8n.example.test');
 });
 
+test('a server-managed migration candidate remains discoverable without a published port or provider route label', () => {
+  const candidate = {
+    Id: '7'.repeat(64),
+    Image: 'sha256:' + '8'.repeat(64),
+    Names: ['/defter-example-com'],
+    State: 'running',
+    Status: 'Up 1 hour',
+    Labels: {
+      'com.foxos.managed': 'true',
+      'com.foxos.migration.source-resource-id': 'res_' + '9'.repeat(32),
+      'com.foxos.stateless-migration.id': 'smop_' + 'a'.repeat(32)
+    },
+    Ports: []
+  };
+
+  const discovered = discoveredAppStates([candidate], []);
+  assert.equal(discovered.length, 1);
+  assert.equal(discovered[0].containerId, candidate.Id);
+  assert.equal(discovered[0].managedByFoxOS, true);
+  assert.equal(discovered[0].installationSource, 'foxos');
+  assert.equal(discovered[0].state, 'running');
+});
+
 test('multiple WordPress instances remain separate and use their route identities', () => {
   const wordpressContainers = ['one', 'two'].map((instance, index) => ({
     Id: String(index + 1).repeat(64),

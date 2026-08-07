@@ -120,6 +120,9 @@ function listJson(directory) {
 function readFoxosMigrationManagement(dataRoot, resources = []) {
   const authority = readJson(path.join(dataRoot, 'ingress', 'authority.json'), null);
   const operations = listJson(path.join(dataRoot, 'stateless-migrations', 'operations'));
+  const plansById = new Map(listJson(path.join(dataRoot, 'stateless-migrations', 'plans'))
+    .filter((plan) => plan && plan.planId)
+    .map((plan) => [plan.planId, plan]));
   const resourcesByContainerId = new Map((resources || [])
     .filter((resource) => resource && resource.runtime && resource.runtime.containerId)
     .map((resource) => [resource.runtime.containerId, resource]));
@@ -153,11 +156,14 @@ function readFoxosMigrationManagement(dataRoot, resources = []) {
       operation.source && operation.source.retainedForRollback === true &&
       operation.trafficProof && operation.trafficProof.sourceContinuouslyRunning === true
     );
+    const plan = plansById.get(operation.planId) || null;
+    const plannedResource = plan && plan.resource || {};
     const state = authorityActive && candidateRunning && trafficVerified && sourcePreserved
       ? 'active'
       : 'attention-required';
     const management = {
       owner: 'foxos',
+      logicalResourceId: operation.resourceId,
       state,
       lifecycle: 'stateless-blue-green',
       operationId: operation.operationId,
@@ -169,6 +175,9 @@ function readFoxosMigrationManagement(dataRoot, resources = []) {
       candidateRunning,
       trafficVerified,
       sourcePreserved,
+      sourceName: plannedResource.name || null,
+      sourceProvider: plannedResource.observedProvider || null,
+      sourceOwnership: plannedResource.observedOwnership || null,
       automaticMigrationAllowed: false,
       completedAt: operation.completedAt || null
     };
@@ -183,6 +192,34 @@ function readFoxosMigrationManagement(dataRoot, resources = []) {
     }
   }
   return managementByResourceId;
+}
+
+function attachFoxosMigrationManagement(resources = [], managementByResourceId = new Map()) {
+  const resourcesById = new Map(resources
+    .filter((resource) => resource && resource.id)
+    .map((resource) => [resource.id, resource]));
+  const resourcesByContainerId = new Map(resources
+    .filter((resource) => resource && resource.runtime && resource.runtime.containerId)
+    .map((resource) => [resource.runtime.containerId, resource]));
+
+  for (const [logicalResourceId, management] of managementByResourceId) {
+    const sourceResource = resourcesById.get(logicalResourceId) || null;
+    const candidateResource = management && management.candidateContainerId
+      ? resourcesByContainerId.get(management.candidateContainerId) || null
+      : null;
+    const projectionResource = sourceResource || candidateResource;
+    if (!projectionResource) continue;
+
+    projectionResource.management = {
+      ...management,
+      logicalResourceId,
+      sourceResourcePresent: Boolean(sourceResource),
+      sourceProvider: sourceResource && sourceResource.provider || management.sourceProvider || null,
+      sourceOwnership: sourceResource && sourceResource.ownership || management.sourceOwnership || null
+    };
+  }
+
+  return resources;
 }
 
 function dockerName(container) {
@@ -989,16 +1026,7 @@ function createResourceRegistry({
 
     resources.sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
     const migrationManagement = readFoxosMigrationManagement(dataRoot, resources);
-    for (const resource of resources) {
-      const management = migrationManagement.get(resource.id);
-      if (management) {
-        resource.management = {
-          ...management,
-          sourceProvider: resource.provider,
-          sourceOwnership: resource.ownership
-        };
-      }
-    }
+    attachFoxosMigrationManagement(resources, migrationManagement);
 
     const inventory = normalizeInventory(images, networks, volumePayload && volumePayload.Volumes || [], resources);
     const conflicts = detectConflicts(resources);
@@ -1100,8 +1128,8 @@ function createResourceRegistry({
     const resource = snapshot && (snapshot.resources || []).find((entry) => entry.id === resourceId);
     return {
       ...management,
-      sourceProvider: resource && resource.provider || null,
-      sourceOwnership: resource && resource.ownership || null
+      sourceProvider: resource && resource.provider || management.sourceProvider || null,
+      sourceOwnership: resource && resource.ownership || management.sourceOwnership || null
     };
   }
 
@@ -1116,6 +1144,7 @@ function createResourceRegistry({
 
 module.exports = {
   SCHEMA_VERSION,
+  attachFoxosMigrationManagement,
   atomicWriteJson,
   buildRelationships,
   createResourceRegistry,

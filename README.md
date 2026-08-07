@@ -33,7 +33,10 @@ not use the host package manager for its own runtime.
   existing FoxOS icon/status language. Running and stopped containers expose
   only their real capabilities; inactive provider definitions and host-native
   systemd/WireGuard services remain visible in Settings > Uygulama Yöneticisi
-  without pretending that a Docker container exists.
+  without pretending that a Docker container exists. A migrated application
+  keeps the same logical identity and desktop shortcut after its old cold source
+  is removed; the running server-owned candidate is not replaced by a stopped
+  provider-definition card.
   Create or remove each persistent desktop shortcut and manage available
   lifecycle, access address, restart policy, ports and storage controls
 - **Application update checks** — compare a direct tagged image with its remote
@@ -290,6 +293,13 @@ resource identity and desktop position. The existing status-dot language is
 preserved: green is running, yellow is transitioning, red needs attention and
 black is stopped. Double-click opens a running application. Right-click exposes
 the real Docker-backed start, stop and restart actions.
+
+For migrated applications, the logical resource ID comes from the verified
+migration record rather than the lifetime of the old provider container. If the
+preserved source is later removed after separate cleanup approval, FoxOS follows
+the trusted candidate linkage, keeps the running card and shortcut, and folds a
+newly inactive provider definition with the same managed domain into that one
+canonical application. This projection does not recreate or duplicate a runtime.
 
 Applications placed under server management use clear runtime names such as
 `example-com` or `wordpress`. Public domains are preferred;

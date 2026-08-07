@@ -378,11 +378,20 @@ function buildApplicationInventory({ appStates = [], containers = [], resources 
     const sourceContainer = containerById.get(sourceContainerId);
     const runtimeContainer = candidateContainer || sourceContainer || null;
     const runtimeResource = resourceByContainerId.get(runtimeContainer && runtimeContainer.Id) || sourceResource;
-    const externalUrl = managedExternalUrl(groupStates, management, domainPreferences[sourceResource.id]);
+    const logicalResourceId = management.logicalResourceId || sourceResource.id;
+    const canonicalResource = logicalResourceId === sourceResource.id
+      ? sourceResource
+      : {
+          ...sourceResource,
+          id: logicalResourceId,
+          provider: management.sourceProvider || sourceResource.provider,
+          ownership: management.sourceOwnership || sourceResource.ownership
+        };
+    const externalUrl = managedExternalUrl(groupStates, management, domainPreferences[logicalResourceId]);
 
     applications.push(applicationProjection({
       app: metadata,
-      canonicalResource: sourceResource,
+      canonicalResource,
       runtimeResource,
       container: runtimeContainer,
       externalUrl,
@@ -411,9 +420,21 @@ function buildApplicationInventory({ appStates = [], containers = [], resources 
     }));
   }
 
+  const managedDomains = new Set(applications
+    .filter((application) => application.managedByServer)
+    .flatMap((application) => {
+      const domains = application.management && application.management.domains || [];
+      const external = externalHostname(application.externalUrl);
+      return [...domains, external].filter(Boolean).map((domain) => String(domain).toLowerCase());
+    }));
+
   for (const resource of resources
     .filter((candidate) => candidate && candidate.kind === 'provider-definition')
     .sort((left, right) => left.id.localeCompare(right.id))) {
+    const declaredDomains = definitionRoutes(resource)
+      .map(externalHostname)
+      .filter(Boolean);
+    if (declaredDomains.some((domain) => managedDomains.has(domain))) continue;
     applications.push(definitionApplicationProjection(resource));
   }
 

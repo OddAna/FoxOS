@@ -398,6 +398,11 @@ target blocks only adoption/migration operations that require restore proof.
 - [x] Place those applications on the existing desktop without creating files,
   copies or extra containers. Preserve the original icon/status-dot language,
   saved positions, open action and Docker-backed start/stop/restart menu.
+- [x] Preserve the same logical application and shortcut after separately
+  approved cold-source cleanup. A fresh Registry scan follows the exact
+  operation-bound running candidate, retains the original logical resource ID
+  and folds a matching inactive provider definition into the canonical card
+  instead of showing the application as stopped or removing it from desktop.
 - [x] Add **Uygulama Yöneticisi** to Settings using the existing FoxOS visual
   language. Open the selected application's page in the same Settings window;
   do not create a popup or a second window. Desktop and Settings share the same

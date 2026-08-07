@@ -361,6 +361,18 @@ shortcut preference per stable application ID. Hiding a shortcut changes only
 that projection. It creates or deletes no host file, image, container, volume,
 route or application and remains stable across browsers and agent rebuilds.
 
+A verified stateless migration keeps its logical resource identity even after a
+separately approved cleanup removes the old cold source container. While the
+source exists, its Registry record remains the canonical projection and points
+to the active candidate. When it no longer exists, Registry attaches the same
+persisted management record to the exact running candidate container and the
+Application Manager continues to expose the operation's logical resource ID.
+Candidate discovery trusts only the bounded FoxOS-managed migration labels and
+never a name heuristic. An inactive provider definition whose declared domain
+is already owned by that managed application is folded into the canonical card,
+not shown as a second stopped application. Desktop shortcut state therefore
+survives source cleanup without creating, restarting or relabeling a runtime.
+
 The same inventory includes inactive application, service and database
 definitions recovered by an optional migration reader even when they have no
 current Docker container. These are truthful installation records, not invented
