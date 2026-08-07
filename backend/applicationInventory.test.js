@@ -31,6 +31,12 @@ test('runtime state maps to the existing FoxOS desktop status contract', () => {
   assert.equal(operationalStateForRuntime({ state: 'exited', status: 'Exited (0) 1 minute ago', healthStatus: null }), 'stopped');
   assert.equal(operationalStateForRuntime({ state: 'exited', status: 'Exited (137) 1 minute ago', healthStatus: null }), 'stopped');
   assert.equal(operationalStateForRuntime({ state: 'exited', status: 'Exited (2) 1 minute ago', healthStatus: null }), 'error');
+  assert.equal(operationalStateForRuntime({
+    state: 'exited',
+    status: 'Exited (1) 1 minute ago',
+    healthStatus: null,
+    intentionalStop: true
+  }), 'stopped');
 });
 
 test('custom applications use a permanent domain while profiles and temporary previews keep their names', () => {
@@ -527,7 +533,7 @@ test('a recovered inactive definition runtime replaces the stopped definition ca
 
   assert.equal(applications.length, 1);
   assert.equal(applications[0].id, logicalResourceId);
-  assert.equal(applications[0].name, 'firefox.example.com');
+  assert.equal(applications[0].name, 'firefox');
   assert.equal(applications[0].externalUrl, 'https://firefox.example.com');
   assert.equal(applications[0].runtime.containerId, candidateContainerId);
   assert.equal(applications[0].runtime.operationalState, 'running');
@@ -553,14 +559,14 @@ test('a stopped recovered runtime remains one logical application instead of rev
       containerId: candidateContainerId,
       containerName: 'firefox',
       state: 'exited',
-      status: 'Exited (0) 1 minute ago'
+      status: 'Exited (1) 1 minute ago'
     }],
     containers: [{
       Id: candidateContainerId,
       Image: 'jlesage/firefox@sha256:' + '8'.repeat(64),
       Names: ['/firefox'],
       State: 'exited',
-      Status: 'Exited (0) 1 minute ago'
+      Status: 'Exited (1) 1 minute ago'
     }],
     resources: [{
       id: logicalResourceId,
@@ -574,6 +580,7 @@ test('a stopped recovered runtime remains one logical application instead of rev
         owner: 'foxos',
         state: 'attention-required',
         lifecycle: 'inactive-definition-runtime',
+        runtimeState: 'stopped',
         candidateContainerId,
         candidateResourceId,
         domains: ['firefox.example.com'],
@@ -595,10 +602,65 @@ test('a stopped recovered runtime remains one logical application instead of rev
 
   assert.equal(applications.length, 1);
   assert.equal(applications[0].id, logicalResourceId);
-  assert.equal(applications[0].name, 'firefox.example.com');
+  assert.equal(applications[0].name, 'firefox');
   assert.equal(applications[0].runtime.containerId, candidateContainerId);
   assert.equal(applications[0].runtime.operationalState, 'stopped');
   assert.equal(applications[0].managedByServer, true);
   assert.equal(applications[0].capabilities.start, true);
   assert.equal(applications[0].desktopShortcutDefaultVisible, true);
+});
+
+test('a recovered Git application keeps its logical name separate from its access link', () => {
+  const logicalResourceId = 'res_' + '9'.repeat(32);
+  const candidateResourceId = 'res_' + 'a'.repeat(32);
+  const candidateContainerId = 'b'.repeat(64);
+  const applications = buildApplicationInventory({
+    appStates: [{
+      id: 'discovered-retrofishfeast',
+      installed: true,
+      canManage: true,
+      managedByFoxOS: true,
+      installationSource: 'foxos',
+      name: 'Retrofishfeast',
+      containerId: candidateContainerId,
+      containerName: 'retrofishfeast',
+      state: 'exited',
+      status: 'Exited (1) 1 minute ago'
+    }],
+    containers: [{
+      Id: candidateContainerId,
+      Image: 'server/retrofishfeast:git-123456789abc',
+      Names: ['/retrofishfeast'],
+      State: 'exited',
+      Status: 'Exited (1) 1 minute ago'
+    }],
+    resources: [{
+      id: logicalResourceId,
+      kind: 'provider-definition',
+      name: 'retroFishFeast',
+      management: {
+        owner: 'foxos',
+        state: 'attention-required',
+        lifecycle: 'inactive-definition-runtime',
+        runtimeState: 'stopped',
+        sourceName: 'retroFishFeast',
+        candidateContainerId,
+        candidateResourceId,
+        domains: ['erkan.example.com'],
+        authorityActive: false
+      }
+    }, {
+      id: candidateResourceId,
+      kind: 'container',
+      name: 'retrofishfeast',
+      ownership: 'foxos-managed',
+      runtime: { containerId: candidateContainerId, state: 'exited' }
+    }]
+  });
+
+  assert.equal(applications.length, 1);
+  assert.equal(applications[0].name, 'retroFishFeast');
+  assert.equal(applications[0].externalUrl, 'https://erkan.example.com');
+  assert.equal(applications[0].runtime.operationalState, 'stopped');
+  assert.equal(applications[0].management.runtimeState, 'stopped');
 });

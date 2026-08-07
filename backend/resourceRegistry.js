@@ -361,6 +361,9 @@ function readFoxosMigrationManagement(dataRoot, resources = []) {
       logicalResourceId: operation.resourceId,
       state: routeAuthorityActive && candidateRunning && trafficVerified ? 'active' : 'attention-required',
       lifecycle: 'inactive-definition-runtime',
+      runtimeState: operation.runtimeState === 'stopped'
+        ? 'stopped'
+        : candidateRunning ? 'running' : 'unknown',
       operationId: operation.operationId,
       routeId: route.routeId || null,
       domains,

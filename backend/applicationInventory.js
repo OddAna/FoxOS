@@ -18,7 +18,7 @@ function healthStatusFromRuntime(container, resource) {
     : null;
 }
 
-function operationalStateForRuntime({ state, status, healthStatus }) {
+function operationalStateForRuntime({ state, status, healthStatus, intentionalStop = false }) {
   const normalizedState = String(state || 'unknown').toLowerCase();
   const normalizedHealth = String(healthStatus || '').toLowerCase();
 
@@ -32,11 +32,24 @@ function operationalStateForRuntime({ state, status, healthStatus }) {
     return 'transitioning';
   }
   if (normalizedState === 'exited') {
+    if (intentionalStop) return 'stopped';
     const exitCode = exitCodeFromStatus(status);
     return exitCode === null || [0, 137, 143].includes(exitCode) ? 'stopped' : 'error';
   }
   if (normalizedState === 'dead') return 'error';
   return 'transitioning';
+}
+
+function applicationDisplayName(app, canonicalResource, management, externalUrl) {
+  if (!management || management.lifecycle !== 'inactive-definition-runtime') {
+    return canonicalApplicationName(app, externalUrl);
+  }
+  const logicalName = String(
+    management.sourceName || canonicalResource && canonicalResource.name || ''
+  ).trim();
+  const observedName = String(app && app.name || '').trim();
+  if (logicalName && /[A-Z]/.test(logicalName)) return logicalName;
+  return observedName || logicalName || canonicalApplicationName(app, externalUrl);
 }
 
 function fallbackApplicationId(app) {
@@ -114,7 +127,12 @@ function applicationProjection({
   const state = container && container.State || app.state || 'unknown';
   const status = container && container.Status || app.status || null;
   const healthStatus = healthStatusFromRuntime(container, runtimeResource);
-  const operationalState = operationalStateForRuntime({ state, status, healthStatus });
+  const operationalState = operationalStateForRuntime({
+    state,
+    status,
+    healthStatus,
+    intentionalStop: Boolean(management && management.runtimeState === 'stopped')
+  });
   const canManage = Boolean(app.canManage && containerId);
   const id = canonicalResource && canonicalResource.id || fallbackApplicationId(app);
   const canEditAccessLink = Boolean(canonicalResource && canManage);
@@ -123,7 +141,7 @@ function applicationProjection({
     schemaVersion: APPLICATION_INVENTORY_SCHEMA_VERSION,
     id,
     resourceId: canonicalResource && canonicalResource.id || null,
-    name: canonicalApplicationName(app, externalUrl),
+    name: applicationDisplayName(app, canonicalResource, management, externalUrl),
     instanceName: app.instanceName || null,
     publisher: app.publisher || 'Sunucu',
     category: app.category || 'Web Apps',
@@ -172,7 +190,8 @@ function applicationProjection({
     management: management ? {
       state: management.state || 'attention-required',
       lifecycle: management.lifecycle || null,
-      routeAuthorityActive: management.authorityActive === true
+      routeAuthorityActive: management.authorityActive === true,
+      runtimeState: management.runtimeState || null
     } : null
   };
 }

@@ -920,6 +920,7 @@ test('inactive definition runtime projects its verified candidate onto the logic
   assert.equal(management.owner, 'foxos');
   assert.equal(management.state, 'active');
   assert.equal(management.lifecycle, 'inactive-definition-runtime');
+  assert.equal(management.runtimeState, 'running');
   assert.equal(management.candidateContainerId, candidateContainerId);
   assert.equal(management.candidateResourceId, candidateResourceId);
   assert.deepEqual(management.domains, [domain]);
@@ -986,6 +987,7 @@ test('a stopped inactive-definition runtime supersedes its earlier definition-on
       runtime: { containerId: candidateContainerId, state: 'exited' }
     }]).get(resourceId);
     assert.equal(management.lifecycle, 'inactive-definition-runtime');
+    assert.equal(management.runtimeState, 'stopped');
     assert.equal(management.state, 'attention-required');
     assert.equal(management.candidateContainerId, candidateContainerId);
     assert.equal(management.candidateResourceId, candidateResourceId);
