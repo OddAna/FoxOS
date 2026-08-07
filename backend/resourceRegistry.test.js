@@ -15,6 +15,23 @@ const {
   roleFor,
   safeLabels
 } = require('./resourceRegistry');
+const { buildApplicationInventory } = require('./applicationInventory');
+const { createDesktopShortcutManager } = require('./desktopShortcutManager');
+
+function providerRecoveryArtifact(seed = 'a') {
+  const artifactId = 'pdef_' + seed.repeat(32);
+  const revision = 'pdef_rev_' + seed.repeat(32);
+  return {
+    schemaVersion: 1,
+    artifactId,
+    revision,
+    file: `provider-definitions/recovery/${artifactId}-${revision}.foxosenc`,
+    encrypted: true,
+    authenticated: true,
+    keyId: 'key_' + seed.repeat(24),
+    plaintextSecretValuesIncluded: false
+  };
+}
 
 test('verified FoxOS traffic authority projects a preserved provider source as FoxOS-managed', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-registry-management-'));
@@ -510,6 +527,122 @@ test('registry merges matching provider definitions and retains inactive definit
     assert.equal(wireguard.classification.stateClass, 'host-configured');
     assert.equal(snapshot.discovery.sources.every((source) => source.readOnly), true);
     assert.equal(snapshot.guarantees.runtimeMutated, false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('offline provider scans retain redacted definitions and their explicit desktop shortcuts', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-registry-provider-offline-'));
+  let providerOnline = true;
+  try {
+    const registry = createResourceRegistry({
+      dataRoot: root,
+      randomUUID: () => '00000000-0000-4000-8000-000000000001',
+      dockerRequest: async (method, requestPath) => {
+        assert.equal(method, 'GET');
+        if (requestPath === '/containers/json?all=1' || requestPath === '/images/json?all=0' || requestPath === '/networks') return [];
+        if (requestPath === '/volumes') return { Volumes: [] };
+        throw new Error(`unexpected ${requestPath}`);
+      },
+      providerResourceReader: async () => {
+        if (!providerOnline) {
+          const error = new Error('provider unavailable');
+          error.code = 'provider-unavailable';
+          throw error;
+        }
+        return {
+          provider: 'coolify',
+          configured: true,
+          readOnly: true,
+          resources: [{
+            sourceKind: 'provider-definition',
+            provider: 'coolify',
+            externalId: 'offline-definition-1',
+            name: 'Offline definition',
+            providerKind: 'service',
+            serviceType: 'directus',
+            status: 'exited',
+            routes: [],
+            recoveryArtifact: providerRecoveryArtifact('a')
+          }]
+        };
+      }
+    });
+    const onlineSnapshot = await registry.scan();
+    const definitionId = onlineSnapshot.resources[0].id;
+    const shortcuts = createDesktopShortcutManager({ dataRoot: root });
+    shortcuts.setVisible(definitionId, true);
+
+    providerOnline = false;
+    const offlineSnapshot = await registry.scan();
+    assert.equal(offlineSnapshot.summary.resources, 1);
+    assert.equal(offlineSnapshot.resources[0].id, definitionId);
+    assert.equal(offlineSnapshot.resources[0].name, 'Offline definition');
+    assert.equal(offlineSnapshot.discovery.sources.find((source) => source.source === 'legacy-provider').status, 'error');
+    assert.equal(offlineSnapshot.discovery.sources.find((source) => source.source === 'legacy-provider').retainedResources, 1);
+    assert.equal(offlineSnapshot.guarantees.offlineProviderDefinitionsRetainedFromRedactedServerState, true);
+
+    const applications = buildApplicationInventory({ resources: offlineSnapshot.resources });
+    assert.equal(applications.length, 1);
+    assert.equal(applications[0].id, definitionId);
+    assert.equal(shortcuts.isVisible(applications[0].id, applications[0].desktopShortcutDefaultVisible), true);
+    assert.equal(fs.readFileSync(registry.paths.latestFile, 'utf8').includes('provider unavailable'), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('adopted inactive definitions remain server-managed without provider history', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-registry-adopted-definition-'));
+  const resourceId = 'res_' + 'b'.repeat(32);
+  const operationId = 'rtop_' + 'c'.repeat(32);
+  try {
+    fs.mkdirSync(path.join(root, 'runtime-transfers', 'operations'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'runtime-transfers', 'operations', operationId + '.json'), JSON.stringify({
+      operationId,
+      resourceId,
+      memberResourceIds: [resourceId],
+      status: 'server-definition-adopted',
+      completedAt: '2026-08-07T12:00:00.000Z',
+      routes: [],
+      manifests: [{
+        schemaVersion: 1,
+        resourceId,
+        name: 'Recovered definition',
+        kind: 'inactive-provider-definition',
+        role: 'service',
+        desiredState: 'stopped',
+        source: null,
+        serviceType: 'directus',
+        declaredRoutes: [],
+        observedStatus: 'exited',
+        recoveryArtifact: providerRecoveryArtifact('b'),
+        provenance: { importedFrom: 'coolify' }
+      }]
+    }));
+    const registry = createResourceRegistry({
+      dataRoot: root,
+      dockerRequest: async (method, requestPath) => {
+        assert.equal(method, 'GET');
+        if (requestPath === '/containers/json?all=1' || requestPath === '/images/json?all=0' || requestPath === '/networks') return [];
+        if (requestPath === '/volumes') return { Volumes: [] };
+        throw new Error(`unexpected ${requestPath}`);
+      },
+      providerResourceReader: async () => {
+        const error = new Error('provider unavailable');
+        error.code = 'provider-unavailable';
+        throw error;
+      }
+    });
+    const snapshot = await registry.scan();
+    assert.equal(snapshot.summary.resources, 1);
+    assert.equal(snapshot.resources[0].id, resourceId);
+    assert.equal(snapshot.resources[0].name, 'Recovered definition');
+    assert.equal(snapshot.resources[0].management.owner, 'foxos');
+    assert.equal(snapshot.resources[0].management.lifecycle, 'inactive-definition-transfer');
+    assert.equal(snapshot.resources[0].management.state, 'active');
+    assert.equal(snapshot.discovery.sources.find((source) => source.source === 'legacy-provider').recoveredServerOwnedResources, 1);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

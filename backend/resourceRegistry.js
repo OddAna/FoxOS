@@ -899,6 +899,106 @@ async function readOptionalObservation(reader, source) {
   }
 }
 
+function declaredRouteUrl(route) {
+  if (!route || !['http', 'https'].includes(route.scheme) || !route.domain) return null;
+  const pathValue = route.path && String(route.path).startsWith('/') ? route.path : '/';
+  try {
+    const parsed = new URL(`${route.scheme}://${route.domain}${pathValue}`);
+    if (parsed.username || parsed.password || parsed.hostname.toLowerCase() !== String(route.domain).toLowerCase()) {
+      return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function rebuildProviderDefinition(resource) {
+  if (
+    !resource || resource.kind !== 'provider-definition' ||
+    !/^res_[a-f0-9]{32}$/.test(String(resource.id || ''))
+  ) return null;
+  const external = resource.provenance && resource.provenance.externalDefinition || {};
+  const recoveryArtifact = providerRecoveryArtifact({ recoveryArtifact: external.recoveryArtifact });
+  if (!recoveryArtifact) return null;
+  return normalizeObservedResource({
+    sourceKind: 'provider-definition',
+    provider: resource.provider,
+    name: resource.name,
+    providerKind: external.providerKind || resource.role || 'service',
+    serviceType: external.serviceType || null,
+    status: resource.runtime && resource.runtime.status || 'stopped',
+    image: resource.runtime && resource.runtime.image || null,
+    source: external.source || null,
+    routes: (external.declaredRoutes || resource.declaredRoutes || []).map(declaredRouteUrl).filter(Boolean),
+    observedUpdatedAt: external.observedUpdatedAt || null,
+    recoveryArtifact
+  }, resource.id);
+}
+
+function providerDefinitionsFromSnapshot(snapshot) {
+  if (!snapshot || snapshot.schemaVersion !== SCHEMA_VERSION || !Array.isArray(snapshot.resources)) return [];
+  return snapshot.resources.map(rebuildProviderDefinition).filter(Boolean);
+}
+
+function readCachedProviderDefinitions(latestFile, revisionsRoot) {
+  const candidates = [];
+  try {
+    const latest = readJson(latestFile, null);
+    if (latest) candidates.push(latest);
+  } catch {
+    // A corrupt latest snapshot must not prevent using an older valid revision.
+  }
+  try {
+    const revisions = fs.readdirSync(revisionsRoot).filter((file) => file.endsWith('.json')).sort().reverse();
+    for (const revision of revisions) {
+      try {
+        candidates.push(readJson(path.join(revisionsRoot, revision), null));
+      } catch {
+        // Keep looking for the newest intact provider-definition revision.
+      }
+    }
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  for (const snapshot of candidates) {
+    const definitions = providerDefinitionsFromSnapshot(snapshot);
+    if (definitions.length) return definitions;
+  }
+  return [];
+}
+
+function readAdoptedProviderDefinitions(dataRoot) {
+  const resources = [];
+  for (const operation of listJson(path.join(dataRoot, 'runtime-transfers', 'operations'))) {
+    if (
+      operation.status !== 'server-definition-adopted' ||
+      !/^rtop_[a-f0-9]{32}$/.test(String(operation.operationId || ''))
+    ) continue;
+    for (const manifest of Array.isArray(operation.manifests) ? operation.manifests : []) {
+      if (
+        !manifest || manifest.kind !== 'inactive-provider-definition' ||
+        !/^res_[a-f0-9]{32}$/.test(String(manifest.resourceId || ''))
+      ) continue;
+      const recoveryArtifact = providerRecoveryArtifact({ recoveryArtifact: manifest.recoveryArtifact });
+      const provider = manifest.provenance && manifest.provenance.importedFrom;
+      if (!recoveryArtifact || !provider) continue;
+      resources.push(normalizeObservedResource({
+        sourceKind: 'provider-definition',
+        provider,
+        name: manifest.name,
+        providerKind: manifest.role || 'service',
+        serviceType: manifest.serviceType || null,
+        status: manifest.observedStatus || 'stopped',
+        source: manifest.source || null,
+        routes: (manifest.declaredRoutes || []).map(declaredRouteUrl).filter(Boolean),
+        recoveryArtifact
+      }, manifest.resourceId));
+    }
+  }
+  return resources;
+}
+
 function countBy(items, selector) {
   const counts = {};
   for (const item of items) {
@@ -1179,6 +1279,24 @@ function createResourceRegistry({
       resources.push(normalizeObservedResource(observation, resourceId));
     }
 
+    const resourceIds = new Set(resources.map((resource) => resource.id));
+    let retainedProviderDefinitions = 0;
+    if (providerObservation.status !== 'ready') {
+      for (const resource of readCachedProviderDefinitions(latestFile, revisionsRoot)) {
+        if (resourceIds.has(resource.id)) continue;
+        resources.push(resource);
+        resourceIds.add(resource.id);
+        retainedProviderDefinitions += 1;
+      }
+    }
+    let recoveredAdoptedDefinitions = 0;
+    for (const resource of readAdoptedProviderDefinitions(dataRoot)) {
+      if (resourceIds.has(resource.id)) continue;
+      resources.push(resource);
+      resourceIds.add(resource.id);
+      recoveredAdoptedDefinitions += 1;
+    }
+
     const capacityCandidates = resources.filter((resource) => (
       resource.kind === 'container' && resource.classification &&
       resource.classification.workloadRole === 'application' &&
@@ -1243,7 +1361,9 @@ function createResourceRegistry({
           readOnly: observation.readOnly !== false,
           status: observation.status,
           discoveredResources: observation.resources.length,
-          errorCode: observation.errorCode || null
+          errorCode: observation.errorCode || null,
+          retainedResources: observation === providerObservation ? retainedProviderDefinitions : 0,
+          recoveredServerOwnedResources: observation === providerObservation ? recoveredAdoptedDefinitions : 0
         })),
         hostInventory: hostObservation.inventory || null
       },
@@ -1281,6 +1401,8 @@ function createResourceRegistry({
         classificationMethod: 'deterministic-local-evidence',
         classificationDoesNotImplyOwnership: true,
         foxosManagementDerivedFromVerifiedLocalAuthority: true,
+        offlineProviderDefinitionsRetainedFromRedactedServerState: true,
+        adoptedProviderDefinitionsRecoverableWithoutProvider: true,
         statelessDoesNotProveApplicationDataFree: true,
         volumeCapacityInspectedReadOnly: typeof volumeCapacityReader === 'function'
       },
@@ -1356,6 +1478,8 @@ module.exports = {
   parseDockerHttpHealthTarget,
   parseTraefikRoutes,
   readFoxosMigrationManagement,
+  readAdoptedProviderDefinitions,
+  readCachedProviderDefinitions,
   resolveResourceId,
   roleFor,
   safeLabels,

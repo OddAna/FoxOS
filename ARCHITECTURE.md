@@ -388,6 +388,22 @@ An operator may explicitly create a desktop shortcut to the record. Duplicate
 metadata-less definitions use stable resource identity and readable ordinals;
 provider UUIDs never become their primary name.
 
+Provider availability is not application identity authority. Every definition
+observation already persisted in a redacted Registry revision with a validated
+encrypted recovery-artifact reference remains in the canonical server inventory
+when the optional reader is offline. A completed inactive-definition transfer
+can also rebuild its record directly from the verified server-owned operation
+manifest when no provider snapshot survives. Fresh management evidence is
+reattached on every scan; stale management objects are never copied from the old
+snapshot. The discovery status still reports the provider error and distinguishes
+retained observations from operation-recovered server-owned definitions.
+
+Desktop shortcut visibility continues to use the same stable canonical resource
+ID. An offline provider therefore cannot remove an explicitly visible shortcut,
+and restoring a definition creates neither a runtime nor a new shortcut choice.
+Provider-definition removal requires a future explicit server-owned retirement
+operation; absence or timeout from an optional reader is never deletion intent.
+
 Host-native records discovered by the Linux reader are projected into the same
 Application Manager with their stable resource ID, systemd unit and observed
 active/failed/stopped state. They remain off the desktop by default, are marked
