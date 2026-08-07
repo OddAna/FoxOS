@@ -221,7 +221,8 @@ const Desktop = () => {
   };
 
   const handleDragStart = (e, item) => {
-    const rect = e.target.getBoundingClientRect();
+    const dragElement = fileRefs.current[item.desktopId] || e.currentTarget;
+    const rect = dragElement.getBoundingClientRect();
     const offsetX = e.clientX - rect.left;
     const offsetY = e.clientY - rect.top;
 
@@ -294,7 +295,7 @@ const Desktop = () => {
       e.dataTransfer.setDragImage(dragContainer, offsetX - minX, offsetY - minY);
       setTimeout(() => document.body.removeChild(dragContainer), 0);
     } else {
-      e.dataTransfer.setDragImage(e.target, offsetX, offsetY);
+      e.dataTransfer.setDragImage(dragElement, offsetX, offsetY);
     }
   };
 
@@ -341,6 +342,7 @@ const Desktop = () => {
       const row = Math.min(maxRows - 1, Math.max(0, Math.round((rawY - MARGIN_Y) / cellH)));
 
       if (data.sourcePath && data.sourcePath !== 'Masaüstü') {
+        const movesFilesystemItems = filesToMove.some((file) => file.desktopKind !== 'application');
         const promises = filesToMove.map(f => {
           if (f.desktopKind === 'application' && f.applicationId) {
             const application = applications.find((candidate) => candidate.id === f.applicationId);
@@ -357,8 +359,10 @@ const Desktop = () => {
         });
 
         Promise.all(promises).then(() => {
-          window.dispatchEvent(new Event('refresh_files'));
-          refreshApplications({ quiet: true }).catch(() => {});
+          if (movesFilesystemItems) {
+            window.dispatchEvent(new Event('refresh_files'));
+            refreshApplications({ quiet: true }).catch(() => {});
+          }
         }).catch(err => {
           console.error("Taşıma hatası:", err);
           showDialog({ title: 'Hata', message: 'Dosyalar Masaüstüne taşınamadı.', type: 'error' });
@@ -417,6 +421,7 @@ const Desktop = () => {
       if (filesToMove.some(f => f.desktopKind !== 'application' && f.name === targetFolder.name)) return;
       
       const targetPath = canonicalDesktopPath(`/Masaüstü/${targetFolder.name}`);
+      const movesFilesystemItems = filesToMove.some((file) => file.desktopKind !== 'application');
       
       const promises = filesToMove.map(f => {
         if (f.desktopKind === 'application' && f.applicationId) {
@@ -438,8 +443,10 @@ const Desktop = () => {
       });
 
       Promise.all(promises).then(() => {
-        window.dispatchEvent(new Event('refresh_files'));
-        refreshApplications({ quiet: true }).catch(() => {});
+        if (movesFilesystemItems) {
+          window.dispatchEvent(new Event('refresh_files'));
+          refreshApplications({ quiet: true }).catch(() => {});
+        }
       }).catch(() => {
         showDialog({ title: 'Hata', message: 'Dosyalar klasöre taşınamadı.', type: 'error' });
       });

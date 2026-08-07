@@ -2649,13 +2649,8 @@ app.put('/api/applications/:applicationId/desktop-shortcut', async (req, res) =>
   }
 });
 
-app.put('/api/applications/:applicationId/desktop-shortcut-location', async (req, res) => {
+app.put('/api/applications/:applicationId/desktop-shortcut-location', (req, res) => {
   try {
-    const inventory = await getApplicationInventory();
-    const exists = inventory.applications.some((application) => application.id === req.params.applicationId);
-    if (!exists) {
-      throw new DesktopShortcutError('Uygulama artık sunucuda bulunamıyor.', 404, 'application-not-found');
-    }
     const shortcutPath = validatedDesktopShortcutFolder(req.body && req.body.path);
     res.json({ shortcut: desktopShortcutManager.setLocation(req.params.applicationId, shortcutPath) });
   } catch (error) {

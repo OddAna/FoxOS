@@ -747,6 +747,7 @@ test('setup creates an authenticated session and unlocks the workspace', async (
     body: JSON.stringify({ path: '/Masaüstü', name: 'Projeler' })
   });
   assert.equal(createShortcutFolderResponse.status, 201);
+  dockerRequestLog.length = 0;
   const moveShortcutResponse = await fetch(
     baseUrl() + '/api/applications/' + applicationId + '/desktop-shortcut-location',
     {
@@ -757,6 +758,7 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   );
   assert.equal(moveShortcutResponse.status, 200);
   assert.equal((await moveShortcutResponse.json()).shortcut.path, '/Masaüstü/Projeler');
+  assert.equal(dockerRequestLog.length, 0);
   const movedShortcutInventory = await (await fetch(baseUrl() + '/api/applications', {
     headers: { Cookie: cookie }
   })).json();

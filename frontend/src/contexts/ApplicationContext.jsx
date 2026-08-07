@@ -1,6 +1,7 @@
 /* oxlint-disable react/only-export-components -- context hook and provider intentionally share a module */
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { apiFetch } from '../api';
+import { DESKTOP_ROOT } from '../utils/desktopShortcuts';
 
 const ApplicationContext = createContext(null);
 
@@ -17,6 +18,8 @@ export const ApplicationProvider = ({ children }) => {
   const [actions, setActions] = useState({});
   const requestSequence = useRef(0);
   const pendingActions = useRef(new Set());
+  const pendingShortcutLocations = useRef(new Map());
+  const shortcutLocationSequence = useRef(0);
 
   const refreshApplications = useCallback(async ({ quiet = false } = {}) => {
     const sequence = requestSequence.current + 1;
@@ -27,7 +30,12 @@ export const ApplicationProvider = ({ children }) => {
       const response = await apiFetch('/api/applications');
       const payload = await response.json();
       if (requestSequence.current === sequence) {
-        setApplications(payload.applications || []);
+        setApplications((payload.applications || []).map((application) => {
+          const pendingLocation = pendingShortcutLocations.current.get(application.id);
+          return pendingLocation
+            ? { ...application, desktopShortcutPath: pendingLocation.path }
+            : application;
+        }));
         setError(null);
       }
       return payload.applications || [];
@@ -91,13 +99,49 @@ export const ApplicationProvider = ({ children }) => {
     if (!application || typeof folderPath !== 'string') {
       throw new Error('Masaüstü kısayol konumu geçersiz');
     }
-    await apiFetch(`/api/applications/${application.id}/desktop-shortcut-location`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: folderPath })
-    });
-    await refreshApplications({ quiet: true });
-  }, [refreshApplications]);
+    const previousPath = application.desktopShortcutPath || DESKTOP_ROOT;
+    const sequence = shortcutLocationSequence.current + 1;
+    shortcutLocationSequence.current = sequence;
+    pendingShortcutLocations.current.set(application.id, { path: folderPath, sequence });
+    setApplications((current) => current.map((candidate) => (
+      candidate.id === application.id
+        ? { ...candidate, desktopShortcutPath: folderPath }
+        : candidate
+    )));
+
+    try {
+      const response = await apiFetch(`/api/applications/${application.id}/desktop-shortcut-location`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: folderPath })
+      });
+      const payload = await response.json();
+      const pendingLocation = pendingShortcutLocations.current.get(application.id);
+      if (pendingLocation && pendingLocation.sequence === sequence) {
+        pendingShortcutLocations.current.delete(application.id);
+        const savedPath = payload.shortcut && payload.shortcut.path
+          ? payload.shortcut.path
+          : folderPath;
+        setApplications((current) => current.map((candidate) => (
+          candidate.id === application.id
+            ? { ...candidate, desktopShortcutPath: savedPath }
+            : candidate
+        )));
+      }
+      return payload.shortcut;
+    } catch (shortcutError) {
+      const pendingLocation = pendingShortcutLocations.current.get(application.id);
+      if (pendingLocation && pendingLocation.sequence === sequence) {
+        pendingShortcutLocations.current.delete(application.id);
+        setApplications((current) => current.map((candidate) => (
+          candidate.id === application.id && candidate.desktopShortcutPath === folderPath
+            ? { ...candidate, desktopShortcutPath: previousPath }
+            : candidate
+        )));
+      }
+      throw shortcutError;
+    }
+  }, []);
 
   useEffect(() => {
     refreshApplications().catch(() => {});
