@@ -287,6 +287,8 @@ function observedFixture(t, options = {}) {
       externalUrl: manager && manager.primaryDomains()[RESOURCE_ID]
         ? 'https://' + manager.primaryDomains()[RESOURCE_ID]
         : 'https://old.example.com',
+      hostPort: options.hostPort || null,
+      bindAddress: options.bindAddress || null,
       managedByServer: false,
       capabilities: { editAccessLink: true, editDomain: true },
       runtime: { operationalState: 'running', containerId }
@@ -582,4 +584,23 @@ test('an ambiguous discovered service explains why its access link cannot be cha
   const status = await manager.getStatus(RESOURCE_ID);
   assert.equal(status.editable, false);
   assert.match(status.reason, /web portu kesin olarak belirlenemedi/i);
+});
+
+test('a discovered service with many exposed ports uses its exact published web-port mapping', async (t) => {
+  const { calls, manager } = observedFixture(t, {
+    hostPort: 8181,
+    bindAddress: '0.0.0.0',
+    ports: [
+      { privatePort: 53, protocol: 'tcp', hostIp: '127.0.0.1', hostPort: 53 },
+      { privatePort: 80, protocol: 'tcp', hostIp: '0.0.0.0', hostPort: 8181 },
+      { privatePort: 3000, protocol: 'tcp', hostIp: '0.0.0.0', hostPort: 3000 },
+      { privatePort: 443, protocol: 'tcp', hostPort: null }
+    ]
+  });
+
+  const plan = await manager.createPlan(RESOURCE_ID, { domain: 'new.example.com' });
+  const operation = await manager.applyPlan(plan.planId, plan.confirmation);
+  assert.equal(operation.status, 'completed');
+  const staged = calls.find((call) => call.kind === 'stage');
+  assert.equal(staged.routes[0].privatePort, 80);
 });

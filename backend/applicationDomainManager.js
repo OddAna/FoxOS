@@ -249,7 +249,7 @@ function createApplicationDomainManager({
     return snapshot && (snapshot.resources || []).find((resource) => resource.id === resourceId) || null;
   }
 
-  function observedPrivatePort(resource, currentDomain) {
+  function observedPrivatePort(resource, currentDomain, application = null) {
     const routes = (resource && resource.routes || []).filter((route) => (
       route && route.path === '/' && (!currentDomain || route.domain === currentDomain)
     ));
@@ -258,6 +258,19 @@ function createApplicationDomainManager({
       .filter((port) => Number.isInteger(port) && port > 0 && port <= 65535))];
     if (routePorts.length === 1) return routePorts[0];
     if (routePorts.length > 1) return null;
+
+    const publishedHostPort = Number(application && application.hostPort);
+    if (Number.isInteger(publishedHostPort) && publishedHostPort > 0 && publishedHostPort <= 65535) {
+      const publishedPrivatePorts = [...new Set((resource && resource.ports || [])
+        .filter((port) => (
+          String(port.protocol || 'tcp').toLowerCase() === 'tcp' &&
+          Number(port.hostPort) === publishedHostPort
+        ))
+        .map((port) => Number(port.privatePort))
+        .filter((port) => Number.isInteger(port) && port > 0 && port <= 65535))];
+      if (publishedPrivatePorts.length === 1) return publishedPrivatePorts[0];
+      if (publishedPrivatePorts.length > 1) return null;
+    }
 
     const tcpPorts = [...new Set((resource && resource.ports || [])
       .filter((port) => String(port.protocol || 'tcp').toLowerCase() === 'tcp')
@@ -270,7 +283,7 @@ function createApplicationDomainManager({
     if (typeof dockerRequest !== 'function') return null;
     const resource = snapshotResource(application.resourceId);
     const currentDomain = hostnameFromUrl(application.externalUrl);
-    const privatePort = observedPrivatePort(resource, currentDomain);
+    const privatePort = observedPrivatePort(resource, currentDomain, application);
     const candidateContainerId = application.runtime && application.runtime.containerId;
     if (
       !resource || resource.kind !== 'container' || !CONTAINER_ID_PATTERN.test(String(candidateContainerId || '')) ||

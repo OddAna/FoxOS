@@ -789,6 +789,7 @@ const resourceRegistry = createResourceRegistry({
     hostRead: runExactHostObservation
   }),
   providerResourceReader: () => coolifyMigrationReader.scan(),
+  providerDefinitionMetadataReader: (artifact) => coolifyMigrationReader.recoveryMetadata(artifact),
   volumeCapacityReader: ({ volumes }) => statefulMigrationVolumeSnapshots.inspectCapacity({
     volumes,
     maximumTransactionBytes: MAX_DIRECT_STATEFUL_TRANSACTION_BYTES

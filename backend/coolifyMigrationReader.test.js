@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { createCoolifyMigrationReader } = require('./coolifyMigrationReader');
+const { createCoolifyMigrationReader, serviceName } = require('./coolifyMigrationReader');
 const { createEncryptionStore } = require('./encryptionStore');
 
 test('optional Coolify reader encrypts its token and persists only projected migration fields', async () => {
@@ -102,4 +102,19 @@ test('optional Coolify reader encrypts its token and persists only projected mig
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('generated provider service names are recovered from known Compose identities', () => {
+  assert.equal(serviceName({
+    name: 'service-p8g8ssc8gkgs8cssw8okkwg8',
+    docker_compose_raw: 'services:\n  filebrowser:\n    image: filebrowser/filebrowser:latest\n'
+  }), 'File Browser');
+  assert.equal(serviceName({
+    name: 'service-k4co44k48wkwo44cc4kkk8ow',
+    docker_compose_raw: 'services:\n  komga:\n    image: gotson/komga:latest\n'
+  }), 'Komga');
+  assert.equal(serviceName({
+    name: 'service-aaaaaaaaaaaaaaaaaaaa',
+    docker_compose_raw: 'services:\n  custom:\n    image: example/custom:latest\n'
+  }), 'Unnamed service');
 });

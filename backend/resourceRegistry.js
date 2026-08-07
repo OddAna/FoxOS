@@ -1236,6 +1236,7 @@ function createResourceRegistry({
   dockerRequest,
   hostResourceReader = null,
   providerResourceReader = null,
+  providerDefinitionMetadataReader = null,
   volumeCapacityReader = null,
   clock = () => new Date(),
   randomUUID = () => crypto.randomUUID()
@@ -1249,6 +1250,24 @@ function createResourceRegistry({
   const latestFile = path.join(registryRoot, 'latest.json');
   const revisionsRoot = path.join(registryRoot, 'revisions');
   let scanInFlight = null;
+
+  function recoverProviderDefinitionMetadata(resource) {
+    if (typeof providerDefinitionMetadataReader !== 'function' || resource.kind !== 'provider-definition') {
+      return resource;
+    }
+    const artifact = resource.provenance && resource.provenance.externalDefinition &&
+      resource.provenance.externalDefinition.recoveryArtifact;
+    if (!artifact) return resource;
+    try {
+      const metadata = providerDefinitionMetadataReader(artifact);
+      if (metadata && typeof metadata.name === 'string' && metadata.name.trim()) {
+        resource.name = metadata.name.trim().slice(0, 256);
+      }
+    } catch {
+      // A missing or unauthenticated recovery artifact must not break offline inventory retention.
+    }
+    return resource;
+  }
 
   function pruneRevisions() {
     const revisions = fs.readdirSync(revisionsRoot)
@@ -1344,7 +1363,7 @@ function createResourceRegistry({
     if (providerObservation.status !== 'ready') {
       for (const resource of readCachedProviderDefinitions(latestFile, revisionsRoot)) {
         if (resourceIds.has(resource.id)) continue;
-        resources.push(resource);
+        resources.push(recoverProviderDefinitionMetadata(resource));
         resourceIds.add(resource.id);
         retainedProviderDefinitions += 1;
       }
@@ -1352,7 +1371,7 @@ function createResourceRegistry({
     let recoveredAdoptedDefinitions = 0;
     for (const resource of readAdoptedProviderDefinitions(dataRoot)) {
       if (resourceIds.has(resource.id)) continue;
-      resources.push(resource);
+      resources.push(recoverProviderDefinitionMetadata(resource));
       resourceIds.add(resource.id);
       recoveredAdoptedDefinitions += 1;
     }

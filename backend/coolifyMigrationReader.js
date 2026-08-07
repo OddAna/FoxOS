@@ -1,13 +1,19 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const YAML = require('yaml');
 const { atomicWriteJson } = require('./resourceRegistry');
 
 const COOLIFY_READER_SCHEMA_VERSION = 1;
 const PROVIDER_DEFINITION_RECOVERY_SCHEMA_VERSION = 1;
 const PROVIDER = 'coolify';
 const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
+const MAX_COMPOSE_IDENTITY_BYTES = 1024 * 1024;
 const TOKEN_PATTERN = /^\S{20,2048}$/;
+const COMPOSE_SERVICE_NAMES = Object.freeze({
+  filebrowser: 'File Browser',
+  komga: 'Komga'
+});
 
 class CoolifyMigrationReaderError extends Error {
   constructor(message, statusCode = 409, code = 'coolify-reader-error') {
@@ -150,6 +156,31 @@ function generatedProviderName(value) {
     /-[a-z0-9]{20,}$/i.test(String(value || ''));
 }
 
+function composeServiceName(row) {
+  const raw = safeText(row && (row.docker_compose_raw || row.docker_compose), MAX_COMPOSE_IDENTITY_BYTES);
+  if (!raw || Buffer.byteLength(raw) > MAX_COMPOSE_IDENTITY_BYTES) return null;
+  let parsed;
+  try {
+    parsed = YAML.parse(raw, { maxAliasCount: 20 });
+  } catch {
+    return null;
+  }
+  const services = parsed && parsed.services && typeof parsed.services === 'object' && !Array.isArray(parsed.services)
+    ? parsed.services
+    : null;
+  if (!services) return null;
+  const identities = new Set();
+  for (const [serviceKey, definition] of Object.entries(services)) {
+    identities.add(String(serviceKey || '').trim().toLowerCase());
+    const image = definition && typeof definition === 'object' ? safeText(definition.image, 512) : null;
+    if (!image) continue;
+    const repository = image.split('@')[0].replace(/:[^/:]+$/, '');
+    identities.add(repository.split('/').filter(Boolean).pop().toLowerCase());
+  }
+  const names = [...new Set([...identities].map((identity) => COMPOSE_SERVICE_NAMES[identity]).filter(Boolean))];
+  return names.length === 1 ? names[0] : null;
+}
+
 function applicationName(row) {
   const name = safeText(row.name);
   if (name && !generatedProviderName(name)) return name;
@@ -159,7 +190,7 @@ function applicationName(row) {
 function serviceName(row) {
   const name = safeText(row.name);
   if (name && !generatedProviderName(name)) return name;
-  return safeText(row.service_type, 128) || 'Unnamed service';
+  return safeText(row.service_type, 128) || composeServiceName(row) || 'Unnamed service';
 }
 
 function projectApplication(row, recoveryArtifact = null) {
@@ -339,6 +370,22 @@ function createCoolifyMigrationReader({
     return payload;
   }
 
+  function recoveryMetadata(artifact) {
+    const payload = readRecoveryArtifact(artifact);
+    const definition = payload.definition || {};
+    const name = payload.providerKind === 'application'
+      ? applicationName(definition)
+      : payload.providerKind === 'database'
+        ? safeText(definition.name) || safeText(definition.database_type) || 'Coolify database'
+        : serviceName(definition);
+    return {
+      schemaVersion: PROVIDER_DEFINITION_RECOVERY_SCHEMA_VERSION,
+      provider: PROVIDER,
+      providerKind: payload.providerKind,
+      name
+    };
+  }
+
   function readConfig() {
     try {
       const config = JSON.parse(fs.readFileSync(configFile, 'utf8'));
@@ -441,6 +488,7 @@ function createCoolifyMigrationReader({
     configure,
     paths: { configFile, recoveryRoot, root, tokenFile },
     readRecoveryArtifact,
+    recoveryMetadata,
     scan,
     status
   };
@@ -457,5 +505,6 @@ module.exports = {
   projectDatabase,
   projectService,
   repositoryName,
-  serviceName
+  serviceName,
+  composeServiceName
 };

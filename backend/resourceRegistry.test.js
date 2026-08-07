@@ -559,7 +559,7 @@ test('offline provider scans retain redacted definitions and their explicit desk
             sourceKind: 'provider-definition',
             provider: 'coolify',
             externalId: 'offline-definition-1',
-            name: 'Offline definition',
+            name: 'Unnamed service',
             providerKind: 'service',
             serviceType: 'directus',
             status: 'exited',
@@ -567,7 +567,8 @@ test('offline provider scans retain redacted definitions and their explicit desk
             recoveryArtifact: providerRecoveryArtifact('a')
           }]
         };
-      }
+      },
+      providerDefinitionMetadataReader: () => ({ name: 'File Browser' })
     });
     const onlineSnapshot = await registry.scan();
     const definitionId = onlineSnapshot.resources[0].id;
@@ -578,7 +579,7 @@ test('offline provider scans retain redacted definitions and their explicit desk
     const offlineSnapshot = await registry.scan();
     assert.equal(offlineSnapshot.summary.resources, 1);
     assert.equal(offlineSnapshot.resources[0].id, definitionId);
-    assert.equal(offlineSnapshot.resources[0].name, 'Offline definition');
+    assert.equal(offlineSnapshot.resources[0].name, 'File Browser');
     assert.equal(offlineSnapshot.discovery.sources.find((source) => source.source === 'legacy-provider').status, 'error');
     assert.equal(offlineSnapshot.discovery.sources.find((source) => source.source === 'legacy-provider').retainedResources, 1);
     assert.equal(offlineSnapshot.guarantees.offlineProviderDefinitionsRetainedFromRedactedServerState, true);
