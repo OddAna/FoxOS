@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { createIngressAuthorityManager } = require('./ingressAuthorityManager');
+const { createIngressAuthorityManager, domainForBaseUrl } = require('./ingressAuthorityManager');
 
 function adminConnection(commands) {
   const socket = new EventEmitter();
@@ -88,6 +88,7 @@ test('staged routes switch through owned ingress and remove host authority on ro
       return { success: true, output: '' };
     },
     connectAdmin: () => adminConnection(adminCommands),
+    panelBaseUrl: 'https://foxos.example.com:8443',
     clock: () => new Date('2026-08-06T12:00:00.000Z')
   });
 
@@ -101,6 +102,7 @@ test('staged routes switch through owned ingress and remove host authority on ro
   };
   const staged = await manager.stageRoutes([route]);
   assert.equal(staged[0].status, 'staged');
+  assert.match(fs.readFileSync(manager.paths.routeMapFile, 'utf8'), /^foxos\.example\.com foxos$/m);
   const renderedRoutes = fs.readFileSync(manager.paths.caddyRoutesFile, 'utf8');
   assert.match(renderedRoutes, /reverse_proxy 10\.0\.10\.42:3000/);
   assert.match(renderedRoutes, new RegExp('X-FoxOS-Runtime "' + candidateId.slice(0, 12) + '"'));
@@ -128,11 +130,18 @@ test('staged routes switch through owned ingress and remove host authority on ro
   assert.deepEqual([...firewallRules], []);
   assert.equal(adminCommands.includes('set map /runtime/routes.map app.example.com foxos'), true);
   assert.equal(adminCommands.includes('set map /runtime/routes.map app.example.com legacy'), true);
+  assert.equal(adminCommands.includes('set map /runtime/routes.map foxos.example.com foxos'), true);
   assert.equal(hostCalls.some((call) => call.includes('--to-ports') && call.includes('9443')), true);
   assert.deepEqual(execContainerIds, [gatewayId, gatewayId, gatewayId, gatewayId, gatewayId, gatewayId]);
   assert.deepEqual(execCommands[1].slice(-2), ['--address', '127.0.0.1:2019']);
   assert.equal(execCommands[1].includes('http://127.0.0.1:2019'), false);
   fs.rmSync(dataRoot, { recursive: true, force: true });
+});
+
+test('panel base URL contributes only a validated hostname to ingress authority', () => {
+  assert.equal(domainForBaseUrl('https://foxos.example.com:8443'), 'foxos.example.com');
+  assert.equal(domainForBaseUrl('https://user:secret@foxos.example.com'), null);
+  assert.equal(domainForBaseUrl('not-a-url'), null);
 });
 
 test('legacy readiness waits for a browser-trusted response before traffic authority', async () => {

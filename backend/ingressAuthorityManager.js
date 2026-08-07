@@ -56,6 +56,21 @@ function caddyPathMatcher(routePath) {
   return routePath === '/' ? null : routePath.replace(/\/$/, '') + '*';
 }
 
+function domainForBaseUrl(value) {
+  if (!value) return null;
+  try {
+    const parsed = new URL(String(value));
+    const hostname = parsed.hostname.toLowerCase();
+    return (
+      ['http:', 'https:'].includes(parsed.protocol) &&
+      !parsed.username && !parsed.password &&
+      DOMAIN_PATTERN.test(hostname)
+    ) ? hostname : null;
+  } catch {
+    return null;
+  }
+}
+
 function createIngressAuthorityManager({
   dataRoot,
   dockerRequest,
@@ -70,6 +85,7 @@ function createIngressAuthorityManager({
   ingressAdminPort = 9999,
   ingressHttpPort = 9080,
   ingressHttpsPort = 9443,
+  panelBaseUrl = null,
   clock = () => new Date(),
   httpsRequest = https.request,
   connectAdmin = (options) => net.connect(options),
@@ -87,6 +103,7 @@ function createIngressAuthorityManager({
   const routeMapFile = path.join(root, 'routes.map');
   const caddyRuntimeRoot = path.join(dataRoot, 'gateway', 'runtime');
   const caddyRoutesFile = path.join(caddyRuntimeRoot, '50-stateless-routes.caddy');
+  const panelDomain = domainForBaseUrl(panelBaseUrl);
 
   function now() {
     return new Date(clock()).toISOString();
@@ -107,7 +124,9 @@ function createIngressAuthorityManager({
   function persist(value) {
     value.updatedAt = now();
     atomicWriteJson(authorityFile, value);
-    const lines = Object.entries(value.domains || {}).sort(([left], [right]) => left.localeCompare(right))
+    const ingressDomains = { ...(value.domains || {}) };
+    if (panelDomain) ingressDomains[panelDomain] = 'foxos';
+    const lines = Object.entries(ingressDomains).sort(([left], [right]) => left.localeCompare(right))
       .map(([domain, target]) => domain + ' ' + target);
     atomicWrite(routeMapFile, lines.join('\n') + (lines.length ? '\n' : ''));
     return value;
@@ -519,6 +538,7 @@ function createIngressAuthorityManager({
       reversible: true
     };
     persist(current);
+    if (panelDomain) await setRuntimeMap(panelDomain, 'foxos');
     return current.firewall;
   }
 
@@ -547,6 +567,7 @@ function createIngressAuthorityManager({
       reconciledAt: now()
     };
     persist(current);
+    if (panelDomain) await setRuntimeMap(panelDomain, 'foxos');
     return { active: true, reconciled: true, ...current.firewall };
   }
 
@@ -763,6 +784,7 @@ function createIngressAuthorityManager({
 }
 
 module.exports = {
+  domainForBaseUrl,
   INGRESS_AUTHORITY_SCHEMA_VERSION,
   IngressAuthorityError,
   createIngressAuthorityManager

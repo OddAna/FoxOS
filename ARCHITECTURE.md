@@ -592,8 +592,11 @@ The host ingress rule follows the firewall backend that owns Docker's active
 `nft` frontend is authoritative. When server-owned public authority is already
 recorded, agent startup revalidates the owned gateway and ingress containers
 and reasserts the reversible IPv4/IPv6 redirect on that active backend. The
-resulting data path remains in the kernel and the separately running routing
-containers; stopping the management agent does not remove it.
+panel hostname derived from the configured FoxOS route base URL is a permanent
+`foxos` ingress-map entry: application-route reconciliation may not drop it or
+send it through the legacy fallback. The resulting data path remains in the
+kernel and the separately running routing containers; stopping the management
+agent does not remove it.
 
 Execution proves candidate health before staging, validates TLS directly at
 Caddy, then requires eight public browser-trusted samples to contain both the

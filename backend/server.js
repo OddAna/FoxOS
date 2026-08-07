@@ -718,7 +718,8 @@ const ingressAuthorityManager = createIngressAuthorityManager({
   routingNetwork: process.env.FOXOS_ROUTE_NETWORK || 'foxos-routing',
   gatewayContainer: process.env.FOXOS_ROUTE_GATEWAY_HOST || 'foxos-gateway',
   ingressHttpPort: Number.parseInt(process.env.FOXOS_INGRESS_HTTP_PORT || '9080', 10),
-  ingressHttpsPort: Number.parseInt(process.env.FOXOS_INGRESS_HTTPS_PORT || '9443', 10)
+  ingressHttpsPort: Number.parseInt(process.env.FOXOS_INGRESS_HTTPS_PORT || '9443', 10),
+  panelBaseUrl: process.env.FOXOS_ROUTE_BASE_URL || null
 });
 const applicationDomainManager = createApplicationDomainManager({
   dataRoot: DATA_ROOT,

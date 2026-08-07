@@ -280,6 +280,9 @@ target blocks only adoption/migration operations that require restore proof.
   back behind the legacy proxy; reassert recorded authority on agent startup.
   Resolve every managed route to the exact running Docker container and refresh
   that address atomically before a health-gated replacement retires the old runtime.
+- [x] Reserve the configured FoxOS panel hostname in the owned ingress map so
+  application reconciliation and agent recreation cannot fall it through to a
+  legacy proxy while migrated application routes remain healthy.
 - [ ] Expand the implemented disposable dry-run, conflict detection, verified
   cutover and reversible rollback to real application classes one safety gate at
   a time.
