@@ -542,15 +542,51 @@ Planning requires an exact confirmation, persists one owner-only plan under
 `.foxos-data/migration-orchestrator/`, and returns the same plan ID for the same
 compiled snapshot. It performs no Docker request itself, changes no runtime,
 route or provider state, contains no ordinary environment or secret values and
-has no apply endpoint. A resource whose evidence is complete is reported as
-`evidence-complete-apply-unavailable`, never as migrated or approved.
+has no apply endpoint of its own. Runtime execution exists only in the separate
+authenticated migration-run coordinator. A resource is never represented as
+migrated or approved merely because a read-only plan is complete.
 
 Selection for preparation is deliberately earlier than execution readiness. A
-running, fully inspected, provider-owned stateless application may be marked
-`reviewEligible` and selected so the operator can work through its missing
-source, environment, route and proof requirements. `evidenceComplete` remains a
-separate, stricter state. Selection changes no runtime and can never bypass the
-one-time authenticated approval or execution preflight gates.
+running, fully inspected, provider-owned stateless application or an
+implemented single-container named-volume stateful candidate may be marked
+`reviewEligible`. `evidenceComplete` remains a separate, stricter state.
+Selection changes no runtime and can never bypass the one-time authenticated
+approval or execution preflight gates.
+
+### Implemented boundary: production stateful bounded-quiesce transaction
+
+The first production stateful execution adapter accepts only a running,
+fully-inspected provider-owned application with one to four writable named
+volumes, an exact local image, an unambiguous internal HTTP health target and at
+least one public route. Bind mounts, databases, custom startup overrides,
+privileged or host-level runtime access, required dependencies and provider
+companion groups fail before source pause or candidate creation.
+
+The migration-run coordinator captures a server-owned environment revision and
+then compiles a deterministic stateful contract bound to the whole-server plan,
+Registry snapshot, Application Manifest revision, source container/image,
+volume map, routes and 120-second pause budget. The same short-lived one-use UI
+grant contract used by stateless migration authorizes execution; raw grants and
+environment values remain in memory only.
+
+Execution revalidates public source health and server-owned ingress/egress,
+persists pause intent, pauses the exact source and streams authenticated
+AES-256-GCM volume snapshots without a plaintext archive on disk. It restores
+new controller-neutral named volumes, starts a constrained candidate from a
+readable local image reference, proves its internal health, imports the existing
+matching certificate and stages every route. After the per-domain authority
+switch, eight public samples must prove TLS, route ID and operation-bound
+candidate identity with zero unavailable responses.
+
+Any error before cutover resumes the source and removes only operation-owned
+objects. Any error after cutover starts and warms the preserved source through
+the legacy proxy, restores domain authority, verifies public source traffic and
+then cleans the candidate. A successful transaction unpauses and stops—but does
+not delete—the exact source as cold rollback. Manual rollback is a separate
+fresh UI-authorized action that proves the source before returning traffic.
+Provider state and metadata are not mutated or detached. The adapter explicitly
+does not claim zero downtime; continuous pre-sync and database replication stay
+in the post-roadmap boundary.
 
 ### Implemented boundary: stateless production transaction
 

@@ -178,11 +178,11 @@ function childResult(child, label) {
   });
 }
 
-function hashPassThrough(hash, counter) {
+function hashPassThrough(hash, counter, maximumBytes = MAX_SNAPSHOT_BYTES) {
   return new Transform({
     transform(chunk, encoding, callback) {
       counter.bytes += chunk.length;
-      if (counter.bytes > MAX_SNAPSHOT_BYTES) {
+      if (counter.bytes > maximumBytes) {
         return callback(new Error('Encrypted volume snapshot exceeded the safety limit'));
       }
       hash.update(chunk);
@@ -191,11 +191,24 @@ function hashPassThrough(hash, counter) {
   });
 }
 
-function createEncryptedVolumeSnapshotAdapter({ dataRoot, hostRoot, dockerRequest, encryptionStore }) {
+function createEncryptedVolumeSnapshotAdapter({
+  dataRoot,
+  hostRoot,
+  dockerRequest,
+  encryptionStore,
+  snapshotsDirectory = path.join('application-updates', 'volume-snapshots'),
+  snapshotPurpose = 'application-update-volume',
+  maximumSnapshotBytes = MAX_SNAPSHOT_BYTES
+}) {
   if (!dataRoot || !hostRoot || typeof dockerRequest !== 'function' || !encryptionStore) {
     throw new Error('Encrypted volume snapshots require data, host, Docker and encryption adapters');
   }
-  const snapshotsRoot = path.join(dataRoot, 'application-updates', 'volume-snapshots');
+  if (
+    path.isAbsolute(snapshotsDirectory) || path.normalize(snapshotsDirectory).startsWith('..') ||
+    !Number.isSafeInteger(maximumSnapshotBytes) || maximumSnapshotBytes < 1 ||
+    typeof snapshotPurpose !== 'string' || !/^[a-z0-9][a-z0-9-]{2,63}$/.test(snapshotPurpose)
+  ) throw new Error('Encrypted volume snapshot policy is invalid');
+  const snapshotsRoot = path.join(dataRoot, snapshotsDirectory);
 
   async function volumeMountpoint(name) {
     if (!VOLUME_NAME_PATTERN.test(String(name || ''))) {
@@ -211,21 +224,24 @@ function createEncryptedVolumeSnapshotAdapter({ dataRoot, hostRoot, dockerReques
     const target = path.join(snapshotsRoot, operationId + '-' + crypto.createHash('sha256').update(volume.name).digest('hex').slice(0, 16) + '.enc');
     const temporary = target + '.' + process.pid + '.tmp';
     const key = encryptionStore.ensureKey();
-    const context = JSON.stringify({ operationId, purpose: 'application-update-volume', volumeName: volume.name });
+    const context = JSON.stringify({ operationId, purpose: snapshotPurpose, volumeName: volume.name });
     const aad = Buffer.from(context, 'utf8');
     const iv = crypto.randomBytes(12);
     const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
     cipher.setAAD(aad);
     const tar = spawn('tar', ['-C', mountpoint, '-cf', '-', '.'], { stdio: ['ignore', 'pipe', 'pipe'] });
     const tarFinished = childResult(tar, 'Volume snapshot');
-    const digest = crypto.createHash('sha256');
-    const counter = { bytes: 0 };
+    const ciphertextDigest = crypto.createHash('sha256');
+    const plaintextDigest = crypto.createHash('sha256');
+    const ciphertextCounter = { bytes: 0 };
+    const plaintextCounter = { bytes: 0 };
     try {
       await Promise.all([
         pipeline(
           tar.stdout,
+          hashPassThrough(plaintextDigest, plaintextCounter, maximumSnapshotBytes),
           cipher,
-          hashPassThrough(digest, counter),
+          hashPassThrough(ciphertextDigest, ciphertextCounter, maximumSnapshotBytes + 1024 * 1024),
           fs.createWriteStream(temporary, { flags: 'wx', mode: 0o600 })
         ),
         tarFinished
@@ -235,12 +251,14 @@ function createEncryptedVolumeSnapshotAdapter({ dataRoot, hostRoot, dockerReques
       return {
         algorithm: 'aes-256-gcm',
         authTag: cipher.getAuthTag().toString('base64'),
-        bytes: counter.bytes,
-        ciphertextSha256: digest.digest('hex'),
+        bytes: ciphertextCounter.bytes,
+        ciphertextSha256: ciphertextDigest.digest('hex'),
         file: path.relative(dataRoot, target),
         iv: iv.toString('base64'),
         keyId: encryptionStore.keyId(key),
         context,
+        plaintextBytes: plaintextCounter.bytes,
+        plaintextSha256: plaintextDigest.digest('hex'),
         volumeName: volume.name
       };
     } catch (error) {
@@ -263,8 +281,8 @@ function createEncryptedVolumeSnapshotAdapter({ dataRoot, hostRoot, dockerReques
     return { bytes, digest: digest.digest('hex') };
   }
 
-  async function restore({ snapshot, volume }) {
-    if (!snapshot || snapshot.volumeName !== volume.name || snapshot.algorithm !== 'aes-256-gcm') {
+  async function restore({ snapshot, volume, sourceVolumeName = snapshot && snapshot.volumeName }) {
+    if (!snapshot || snapshot.volumeName !== sourceVolumeName || snapshot.algorithm !== 'aes-256-gcm') {
       throw new Error('Volume snapshot metadata does not match the requested volume');
     }
     const target = path.resolve(dataRoot, snapshot.file);
@@ -283,11 +301,26 @@ function createEncryptedVolumeSnapshotAdapter({ dataRoot, hostRoot, dockerReques
       decipher.setAuthTag(Buffer.from(snapshot.authTag, 'base64'));
       return decipher;
     };
+    const authenticationDigest = crypto.createHash('sha256');
+    const authenticationCounter = { bytes: 0 };
     await pipeline(
       fs.createReadStream(target),
       createDecipher(),
-      new Writable({ write(chunk, encoding, callback) { callback(); } })
+      new Writable({
+        write(chunk, encoding, callback) {
+          authenticationCounter.bytes += chunk.length;
+          authenticationDigest.update(chunk);
+          callback();
+        }
+      })
     );
+    const authenticatedSha256 = authenticationDigest.digest('hex');
+    if (
+      snapshot.plaintextSha256 && (
+        snapshot.plaintextSha256 !== authenticatedSha256 ||
+        snapshot.plaintextBytes !== authenticationCounter.bytes
+      )
+    ) throw new Error('Decrypted volume snapshot content differs from its authenticated metadata');
     const mountpoint = await volumeMountpoint(volume.name);
     for (const entry of fs.readdirSync(mountpoint)) {
       fs.rmSync(path.join(mountpoint, entry), { force: false, recursive: true });
@@ -303,6 +336,13 @@ function createEncryptedVolumeSnapshotAdapter({ dataRoot, hostRoot, dockerReques
       tar.kill('SIGKILL');
       throw error;
     }
+    return {
+      restored: true,
+      plaintextBytes: authenticationCounter.bytes,
+      plaintextSha256: authenticatedSha256,
+      sourceVolumeName,
+      targetVolumeName: volume.name
+    };
   }
 
   return { create, restore, paths: { snapshotsRoot } };

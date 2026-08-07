@@ -173,8 +173,8 @@ test('whole-server planning is deterministic, class-aware, redacted and plan-onl
     assert.equal(first.summary.migrationRequired, 3);
     assert.equal(first.summary.alreadyFoxOSManaged, 1);
     assert.equal(first.summary.protectedSkipped, 1);
-    assert.equal(first.summary.reviewEligible, 1);
-    assert.equal(first.summary.applyImplemented, 0);
+    assert.equal(first.summary.reviewEligible, 2);
+    assert.equal(first.summary.applyImplemented, 2);
     assert.equal(first.coordinationHints[0].dependencyDirectionKnown, false);
     assert.equal(first.coordinationHints[0].applyOrderInferred, false);
 
@@ -192,11 +192,14 @@ test('whole-server planning is deterministic, class-aware, redacted and plan-onl
 
     const statefulPlan = first.resources.find((entry) => entry.resourceId === stateful.id);
     assert.equal(statefulPlan.strategy, 'shadow-refresh-bounded-quiesce');
-    assert.equal(statefulPlan.availability.sourcePauseBudgetMs, null);
+    assert.equal(statefulPlan.availability.sourcePauseBudgetMs, 120000);
+    assert.equal(statefulPlan.availability.currentMode, 'bounded-quiesce-ready');
+    assert.equal(statefulPlan.readiness.reviewEligible, true);
+    assert.equal(statefulPlan.readiness.applyImplemented, true);
     assert.match(statefulPlan.availability.postRoadmapCapability, /zero-downtime/);
     assert.equal(
       statefulPlan.blockers.implementation.some((entry) => entry.code === 'stateful-cutover-pause-budget-unset'),
-      true
+      false
     );
 
     const databasePlan = first.resources.find((entry) => entry.resourceId === database.id);
@@ -215,7 +218,7 @@ test('whole-server planning is deterministic, class-aware, redacted and plan-onl
     assert.equal(first.guarantees.runtimeMutated, false);
     assert.equal(first.guarantees.routesMutated, false);
     assert.equal(first.guarantees.providerStateMutated, false);
-    assert.equal(first.guarantees.applyImplemented, false);
+    assert.equal(first.guarantees.applyImplemented, true);
     assert.equal(first.guarantees.applyApproved, false);
     assert.equal(first.guarantees.zeroDowntimeStatefulPostRoadmap, true);
 

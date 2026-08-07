@@ -840,10 +840,10 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   assert.equal(serverMigrationPlan.summary.resources, 1);
   assert.equal(serverMigrationPlan.summary.migrationRequired, 1);
   assert.equal(serverMigrationPlan.resources[0].strategy, 'shadow-refresh-bounded-quiesce');
-  assert.equal(serverMigrationPlan.resources[0].availability.sourcePauseBudgetMs, null);
+  assert.equal(serverMigrationPlan.resources[0].availability.sourcePauseBudgetMs, 120000);
   assert.equal(serverMigrationPlan.guarantees.dockerRequestsMade, 0);
   assert.equal(serverMigrationPlan.guarantees.runtimeMutated, false);
-  assert.equal(serverMigrationPlan.guarantees.applyImplemented, false);
+  assert.equal(serverMigrationPlan.guarantees.applyImplemented, true);
   assert.equal(serverMigrationPlan.guarantees.zeroDowntimeStatefulPostRoadmap, true);
   assert.equal(dockerRequestLog.length, 0);
   assert.equal(JSON.stringify(serverMigrationPlan).includes(registrySecret), false);
@@ -872,7 +872,7 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   assert.equal(migrationSelectionStatus.guarantees.reviewOnly, true);
   assert.equal(migrationSelectionStatus.guarantees.applyImplemented, false);
 
-  const blockedMigrationSelectionResponse = await fetch(
+  const statefulMigrationSelectionResponse = await fetch(
     baseUrl() + '/api/migration-selections/current',
     {
       method: 'PUT',
@@ -884,8 +884,9 @@ test('setup creates an authenticated session and unlocks the workspace', async (
       })
     }
   );
-  assert.equal(blockedMigrationSelectionResponse.status, 409);
-  assert.equal((await blockedMigrationSelectionResponse.json()).code, 'resource-not-review-selectable');
+  assert.equal(statefulMigrationSelectionResponse.status, 200);
+  const statefulSelection = await statefulMigrationSelectionResponse.json();
+  assert.deepEqual(statefulSelection.selection.selectedResourceIds, [serverMigrationPlan.resources[0].resourceId]);
   assert.equal(dockerRequestLog.length, 0);
 
   const migrationRunsStatusResponse = await fetch(baseUrl() + '/api/migration-runs', {
@@ -901,12 +902,12 @@ test('setup creates an authenticated session and unlocks the workspace', async (
     headers: { Cookie: cookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       serverPlanId: serverMigrationPlan.planId,
-      resourceIds: [serverMigrationPlan.resources[0].resourceId],
+      resourceIds: ['res_' + '9'.repeat(32)],
       confirmation: 'START SERVER MIGRATION'
     })
   });
   assert.equal(blockedMigrationRunResponse.status, 409);
-  assert.equal((await blockedMigrationRunResponse.json()).code, 'resource-not-selectable');
+  assert.equal((await blockedMigrationRunResponse.json()).code, 'resource-not-in-plan');
   assert.equal(dockerRequestLog.length, 0);
 
   dockerRequestLog.length = 0;

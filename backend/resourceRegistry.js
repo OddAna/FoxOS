@@ -10,6 +10,7 @@ const SCHEMA_VERSION = 1;
 const INSPECT_CONCURRENCY = 6;
 const MAX_REVISIONS = 100;
 const VERIFIED_STATELESS_MIGRATION_STATUS = 'traffic-on-foxos-source-preserved';
+const VERIFIED_STATEFUL_MIGRATION_STATUS = 'traffic-on-server-source-preserved';
 
 const SAFE_LABEL_KEYS = new Set([
   'com.foxos.managed',
@@ -25,6 +26,7 @@ const SAFE_LABEL_KEYS = new Set([
   'com.foxos.stateful-shadow.source-resource-id',
   'com.foxos.stateful-shadow.operation',
   'com.foxos.migration.source-resource-id',
+  'com.foxos.stateful-migration.id',
   'com.foxos.deployment.group.id',
   'com.foxos.deployment.service',
   'com.foxos.deployment.revision',
@@ -128,6 +130,16 @@ function readFoxosMigrationManagement(dataRoot, resources = []) {
     .map((resource) => [resource.runtime.containerId, resource]));
   const managementByResourceId = new Map();
 
+  function recordManagement(resourceId, management) {
+    const current = managementByResourceId.get(resourceId);
+    const currentPriority = current && current.state === 'active' ? 1 : 0;
+    const nextPriority = management.state === 'active' ? 1 : 0;
+    if (
+      !current || nextPriority > currentPriority ||
+      (nextPriority === currentPriority && String(management.completedAt).localeCompare(String(current.completedAt)) > 0)
+    ) managementByResourceId.set(resourceId, management);
+  }
+
   for (const operation of operations) {
     if (
       operation.status !== VERIFIED_STATELESS_MIGRATION_STATUS ||
@@ -181,15 +193,67 @@ function readFoxosMigrationManagement(dataRoot, resources = []) {
       automaticMigrationAllowed: false,
       completedAt: operation.completedAt || null
     };
-    const current = managementByResourceId.get(operation.resourceId);
-    const currentPriority = current && current.state === 'active' ? 1 : 0;
-    const nextPriority = management.state === 'active' ? 1 : 0;
+    recordManagement(operation.resourceId, management);
+  }
+
+  const statefulOperations = listJson(path.join(dataRoot, 'stateful-migrations', 'operations'));
+  const statefulPlansById = new Map(listJson(path.join(dataRoot, 'stateful-migrations', 'plans'))
+    .filter((plan) => plan && plan.planId)
+    .map((plan) => [plan.planId, plan]));
+  for (const operation of statefulOperations) {
     if (
-      !current || nextPriority > currentPriority ||
-      (nextPriority === currentPriority && String(management.completedAt).localeCompare(String(current.completedAt)) > 0)
-    ) {
-      managementByResourceId.set(operation.resourceId, management);
-    }
+      operation.status !== VERIFIED_STATEFUL_MIGRATION_STATUS ||
+      !/^res_[a-f0-9]{32}$/.test(String(operation.resourceId || '')) ||
+      !/^stmop_[a-f0-9]{32}$/.test(String(operation.operationId || ''))
+    ) continue;
+    const operationRoutes = operation.route && Array.isArray(operation.route.routes)
+      ? operation.route.routes
+      : operation.route ? [operation.route] : [];
+    const authorityRoutes = operationRoutes.map((route) => (
+      route && route.routeId && authority && authority.routes && authority.routes[route.routeId]
+    )).filter(Boolean);
+    const domains = Array.from(new Set(operationRoutes.map((route) => route && route.domain).filter(Boolean))).sort();
+    const authorityActive = Boolean(
+      authority && authority.owner === 'foxos' && authority.publicAuthorityActive === true &&
+      authorityRoutes.length === operationRoutes.length && operationRoutes.length > 0 &&
+      authorityRoutes.every((route) => (
+        route.operationId === operation.operationId && route.status === 'active' &&
+        authority.domains && authority.domains[route.domain] === 'foxos'
+      ))
+    );
+    const candidateContainerId = operation.candidate && operation.candidate.containerId || null;
+    const candidateResource = candidateContainerId ? resourcesByContainerId.get(candidateContainerId) : null;
+    const candidateRunning = Boolean(candidateResource && candidateResource.runtime && candidateResource.runtime.state === 'running');
+    const trafficVerified = Boolean(
+      operation.trafficProof && operation.trafficProof.healthy === true &&
+      operation.trafficProof.candidateServing === true && operation.trafficProof.tlsValid === true
+    );
+    const sourcePreserved = Boolean(operation.source && operation.source.retainedForRollback === true);
+    const plan = statefulPlansById.get(operation.planId) || null;
+    const plannedResource = plan && plan.resource || {};
+    const state = authorityActive && candidateRunning && trafficVerified && sourcePreserved
+      ? 'active'
+      : 'attention-required';
+    recordManagement(operation.resourceId, {
+      owner: 'foxos',
+      logicalResourceId: operation.resourceId,
+      state,
+      lifecycle: 'stateful-bounded-quiesce',
+      operationId: operation.operationId,
+      routeId: operationRoutes[0] && operationRoutes[0].routeId || null,
+      domains,
+      candidateContainerId,
+      candidateResourceId: candidateResource && candidateResource.id || null,
+      authorityActive,
+      candidateRunning,
+      trafficVerified,
+      sourcePreserved,
+      sourceName: plannedResource.name || null,
+      sourceProvider: plannedResource.observedProvider || null,
+      sourceOwnership: plannedResource.observedOwnership || null,
+      automaticMigrationAllowed: false,
+      completedAt: operation.completedAt || null
+    });
   }
   return managementByResourceId;
 }

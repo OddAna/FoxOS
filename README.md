@@ -382,6 +382,9 @@ The authenticated API exposes:
 | `POST /api/workload-evidence/source-plans/:planId/capture` | Reverify, encrypt, authenticate and store the bounded source archive locally |
 | `POST /api/workload-evidence/environment-plans` | Read one candidate container environment through Docker `GET` and plan value-free classification |
 | `POST /api/workload-evidence/environment-plans/:planId/capture` | Recheck drift and store an immutable local environment/secret revision |
+| `GET /api/stateful-migrations` | Read production bounded-quiesce plans and operation history |
+| `GET /api/stateful-migrations/operations/:operationId` | Read one redacted production stateful operation and rollback state |
+| `POST /api/stateful-migrations/operations/:operationId/rollback` | Use a fresh authenticated one-time grant to restore the preserved source and legacy traffic |
 | `GET /api/stateful-rehearsals` | Read redacted stateful rehearsal plans, operations, current proofs and guarantees |
 | `POST /api/stateful-rehearsals/plans` | Create a GET-only, exact-confirmation plan with explicit persistent/empty volume classification |
 | `POST /api/stateful-rehearsals/cutover-plans` | Create a GET-only final-quiesce plus reversible FoxOS HTTPS canary-route plan |
@@ -719,10 +722,10 @@ relationships and blockers. Resources are separated into review-ready,
 missing-evidence, unsupported-in-this-version, already-FoxOS-managed and
 protected-system states.
 
-Running, fully inspected provider-owned stateless blue/green preparation
-candidates can be selected even while their unresolved evidence remains
-visible. The user-facing action is `Geçişi Başlat`; there is no separate save
-step. That request writes the exact IDs under
+Running, fully inspected provider-owned stateless blue/green candidates and the
+implemented single-container named-volume stateful class can be selected even
+while transaction-proven evidence remains visible. The user-facing action is
+`Geçişi Başlat`; there is no separate save step. That request writes the exact IDs under
 `.foxos-data/migration-selections/`, creates an owner-only run under
 `.foxos-data/migration-runs/` and binds both to the exact plan and Registry
 snapshot. A later inventory change fails closed before execution. Browser
@@ -736,9 +739,11 @@ authenticated FoxOS session, plan, resource and evidence fingerprint. Raw
 grants are not returned or stored. There is no separate approve endpoint,
 source-stop, provider-detach or destructive cleanup action.
 
-For selected stateless resources, the run captures the current environment into
-server-owned ordinary values and encrypted secret references, recompiles the
-plan, and writes the allowlisted review contract automatically. The contract is
+For selected stateless and supported stateful resources, the run captures the
+current environment into server-owned ordinary values and encrypted secret
+references, then recompiles the plan. A stateless run writes the allowlisted
+review contract automatically; a supported stateful run compiles its bounded-
+quiesce execution contract directly. Each contract is
 bound to the exact server plan, Registry snapshot, resource, manifest revision,
 evidence fingerprint and execution contract; drift invalidates it before
 candidate creation. The user does not need a separate save or approve action.
@@ -859,6 +864,39 @@ status read initializes no Docker connection or encryption key; the heavier
 read-only planning context is created only when a review plan is requested.
 That context disables deployment-queue startup and operation recovery, so
 preparing a plan cannot silently reinterpret or resume older runtime work.
+
+## Stateful production migration
+
+The first production stateful adapter is deliberately narrow. It accepts only
+a running, fully inspected, provider-owned application with one to four
+writable Docker named volumes, an unambiguous public route and internal HTTP
+health target, an exact local image, no required companion transaction and no
+custom or host-privileged runtime override. Databases, bind mounts and grouped
+applications remain blocked before the source is paused.
+
+The authenticated `Geçişi Başlat` run performs one reversible transaction:
+
+1. Revalidate the source, image, environment, routes, existing proxy, server
+   ingress/egress and current public health.
+2. Pause the exact source and stream every named volume into a bounded,
+   authenticated server-local encrypted snapshot.
+3. Restore those snapshots into new controller-neutral named volumes, start a
+   separately named constrained candidate from the exact image and resolve
+   environment values only in memory.
+4. Prove candidate health, import the existing matching certificate, stage the
+   route and switch only the selected domains to server-owned ingress.
+5. Require eight successful public TLS, route and candidate-identity samples.
+   Any failure after the switch automatically starts and warms the preserved
+   source, restores legacy traffic, verifies it and removes only operation-owned
+   candidate resources.
+6. After verified traffic, unpause and stop—but do not delete—the exact source
+   as a cold rollback target. A manual rollback starts and proves that source
+   before traffic returns to it.
+
+The pause budget is 120 seconds and is checked between every stage. Exceeding
+it before cutover resumes the source and cleans the candidate. This adapter
+does not mutate provider state, detach the provider or claim zero downtime.
+Continuous pre-sync and database-aware replication remain later capabilities.
 
 ## Server-owned workload source and environment evidence
 
@@ -1251,9 +1289,10 @@ Do not copy its contents into Git or logs.
 - File operations are synchronous; very large copy/move operations can take time
 - No multi-user roles or permission levels
 - No audit log yet
-- Automatic production migration currently supports only eligible stateless
-  Docker web applications. Stateful applications, databases, workers,
-  privileged containers, writable mounts and ambiguous routes remain blocked
+- Automatic production migration supports eligible stateless Docker web
+  applications and the first single-container named-volume stateful class.
+  Databases, workers, privileged containers, bind mounts, ambiguous routes and
+  stateful companion groups remain blocked
 - Linux-host systemd and WireGuard services are already server-owned and do not
   require migration. FoxOS can start, stop, restart and change boot enablement
   for the exact discovered unit, but does not read or edit its configuration or
@@ -1277,11 +1316,11 @@ Do not copy its contents into Git or logs.
 - Off-host recovery currently gates each disposable adoption operation; there
   is no scheduled retention policy, database-consistent backup, key escrow or
   full-machine disaster restore workflow yet
-- Real provider-owned stateful applications have a same-host, named-volume-only
-  restore rehearsal and may run an internal persistent FoxOS-owned shadow from
-  that point-in-time snapshot. This is not live replication and does not yet
-  support bind mounts, databases, off-host recovery, route cutover, source-write
-  synchronization, adoption or provider detachment
+- Eligible single-container provider-owned stateful applications can now use a
+  final encrypted named-volume snapshot, bounded-pause production route cutover
+  and verified cold-source rollback. This is not live replication and does not
+  support bind mounts, databases, grouped companions, off-host recovery,
+  source-write synchronization or provider detachment
 - A fresh installation intentionally has no external backup adapter configured;
   ordinary FoxOS host management does not require one
 - The App Store catalog is intentionally small and reviewed; arbitrary Compose
@@ -1355,6 +1394,8 @@ FoxOS/
 │   ├── workloadEvidenceManager.js # Encrypted source archive and environment evidence capture
 │   ├── statefulRehearsalManager.js # Same-host encrypted restore and isolated health proof
 │   ├── statefulShadowManager.js # Persistent internal FoxOS-owned stateful shadow
+│   ├── statefulMigrationManager.js # Production bounded-pause stateful transaction
+│   ├── productionStatefulMigrationAdapter.js # Snapshot, restore, route cutover and rollback
 │   ├── statelessMigrationManager.js # Blue/green transaction state machine
 │   ├── productionStatelessMigrationAdapter.js # Candidate, health and traffic adapter
 │   ├── ingressAuthorityManager.js # Caddy, HAProxy and reversible host ingress

@@ -34,12 +34,21 @@ const {
   createStatelessMigrationManifestCompiler
 } = require('./statelessMigrationManifestCompiler');
 const {
+  StatefulMigrationError,
+  PREPARE_STATEFUL_MIGRATION_CONFIRMATION,
+  createStatefulMigrationManager
+} = require('./statefulMigrationManager');
+const {
+  createStatefulMigrationManifestCompiler
+} = require('./statefulMigrationManifestCompiler');
+const {
   SAVE_STATELESS_MIGRATION_REVIEW_CONFIRMATION,
   StatelessMigrationReviewError,
   createStatelessMigrationReviewManager
 } = require('./statelessMigrationReviewManager');
 const { createIngressAuthorityManager } = require('./ingressAuthorityManager');
 const { createProductionStatelessMigrationAdapter } = require('./productionStatelessMigrationAdapter');
+const { createProductionStatefulMigrationAdapter } = require('./productionStatefulMigrationAdapter');
 const { createTraefikCertificateImporter } = require('./traefikCertificateImporter');
 const { createUiApprovalManager } = require('./uiApprovalManager');
 const { createBackupManager } = require('./backupManager');
@@ -793,6 +802,14 @@ const applicationUpdateVolumeSnapshots = createEncryptedVolumeSnapshotAdapter({
   dockerRequest,
   encryptionStore
 });
+const statefulMigrationVolumeSnapshots = createEncryptedVolumeSnapshotAdapter({
+  dataRoot: DATA_ROOT,
+  hostRoot: HOST_ROOT,
+  dockerRequest,
+  encryptionStore,
+  snapshotsDirectory: path.join('stateful-migrations', 'snapshots'),
+  snapshotPurpose: 'stateful-final-volume'
+});
 const applicationUpdateManager = createApplicationUpdateManager({
   dataRoot: DATA_ROOT,
   hostRoot: HOST_ROOT,
@@ -813,6 +830,18 @@ const productionStatelessMigrationAdapter = createProductionStatelessMigrationAd
   routingNetwork: process.env.FOXOS_ROUTE_NETWORK || 'foxos-routing',
   egressNetwork: process.env.FOXOS_EGRESS_NETWORK || 'foxos-egress',
   gatewayContainer: process.env.FOXOS_ROUTE_GATEWAY_HOST || 'foxos-gateway'
+});
+const productionStatefulMigrationAdapter = createProductionStatefulMigrationAdapter({
+  dataRoot: DATA_ROOT,
+  dockerRequest,
+  dockerExec: dockerClient.exec,
+  resourceRegistry,
+  secretManager,
+  volumeSnapshots: statefulMigrationVolumeSnapshots,
+  certificateImporter,
+  ingressAuthority: ingressAuthorityManager,
+  routingNetwork: process.env.FOXOS_ROUTE_NETWORK || 'foxos-routing',
+  egressNetwork: process.env.FOXOS_EGRESS_NETWORK || 'foxos-egress'
 });
 const statefulRehearsalManager = createStatefulRehearsalManager({
   dataRoot: DATA_ROOT,
@@ -873,6 +902,10 @@ const statelessMigrationManifestCompiler = createStatelessMigrationManifestCompi
   resourceRegistry,
   compileApplicationManifest: (resourceId) => applicationManifestManager.compile(resourceId)
 });
+const statefulMigrationManifestCompiler = createStatefulMigrationManifestCompiler({
+  resourceRegistry,
+  compileApplicationManifest: (resourceId) => applicationManifestManager.compile(resourceId)
+});
 const uiApprovalManager = createUiApprovalManager();
 const statelessMigrationManager = createStatelessMigrationManager({
   dataRoot: DATA_ROOT,
@@ -885,6 +918,13 @@ const statelessMigrationReviewManager = createStatelessMigrationReviewManager({
   dataRoot: DATA_ROOT,
   getStatelessMigrationPlan: (planId) => statelessMigrationManager.getPlan(planId),
   getLatestRegistrySnapshot: () => resourceRegistry.getLatest()
+});
+const statefulMigrationManager = createStatefulMigrationManager({
+  dataRoot: DATA_ROOT,
+  getServerMigrationPlan: (planId) => migrationOrchestrator.getPlan(planId),
+  compileExecutionContract: (input) => statefulMigrationManifestCompiler.compile(input),
+  executionAdapter: productionStatefulMigrationAdapter,
+  approvalVerifier: (input) => uiApprovalManager.verify(input)
 });
 const migrationRunManager = createMigrationRunManager({
   dataRoot: DATA_ROOT,
@@ -899,9 +939,7 @@ const migrationRunManager = createMigrationRunManager({
     for (const resourceId of resourceIds) {
       const resource = snapshot && (snapshot.resources || []).find((entry) => entry.id === resourceId);
       if (!resource) throw new MigrationRunError('Selected resource disappeared before evidence capture', 409, 'resource-not-found');
-      if (Number(resource.runtime && resource.runtime.environmentVariableCount || 0) > 0) {
-        await workloadEvidenceManager.captureEnvironmentForMigration(resourceId);
-      }
+      await workloadEvidenceManager.captureEnvironmentForMigration(resourceId);
     }
   },
   refreshServerMigrationPlan: () => migrationOrchestrator.createPlan({
@@ -939,6 +977,9 @@ const migrationRunManager = createMigrationRunManager({
     });
   },
   executeStatelessMigration: (planId, approval) => statelessMigrationManager.execute(planId, approval),
+  prepareStatefulPlan: (input) => statefulMigrationManager.createPlan(input),
+  prepareStatefulConfirmation: PREPARE_STATEFUL_MIGRATION_CONFIRMATION,
+  executeStatefulMigration: (planId, approval) => statefulMigrationManager.execute(planId, approval),
   issueApproval: (input) => uiApprovalManager.issue(input)
 });
 
@@ -1131,6 +1172,17 @@ function sendStatelessMigrationError(res, error, action) {
       ? 'Stateless migration planning failed'
       : error.message,
     code: error.code || 'stateless-migration-error'
+  });
+}
+
+function sendStatefulMigrationError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof StatefulMigrationError)
+      ? 'Stateful migration operation failed'
+      : error.message,
+    code: error.code || 'stateful-migration-error'
   });
 }
 
@@ -2219,6 +2271,43 @@ app.put('/api/stateless-migrations/plans/:planId/review', (req, res) => {
   }
 });
 
+app.get('/api/stateful-migrations', (req, res) => {
+  try {
+    res.json(statefulMigrationManager.status());
+  } catch (error) {
+    sendStatefulMigrationError(res, error, 'Could not read stateful migrations');
+  }
+});
+
+app.get('/api/stateful-migrations/operations/:operationId', (req, res) => {
+  try {
+    res.json({ operation: statefulMigrationManager.getOperation(req.params.operationId) });
+  } catch (error) {
+    sendStatefulMigrationError(res, error, 'Could not read stateful migration operation');
+  }
+});
+
+app.post('/api/stateful-migrations/operations/:operationId/rollback', async (req, res) => {
+  try {
+    if (!req.body || req.body.confirmation !== 'ROLLBACK STATEFUL MIGRATION') {
+      throw new StatefulMigrationError('Exact stateful rollback confirmation is required', 400, 'confirmation-required');
+    }
+    const operation = statefulMigrationManager.getOperation(req.params.operationId);
+    const plan = statefulMigrationManager.getPlan(operation.planId);
+    const approval = uiApprovalManager.issue({
+      kind: 'stateful-migration-rollback',
+      planId: plan.planId,
+      resourceId: plan.resource.resourceId,
+      evidenceFingerprint: plan.resource.evidenceFingerprint,
+      actor: { type: 'foxos-session', username: req.session.username, sessionToken: req.session.token }
+    });
+    const rolledBack = await statefulMigrationManager.rollback(req.params.operationId, approval);
+    res.json({ operation: rolledBack });
+  } catch (error) {
+    sendStatefulMigrationError(res, error, 'Could not roll back stateful migration');
+  }
+});
+
 app.get('/api/adoptions', (req, res) => {
   try {
     res.json(adoptionManager.status());
@@ -2703,7 +2792,16 @@ app.use((error, req, res, next) => {
 });
 
 if (require.main === module) {
-  statefulRehearsalManager.recoverInterruptedOperations({ clearStaleLock: true })
+  statefulMigrationManager.recoverInterruptedOperations({ clearStaleLock: true })
+    .then((recovery) => {
+      if (recovery.recovered.length) {
+        console.warn('Recovered interrupted stateful migrations:', recovery.recovered.length);
+      }
+    })
+    .catch((error) => {
+      console.error('Initial stateful migration recovery failed:', error.message);
+    })
+    .then(() => statefulRehearsalManager.recoverInterruptedOperations({ clearStaleLock: true }))
     .then((recovery) => {
       if (recovery.recovered.length) {
         console.warn('Recovered interrupted stateful rehearsals:', recovery.recovered.length);

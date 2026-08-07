@@ -14,6 +14,7 @@ const PLAN_ID_PATTERN = /^mplan_[a-f0-9]{32}$/;
 const RESOURCE_ID_PATTERN = /^res_[a-f0-9]{32}$/;
 const RUN_ID_PATTERN = /^mrun_[a-f0-9]{32}$/;
 const STATELESS_OPERATION_PATTERN = /^smop_[a-f0-9]{32}$/;
+const STATEFUL_OPERATION_PATTERN = /^stmop_[a-f0-9]{32}$/;
 const MAX_RUNS = 50;
 const ACTIVE_STATUSES = new Set(['queued', 'preparing', 'executing']);
 
@@ -89,6 +90,9 @@ function createMigrationRunManager({
   reconcileCompletedMigrations = null,
   prepareStatelessReview = null,
   executeStatelessMigration,
+  prepareStatefulPlan = null,
+  executeStatefulMigration = null,
+  prepareStatefulConfirmation = 'PREPARE STATEFUL MIGRATION',
   issueApproval,
   clock = () => new Date(),
   randomUUID = () => crypto.randomUUID(),
@@ -99,6 +103,7 @@ function createMigrationRunManager({
     typeof getLatestRegistrySnapshot !== 'function' || typeof saveSelection !== 'function' ||
     typeof prepareStatelessPlan !== 'function' || typeof getStatelessReviewStatus !== 'function' ||
     typeof executeStatelessMigration !== 'function' || typeof issueApproval !== 'function' ||
+    (Boolean(prepareStatefulPlan) !== Boolean(executeStatefulMigration)) ||
     typeof schedule !== 'function'
   ) {
     throw new Error('Migration run manager requires plan, selection, review, approval and execution adapters');
@@ -323,14 +328,35 @@ function createMigrationRunManager({
       for (const resourceId of run.executionOrder) {
         const result = run.resources.find((resource) => resource.resourceId === resourceId);
         try {
-          const plan = prepareStatelessPlan({
-            serverPlanId,
-            resourceId,
-            confirmation: PREPARE_STATELESS_MIGRATION_CONFIRMATION
-          });
-          result.statelessPlanId = plan.planId;
+          const plannedResource = getServerMigrationPlan(serverPlanId).resources.find((entry) => (
+            entry.resourceId === resourceId
+          ));
+          const executionKind = plannedResource && plannedResource.strategy === 'shadow-refresh-bounded-quiesce'
+            ? 'stateful'
+            : 'stateless';
+          let plan;
+          if (executionKind === 'stateful') {
+            if (typeof prepareStatefulPlan !== 'function') {
+              throw new MigrationRunError('Stateful migration adapter is unavailable', 409, 'stateful-adapter-unavailable');
+            }
+            plan = await prepareStatefulPlan({
+              serverPlanId,
+              resourceId,
+              confirmation: prepareStatefulConfirmation
+            });
+          } else {
+            plan = await prepareStatelessPlan({
+              serverPlanId,
+              resourceId,
+              confirmation: PREPARE_STATELESS_MIGRATION_CONFIRMATION
+            });
+          }
+          result.executionKind = executionKind;
+          result.executionPlanId = plan.planId;
+          result.statelessPlanId = executionKind === 'stateless' ? plan.planId : null;
+          result.statefulPlanId = executionKind === 'stateful' ? plan.planId : null;
           result.blockers = uniqueBlockers(plan.readiness && plan.readiness.blockers || []);
-          if (!result.blockers.length) {
+          if (!result.blockers.length && executionKind === 'stateless') {
             let review = getStatelessReviewStatus(plan.planId);
             if (
               typeof prepareStatelessReview === 'function' &&
@@ -357,7 +383,7 @@ function createMigrationRunManager({
             anyBlocked = true;
           } else {
             result.status = 'ready';
-            preparedPlans.set(resourceId, plan);
+            preparedPlans.set(resourceId, { executionKind, plan });
           }
         } catch (error) {
           result.status = 'blocked';
@@ -380,29 +406,38 @@ function createMigrationRunManager({
       setRunState(run, 'executing', 'serial-execution');
       for (const resourceId of run.executionOrder) {
         const result = run.resources.find((resource) => resource.resourceId === resourceId);
-        const plan = preparedPlans.get(resourceId);
+        const prepared = preparedPlans.get(resourceId);
+        const plan = prepared.plan;
         result.status = 'executing';
         result.updatedAt = now();
         run.summary = summarize(run);
         persist(run);
         try {
           const approval = issueApproval({
-            kind: 'stateless-migration-apply',
+            kind: prepared.executionKind + '-migration-apply',
             planId: plan.planId,
             resourceId,
             evidenceFingerprint: plan.resource.evidenceFingerprint,
             actor: context
           });
-          const operation = await executeStatelessMigration(plan.planId, approval);
-          if (!operation || operation.status !== 'traffic-on-foxos-source-preserved') {
-            throw new MigrationRunError('Stateless migration did not reach verified FoxOS traffic', 500, 'execution-proof-incomplete');
+          const operation = prepared.executionKind === 'stateful'
+            ? await executeStatefulMigration(plan.planId, approval)
+            : await executeStatelessMigration(plan.planId, approval);
+          const expectedStatus = prepared.executionKind === 'stateful'
+            ? 'traffic-on-server-source-preserved'
+            : 'traffic-on-foxos-source-preserved';
+          if (!operation || operation.status !== expectedStatus) {
+            throw new MigrationRunError('Migration did not reach verified server-owned traffic', 500, 'execution-proof-incomplete');
           }
           result.status = 'completed';
           result.operationId = operation.operationId;
           result.completedAt = now();
         } catch (error) {
           result.status = 'failed';
-          if (STATELESS_OPERATION_PATTERN.test(String(error && error.operationId || ''))) {
+          if (
+            STATELESS_OPERATION_PATTERN.test(String(error && error.operationId || '')) ||
+            STATEFUL_OPERATION_PATTERN.test(String(error && error.operationId || ''))
+          ) {
             result.operationId = error.operationId;
           }
           result.blockers = [safeError(error, 'migration-execution-failed')];
@@ -509,8 +544,11 @@ function createMigrationRunManager({
         resourceId: resource.resourceId,
         name: resource.name,
         strategy: resource.strategy,
+        executionKind: resource.strategy === 'shadow-refresh-bounded-quiesce' ? 'stateful' : 'stateless',
+        executionPlanId: null,
         status: 'selected',
         statelessPlanId: null,
+        statefulPlanId: null,
         operationId: null,
         blockers: []
       })),
@@ -532,9 +570,12 @@ function createMigrationRunManager({
         snapshotRevalidatedBeforeExecution: true,
         allResourcesPreflightedBeforeMutation: true,
         serialExecution: true,
-        zeroDowntimeRequired: true,
+        zeroDowntimeRequired: selectedResources.every((resource) => resource.strategy === 'blue-green-atomic-route'),
+        boundedQuiesceAllowed: selectedResources.some((resource) => resource.strategy === 'shadow-refresh-bounded-quiesce'),
         automaticRollbackDelegatedToTransaction: true,
-        sourceStopAllowed: false,
+        sourceStopAllowedAfterVerifiedCutover: selectedResources.some((resource) => (
+          resource.strategy === 'shadow-refresh-bounded-quiesce'
+        )),
         providerDetachIncluded: false,
         destructiveCleanupIncluded: false,
         browserStorageIsAuthority: false

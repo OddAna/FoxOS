@@ -76,6 +76,62 @@ test('verified FoxOS traffic authority projects a preserved provider source as F
   }
 });
 
+test('verified stateful traffic authority projects the restored candidate as server-managed', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-registry-stateful-management-'));
+  const resourceId = 'res_' + 'a'.repeat(32);
+  const operationId = 'stmop_' + 'b'.repeat(32);
+  const planId = 'stmplan_' + 'c'.repeat(32);
+  const routeId = 'smroute_' + 'd'.repeat(24);
+  const candidateContainerId = 'e'.repeat(64);
+  const candidateResourceId = 'res_' + 'f'.repeat(32);
+  const domain = 'stateful.example.test';
+  try {
+    fs.mkdirSync(path.join(root, 'stateful-migrations', 'operations'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'stateful-migrations', 'plans'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'ingress'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'stateful-migrations', 'plans', planId + '.json'), JSON.stringify({
+      planId,
+      resource: {
+        name: 'Stateful application',
+        observedProvider: 'coolify',
+        observedOwnership: 'observed'
+      }
+    }));
+    fs.writeFileSync(path.join(root, 'stateful-migrations', 'operations', operationId + '.json'), JSON.stringify({
+      operationId,
+      planId,
+      resourceId,
+      status: 'traffic-on-server-source-preserved',
+      completedAt: '2026-08-07T10:00:00.000Z',
+      source: { retainedForRollback: true },
+      candidate: { containerId: candidateContainerId },
+      route: { routes: [{ routeId, domain }] },
+      trafficProof: { healthy: true, tlsValid: true, candidateServing: true }
+    }));
+    fs.writeFileSync(path.join(root, 'ingress', 'authority.json'), JSON.stringify({
+      owner: 'foxos',
+      publicAuthorityActive: true,
+      domains: { [domain]: 'foxos' },
+      routes: { [routeId]: { routeId, operationId, domain, status: 'active' } }
+    }));
+
+    const management = readFoxosMigrationManagement(root, [{
+      id: candidateResourceId,
+      runtime: { containerId: candidateContainerId, state: 'running' }
+    }]).get(resourceId);
+
+    assert.equal(management.owner, 'foxos');
+    assert.equal(management.state, 'active');
+    assert.equal(management.lifecycle, 'stateful-bounded-quiesce');
+    assert.equal(management.candidateResourceId, candidateResourceId);
+    assert.deepEqual(management.domains, [domain]);
+    assert.equal(management.sourceProvider, 'coolify');
+    assert.equal(management.sourcePreserved, true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('verified migration management follows the running candidate after the cold source is removed', () => {
   const logicalResourceId = 'res_' + '6'.repeat(32);
   const candidateResourceId = 'res_' + '7'.repeat(32);

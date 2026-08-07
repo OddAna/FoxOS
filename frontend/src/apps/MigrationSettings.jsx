@@ -117,6 +117,7 @@ const CLASS_LABELS = {
 const AVAILABILITY_LABELS = {
   'zero-downtime-required': 'Kesintisiz geçiş gerekli',
   'bounded-quiesce-budget-required': 'Onaylı kısa duraklama bütçesi gerekli',
+  'bounded-quiesce-ready': 'Kontrollü kısa duraklama ve otomatik geri alma',
   'database-aware-handoff-required': 'Veritabanı tutarlılığı korunmalı',
   'already-managed': 'Mevcut çalışma korunacak',
   'not-applicable': 'Uygulanmaz',
@@ -177,7 +178,12 @@ function reviewState(resource) {
   if (resource.readiness?.planningStatus === 'included-with-parent') return 'grouped';
   if (resource.readiness?.planningStatus === 'provider-retirement-pending') return 'retirement';
   if (!resource.migrationRequired) return 'managed';
-  if (resource.strategy !== 'blue-green-atomic-route') return 'unsupported';
+  if (!['blue-green-atomic-route', 'shadow-refresh-bounded-quiesce'].includes(resource.strategy)) return 'unsupported';
+  const plannedApply = resource.readiness?.applyImplemented;
+  const applyImplemented = plannedApply === true || (
+    plannedApply === undefined && resource.strategy === 'blue-green-atomic-route'
+  );
+  if (!applyImplemented) return 'unsupported';
   const plannedEligibility = resource.readiness?.reviewEligible;
   const reviewEligible = plannedEligibility === true || (
     plannedEligibility === undefined &&

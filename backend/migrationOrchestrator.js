@@ -104,7 +104,7 @@ function migrationStrategy(resource) {
   return 'manual-review-required';
 }
 
-function availabilityPolicy(resource, strategy) {
+function availabilityPolicy(resource, strategy, applyImplemented = false) {
   const classification = resource.classification || {};
   if (strategy === 'protected-skip') {
     return {
@@ -153,9 +153,9 @@ function availabilityPolicy(resource, strategy) {
   }
   if (classification.stateClass === 'stateful') {
     return {
-      currentMode: 'bounded-quiesce-budget-required',
+      currentMode: applyImplemented ? 'bounded-quiesce-ready' : 'bounded-quiesce-budget-required',
       targetMode: 'bounded-quiesce',
-      sourcePauseBudgetMs: null,
+      sourcePauseBudgetMs: applyImplemented ? 120000 : null,
       explicitApprovalRequired: true,
       postRoadmapCapability: 'stateful-zero-downtime-continuous-sync-or-application-replication'
     };
@@ -195,17 +195,17 @@ function relationshipResourceIds(relationship) {
   ].filter(Boolean))).sort();
 }
 
-function implementationGaps(resource, strategy, conflicts) {
+function implementationGaps(resource, strategy, conflicts, applyImplemented = false) {
   if (
     strategy === 'protected-skip' || strategy === 'already-foxos-managed' ||
     strategy === 'already-server-owned'
   ) return [];
-  const gaps = [blocker(
+  const gaps = applyImplemented ? [] : [blocker(
     'migration-apply-transaction-not-implemented',
     'apply',
-    'This orchestrator version plans migrations but has no runtime apply transaction.'
+    'This resource class has no runtime apply transaction yet.'
   )];
-  if ((resource.routes || []).length || (resource.declaredRoutes || []).length) {
+  if (!applyImplemented && ((resource.routes || []).length || (resource.declaredRoutes || []).length)) {
     gaps.push(blocker(
       'general-domain-route-cutover-not-implemented',
       'routes',
@@ -230,13 +230,13 @@ function implementationGaps(resource, strategy, conflicts) {
       'runtime',
       'The systemd unit and its configuration must be captured into a provider-neutral manifest with rollback proof.'
     ));
-  } else if (strategy === 'blue-green-atomic-route') {
+  } else if (strategy === 'blue-green-atomic-route' && !applyImplemented) {
     gaps.push(blocker(
       'zero-downtime-blue-green-apply-not-implemented',
       'availability',
       'The required zero-downtime blue/green apply transaction is not implemented.'
     ));
-  } else if (strategy === 'shadow-refresh-bounded-quiesce') {
+  } else if (strategy === 'shadow-refresh-bounded-quiesce' && !applyImplemented) {
     gaps.push(blocker(
       'stateful-cutover-pause-budget-unset',
       'availability',
@@ -260,7 +260,7 @@ function implementationGaps(resource, strategy, conflicts) {
       'routes',
       'The provider proxy must remain until every dependent production route is independently verified.'
     ));
-  } else {
+  } else if (!applyImplemented) {
     gaps.push(blocker(
       'resource-class-migration-policy-missing',
       'classification',
@@ -387,12 +387,27 @@ function createMigrationOrchestrator({
       !resource.protected && !foxosManaged && !controlPlane && !groupedWithParent &&
       classification && classification.authorityClass === 'provider-owned'
     );
-    const reviewEligible = Boolean(
+    const statelessReviewEligible = Boolean(
       resource.kind === 'container' &&
       migrationRequired && strategy === 'blue-green-atomic-route' &&
       classification && classification.independenceAudit &&
       classification.independenceAudit.eligibleForReadOnlyAudit === true
     );
+    const statefulReviewEligible = Boolean(
+      resource.kind === 'container' && migrationRequired &&
+      strategy === 'shadow-refresh-bounded-quiesce' &&
+      (!providerGroup || providerGroup.memberResourceIds.length === 1) &&
+      resource.runtime && resource.runtime.state === 'running' && resource.runtime.inspection === 'complete' &&
+      classification && classification.workloadRole === 'application' &&
+      classification.stateClass === 'stateful' &&
+      Array.isArray(resource.routes) && resource.routes.length > 0 &&
+      Array.isArray(resource.mounts) && resource.mounts.length >= 1 && resource.mounts.length <= 4 &&
+      resource.mounts.every((mount) => (
+        mount.type === 'volume' && mount.name && mount.destination && mount.readOnly !== true
+      ))
+    );
+    const reviewEligible = statelessReviewEligible || statefulReviewEligible;
+    const applyImplemented = statelessReviewEligible || statefulReviewEligible;
     const conflicts = (currentSnapshot.conflicts || []).filter((entry) => (
       (entry.resourceIds || []).includes(resource.id)
     )).map((entry) => ({
@@ -445,7 +460,7 @@ function createMigrationOrchestrator({
         .map((entry) => ({ ...entry, source: 'application-manifest' })),
       ...(compileFailure ? [compileFailure] : [])
     ]) : [];
-    const gaps = migrationRequired ? implementationGaps(resource, strategy, conflicts) : [];
+    const gaps = migrationRequired ? implementationGaps(resource, strategy, conflicts, applyImplemented) : [];
     if (
       migrationRequired && providerGroup && providerGroup.parentResourceId === resource.id &&
       providerGroup.memberResourceIds.length > 1
@@ -496,7 +511,7 @@ function createMigrationOrchestrator({
         : null,
       classification,
       strategy,
-      availability: availabilityPolicy(resource, strategy),
+      availability: availabilityPolicy(resource, strategy, applyImplemented),
       evidence: {
         registrySnapshotId: currentSnapshot.snapshotId,
         manifestRevisionId: manifest && manifest.revisionId || null,
@@ -527,7 +542,7 @@ function createMigrationOrchestrator({
         planningStatus,
         reviewEligible,
         evidenceComplete,
-        applyImplemented: false,
+        applyImplemented,
         applyApproved: false,
         providerDetachApproved: false
       }
@@ -583,7 +598,7 @@ function createMigrationOrchestrator({
       reviewEligibleEvidenceIncomplete: migrationResources.filter((resource) => (
         resource.readiness.reviewEligible && !resource.readiness.evidenceComplete
       )).length,
-      applyImplemented: 0,
+      applyImplemented: migrationResources.filter((resource) => resource.readiness.applyImplemented).length,
       byStrategy: countBy(resources, (resource) => resource.strategy),
       byAvailabilityMode: countBy(resources, (resource) => resource.availability.currentMode),
       blockingConflicts: (currentSnapshot.conflicts || []).filter((entry) => entry.severity === 'blocking').length
@@ -602,7 +617,7 @@ function createMigrationOrchestrator({
         routesMutated: false,
         providerStateMutated: false,
         providerDetached: false,
-        applyImplemented: false,
+        applyImplemented: summary.applyImplemented > 0,
         applyApproved: false,
         secretValuesIncluded: false,
         ordinaryEnvironmentValuesIncluded: false,
@@ -629,10 +644,11 @@ function createMigrationOrchestrator({
     const plans = listJson(plansRoot).sort((left, right) => (
       String(left.createdAt).localeCompare(String(right.createdAt)) || left.planId.localeCompare(right.planId)
     ));
+    const latest = plans.length ? plans[plans.length - 1] : null;
     return {
       schemaVersion: MIGRATION_ORCHESTRATOR_SCHEMA_VERSION,
       mode: 'read-only-server-migration-plan',
-      latest: plans.length ? plans[plans.length - 1] : null,
+      latest,
       plans,
       summary: { plans: plans.length },
       guarantees: {
@@ -640,7 +656,7 @@ function createMigrationOrchestrator({
         routesMutated: false,
         providerStateMutated: false,
         providerDetached: false,
-        applyImplemented: false,
+        applyImplemented: Boolean(latest && latest.summary && latest.summary.applyImplemented > 0),
         applyApproved: false,
         secretValuesIncluded: false,
         zeroDowntimeStatefulPostRoadmap: true

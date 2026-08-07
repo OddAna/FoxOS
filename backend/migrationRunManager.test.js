@@ -189,3 +189,68 @@ test('stops the serial queue after a failed resource transaction', async () => {
   assert.equal(context.executions.length, 1);
   fs.rmSync(context.dataRoot, { recursive: true, force: true });
 });
+
+test('one-click coordinator prepares and executes an implemented stateful adapter without stateless review', async () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-stateful-run-'));
+  let scheduled;
+  const stateful = {
+    ...resource(RESOURCE_A, 'stateful'),
+    strategy: 'shadow-refresh-bounded-quiesce',
+    classification: {
+      authorityClass: 'provider-owned',
+      stateClass: 'stateful',
+      workloadRole: 'application',
+      independenceAudit: { eligibleForReadOnlyAudit: false }
+    },
+    readiness: { reviewEligible: true, evidenceComplete: false, applyImplemented: true }
+  };
+  const plan = { planId: SERVER_PLAN_ID, sourceSnapshotId: SNAPSHOT_ID, resources: [stateful] };
+  const calls = [];
+  const manager = createMigrationRunManager({
+    dataRoot,
+    getServerMigrationPlan: () => plan,
+    getLatestRegistrySnapshot: () => ({ snapshotId: SNAPSHOT_ID }),
+    saveSelection: () => ({ selectionId: 'msel_' + '3'.repeat(32) }),
+    prepareStatelessPlan: () => { throw new Error('stateless adapter must not be used'); },
+    getStatelessReviewStatus: () => { throw new Error('stateless review must not be used'); },
+    executeStatelessMigration: async () => { throw new Error('stateless execution must not be used'); },
+    prepareStatefulPlan: (input) => {
+      calls.push(['prepare', input.confirmation]);
+      return {
+        planId: 'stmplan_' + '4'.repeat(32),
+        resource: { resourceId: RESOURCE_A, evidenceFingerprint: '5'.repeat(64) },
+        readiness: { blockers: [] }
+      };
+    },
+    executeStatefulMigration: async () => {
+      calls.push(['execute']);
+      return { operationId: 'stmop_' + '6'.repeat(32), status: 'traffic-on-server-source-preserved' };
+    },
+    issueApproval: (input) => {
+      calls.push(['approval', input.kind]);
+      return 'one-time-stateful-grant';
+    },
+    randomUUID: () => '00000000-0000-4000-8000-000000000007',
+    schedule: (work) => { scheduled = work; }
+  });
+  try {
+    const queued = manager.start({
+      serverPlanId: SERVER_PLAN_ID,
+      resourceIds: [RESOURCE_A],
+      confirmation: START_SERVER_MIGRATION_CONFIRMATION
+    }, { type: 'foxos-session', username: 'burak', sessionToken: 'stateful-session' });
+    await scheduled();
+    const completed = manager.getRun(queued.runId);
+    assert.equal(completed.status, 'completed');
+    assert.equal(completed.resources[0].executionKind, 'stateful');
+    assert.equal(completed.resources[0].statefulPlanId, 'stmplan_' + '4'.repeat(32));
+    assert.equal(completed.resources[0].operationId, 'stmop_' + '6'.repeat(32));
+    assert.deepEqual(calls, [
+      ['prepare', 'PREPARE STATEFUL MIGRATION'],
+      ['approval', 'stateful-migration-apply'],
+      ['execute']
+    ]);
+  } finally {
+    fs.rmSync(dataRoot, { recursive: true, force: true });
+  }
+});

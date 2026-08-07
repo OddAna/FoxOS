@@ -292,6 +292,14 @@ target blocks only adoption/migration operations that require restore proof.
 - [x] Reserve the configured FoxOS panel hostname in the owned ingress map so
   application reconciliation and agent recreation cannot fall it through to a
   legacy proxy while migrated application routes remain healthy.
+- [x] Add the first production stateful class to the same authenticated
+  `Geçişi Başlat` queue: require a single running application, one to four
+  writable named volumes, an unambiguous HTTP health target and public route;
+  stream a final encrypted snapshot while the exact source is paused, restore a
+  controller-neutral candidate, prove public traffic, park the source as cold
+  rollback and automatically restore it on any failed cutover proof. Enforce a
+  120-second pause budget and keep databases, bind mounts and companion groups
+  sealed behind their own adapters.
 - [ ] Expand the implemented disposable dry-run, conflict detection, verified
   cutover and reversible rollback to real application classes one safety gate at
   a time.

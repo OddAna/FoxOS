@@ -151,4 +151,18 @@ test('review-selectable predicate accepts safe preparation candidates before evi
       independenceAudit: { eligibleForReadOnlyAudit: false }
     }
   })), false);
+  assert.equal(isReviewSelectable(planResource('1', {
+    strategy: 'shadow-refresh-bounded-quiesce',
+    readiness: { evidenceComplete: false, reviewEligible: true, applyImplemented: true },
+    classification: {
+      authorityClass: 'provider-owned',
+      stateClass: 'stateful',
+      workloadRole: 'application',
+      independenceAudit: { eligibleForReadOnlyAudit: false }
+    }
+  })), true);
+  assert.equal(isReviewSelectable(planResource('1', {
+    strategy: 'shadow-refresh-bounded-quiesce',
+    readiness: { evidenceComplete: false, reviewEligible: true, applyImplemented: false }
+  })), false);
 });

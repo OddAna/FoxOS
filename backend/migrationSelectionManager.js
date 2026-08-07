@@ -38,11 +38,16 @@ function isReviewSelectable(resource) {
     resource && resource.classification && resource.classification.independenceAudit &&
     resource.classification.independenceAudit.eligibleForReadOnlyAudit === true
   );
+  const plannedApply = resource && resource.readiness && resource.readiness.applyImplemented;
+  const applyImplemented = plannedApply === true || Boolean(
+    plannedApply === undefined && resource && resource.strategy === 'blue-green-atomic-route'
+  );
   return Boolean(
     resource &&
     resource.migrationRequired === true &&
     resource.protected !== true &&
-    resource.strategy === 'blue-green-atomic-route' &&
+    ['blue-green-atomic-route', 'shadow-refresh-bounded-quiesce'].includes(resource.strategy) &&
+    applyImplemented &&
     reviewEligible
   );
 }
