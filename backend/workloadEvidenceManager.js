@@ -485,7 +485,7 @@ function createWorkloadEvidenceManager({
     const ordinaryNames = managedNames.filter((name) => !secretNames.includes(name));
     for (const name of names) {
       const value = values.get(name);
-      if (Buffer.byteLength(value) > 64 * 1024 || (secretNames.includes(name) && !value.length)) {
+      if (Buffer.byteLength(value) > 64 * 1024) {
         throw new WorkloadEvidenceError('Observed environment value exceeds the safe capture policy', 409, 'invalid-observed-environment-value');
       }
     }

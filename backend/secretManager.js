@@ -113,8 +113,8 @@ function createSecretManager({
 
   function putSecret(name, value) {
     const secretId = secretIdForName(name);
-    if (typeof value !== 'string' || !value.length || Buffer.byteLength(value) > MAX_SECRET_BYTES) {
-      throw new SecretError('Secret value must be between 1 byte and 64 KiB', 400, 'invalid-secret-value');
+    if (typeof value !== 'string' || Buffer.byteLength(value) > MAX_SECRET_BYTES) {
+      throw new SecretError('Secret value must be at most 64 KiB', 400, 'invalid-secret-value');
     }
     const existing = readJson(secretLatestPath(secretId), null);
     const timestamp = new Date(clock()).toISOString();

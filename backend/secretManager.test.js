@@ -68,6 +68,29 @@ test('sensitive-looking names cannot be stored as ordinary environment values', 
   }
 });
 
+test('an intentionally empty sensitive value is encrypted and restored exactly', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-empty-secret-test-'));
+  try {
+    const manager = createSecretManager({
+      dataRoot: root,
+      encryptionStore: createEncryptionStore({ dataRoot: root }),
+      randomUUID: () => '00000000-0000-4000-8000-000000000124'
+    });
+    const secret = manager.putSecret('workload/example/OPTIONAL_API_TOKEN', '');
+    const environment = manager.createEnvironmentRevision(RESOURCE_ID, {
+      secretRefs: { OPTIONAL_API_TOKEN: { secretId: secret.secretId, revision: secret.revision } }
+    });
+    assert.deepEqual(manager.resolveEnvironment(environment), ['OPTIONAL_API_TOKEN=']);
+    const persisted = fs.readFileSync(
+      path.join(manager.paths.recordsRoot, secret.secretId, 'latest.json'),
+      'utf8'
+    );
+    assert.equal(persisted.includes('OPTIONAL_API_TOKEN='), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('schema 1 environment revisions remain readable with an empty exclusion set', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-secret-test-'));
   try {
