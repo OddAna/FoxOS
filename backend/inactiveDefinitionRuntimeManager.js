@@ -335,6 +335,19 @@ function recoveredRoute(recoveredEnvironment, service) {
   return unique[0];
 }
 
+function imagePullPath(reference) {
+  const digestSeparator = reference.lastIndexOf('@');
+  if (digestSeparator > 0) {
+    return '/images/create?fromImage=' + encodeURIComponent(reference);
+  }
+  const lastSlash = reference.lastIndexOf('/');
+  const lastColon = reference.lastIndexOf(':');
+  const hasTag = lastColon > lastSlash;
+  const repository = hasTag ? reference.slice(0, lastColon) : reference;
+  const tag = hasTag ? reference.slice(lastColon + 1) : 'latest';
+  return '/images/create?fromImage=' + encodeURIComponent(repository) + '&tag=' + encodeURIComponent(tag);
+}
+
 function dockerHealthcheck(service) {
   const health = service.healthcheck;
   if (!health || typeof health !== 'object' || !Array.isArray(health.test) || !health.test.length) {
@@ -578,7 +591,7 @@ function createInactiveDefinitionRuntimeManager({
   }
 
   async function pullImage(reference) {
-    await dockerRequest('POST', '/images/create?fromImage=' + encodeURIComponent(reference));
+    await dockerRequest('POST', imagePullPath(reference));
     const details = await dockerRequest('GET', '/images/' + encodeURIComponent(reference) + '/json');
     const imageId = String(details && details.Id || '').toLowerCase();
     if (!IMAGE_ID_PATTERN.test(imageId)) {
@@ -822,5 +835,6 @@ module.exports = {
   INACTIVE_RUNTIME_SCHEMA_VERSION,
   InactiveDefinitionRuntimeError,
   compileContract,
-  createInactiveDefinitionRuntimeManager
+  createInactiveDefinitionRuntimeManager,
+  imagePullPath
 };

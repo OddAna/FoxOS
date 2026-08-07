@@ -6,7 +6,8 @@ const test = require('node:test');
 const {
   InactiveDefinitionRuntimeError,
   compileContract,
-  createInactiveDefinitionRuntimeManager
+  createInactiveDefinitionRuntimeManager,
+  imagePullPath
 } = require('./inactiveDefinitionRuntimeManager');
 
 const RESOURCE_ID = 'res_' + '1'.repeat(32);
@@ -92,7 +93,7 @@ test('activates one recovered service with existing data and a FoxOS-owned route
     if (method === 'GET' && requestPath === '/volumes/provider_firefox_config') {
       return { Name: 'provider_firefox_config' };
     }
-    if (method === 'POST' && requestPath.startsWith('/images/create?')) return {};
+    if (method === 'POST' && requestPath === '/images/create?fromImage=jlesage%2Ffirefox&tag=latest') return {};
     if (method === 'GET' && requestPath === '/images/jlesage%2Ffirefox/json') {
       return { Id: IMAGE_ID, RepoDigests: ['jlesage/firefox@sha256:' + '6'.repeat(64)] };
     }
@@ -229,4 +230,19 @@ test('does not advertise activation for unsupported recovered kinds', () => {
     available: false,
     code: 'inactive-definition-kind-unsupported'
   });
+});
+
+test('image pulls select only latest, one explicit tag or one immutable digest', () => {
+  assert.equal(
+    imagePullPath('jlesage/firefox'),
+    '/images/create?fromImage=jlesage%2Ffirefox&tag=latest'
+  );
+  assert.equal(
+    imagePullPath('registry.example.com:5000/tools/firefox:v1.17.0'),
+    '/images/create?fromImage=registry.example.com%3A5000%2Ftools%2Ffirefox&tag=v1.17.0'
+  );
+  assert.equal(
+    imagePullPath('jlesage/firefox@sha256:' + 'f'.repeat(64)),
+    '/images/create?fromImage=jlesage%2Ffirefox%40sha256%3A' + 'f'.repeat(64)
+  );
 });

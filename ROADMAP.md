@@ -436,7 +436,8 @@ target blocks only adoption/migration operations that require restore proof.
 - [x] Activate adopted inactive single-service definitions without restarting
   or calling the old provider. Compile only a bounded encrypted-recovery
   contract, reuse existing named volumes, pull and pin the immutable image,
-  require Docker health plus trusted FoxOS HTTPS, keep secrets out of operation
+  select only the declared tag (or `latest`, never all repository tags), require
+  Docker health plus trusted FoxOS HTTPS, keep secrets out of operation
   state and roll back only the newly created candidate on failure. Replace the
   stopped definition card with the verified runtime while preserving its stable
   logical application and desktop shortcut.

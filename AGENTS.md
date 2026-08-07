@@ -155,7 +155,8 @@
   existing named volumes; reject builds, bind mounts, host/device privileges,
   custom process or network modes and ambiguous routes. Resolve environment
   only from authenticated encrypted recovery, never persist its values, pull
-  and bind the immutable image ID, create a controller-neutral readable runtime,
+  exactly `latest`, the declared tag or the declared digest (never every
+  repository tag), bind the immutable image ID, create a controller-neutral readable runtime,
   prove health plus trusted FoxOS HTTPS before success and remove only the new
   candidate on failure. Preserve the original volume and inactive route.
 - A completed stateless migration keeps its logical application identity after
