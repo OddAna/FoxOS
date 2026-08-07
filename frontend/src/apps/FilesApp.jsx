@@ -170,6 +170,7 @@ const FilesApp = ({ initialPath = 'Masaüstü' }) => {
             body: JSON.stringify({ filePath: `${currentPath === '/' ? '' : currentPath}/${file.name}` })
           });
           fetchFiles();
+          refreshApplications({ quiet: true }).catch(() => {});
         } catch {
           showDialog({ title: 'Hata', message: 'Dosya silinemedi.', type: 'error' });
         }
@@ -191,7 +192,10 @@ const FilesApp = ({ initialPath = 'Masaüstü' }) => {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ filePath: `${currentPath === '/' ? '' : currentPath}/${file.name}`, newName })
-        }).then(() => fetchFiles())
+        }).then(() => {
+          fetchFiles();
+          refreshApplications({ quiet: true }).catch(() => {});
+        })
           .catch(() => showDialog({ title: 'Hata', message: 'Yeniden adlandırılamadı.', type: 'error' }));
       }
     });
@@ -592,6 +596,7 @@ const FilesApp = ({ initialPath = 'Masaüstü' }) => {
 
       Promise.all(promises).then(() => {
         window.dispatchEvent(new Event('refresh_files'));
+        refreshApplications({ quiet: true }).catch(() => {});
       }).catch(() => {
         showDialog({ title: 'Hata', message: 'Dosyalar taşınamadı.', type: 'error' });
       });
@@ -636,6 +641,7 @@ const FilesApp = ({ initialPath = 'Masaüstü' }) => {
 
       Promise.all(promises).then(() => {
         window.dispatchEvent(new Event('refresh_files'));
+        refreshApplications({ quiet: true }).catch(() => {});
       }).catch(() => {
         showDialog({ title: 'Hata', message: 'Dosyalar klasöre taşınamadı.', type: 'error' });
       });

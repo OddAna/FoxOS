@@ -358,6 +358,7 @@ const Desktop = () => {
 
         Promise.all(promises).then(() => {
           window.dispatchEvent(new Event('refresh_files'));
+          refreshApplications({ quiet: true }).catch(() => {});
         }).catch(err => {
           console.error("Taşıma hatası:", err);
           showDialog({ title: 'Hata', message: 'Dosyalar Masaüstüne taşınamadı.', type: 'error' });
@@ -438,6 +439,7 @@ const Desktop = () => {
 
       Promise.all(promises).then(() => {
         window.dispatchEvent(new Event('refresh_files'));
+        refreshApplications({ quiet: true }).catch(() => {});
       }).catch(() => {
         showDialog({ title: 'Hata', message: 'Dosyalar klasöre taşınamadı.', type: 'error' });
       });
@@ -461,6 +463,7 @@ const Desktop = () => {
             body: JSON.stringify({ filePath: `/Masaüstü/${file.name}` })
           });
           fetchDesktopFiles();
+          refreshApplications({ quiet: true }).catch(() => {});
         } catch {
           showDialog({ title: 'Hata', message: 'Dosya silinemedi.', type: 'error' });
         }
@@ -482,7 +485,10 @@ const Desktop = () => {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ filePath: `/Masaüstü/${file.name}`, newName })
-        }).then(() => fetchDesktopFiles())
+        }).then(() => {
+          fetchDesktopFiles();
+          refreshApplications({ quiet: true }).catch(() => {});
+        })
           .catch(() => showDialog({ title: 'Hata', message: 'Yeniden adlandırılamadı.', type: 'error' }));
       }
     });
