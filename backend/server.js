@@ -110,6 +110,7 @@ const {
   createContainerPayload,
   discoveredAppStates,
   imagePullPath,
+  isManagedMigrationCandidate,
   managedContainerForApp,
   stateForCatalogApp,
   validateInstallOptions
@@ -1203,8 +1204,20 @@ async function getApplicationInventory() {
   const installedContainerIds = context.apps
     .filter((application) => application.installed && application.containerId)
     .map((application) => application.containerId);
+  const managedCandidateIds = context.containers
+    .filter(isManagedMigrationCandidate)
+    .map((container) => container.Id);
+  const projectedManagedCandidateIds = new Set((snapshot && snapshot.resources || [])
+    .map((resource) => resource && resource.management && resource.management.candidateContainerId)
+    .filter(Boolean));
+  const managedProjectionMissing = managedCandidateIds
+    .some((containerId) => !projectedManagedCandidateIds.has(containerId));
 
-  if (!snapshot || installedContainerIds.some((containerId) => !resourceContainerIds.has(containerId))) {
+  if (
+    !snapshot ||
+    installedContainerIds.some((containerId) => !resourceContainerIds.has(containerId)) ||
+    managedProjectionMissing
+  ) {
     snapshot = await resourceRegistry.scan();
   }
 

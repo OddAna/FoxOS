@@ -270,6 +270,13 @@ function discoveredProfileForContainer(container) {
   )) || null;
 }
 
+function isManagedMigrationCandidate(container) {
+  const labels = container && container.Labels || {};
+  return labels[MANAGED_LABEL] === 'true' &&
+    /^res_[a-f0-9]{32}$/.test(String(labels['com.foxos.migration.source-resource-id'] || '')) &&
+    /^smop_[a-f0-9]{32}$/.test(String(labels['com.foxos.stateless-migration.id'] || ''));
+}
+
 function isDiscoverableApplication(container) {
   const labels = container.Labels || {};
   const name = containerDisplayName(container);
@@ -290,13 +297,11 @@ function isDiscoverableApplication(container) {
     labels['coolify.type'] === 'application' || labels['coolify.service.subType'] === 'application'
   );
   const hasUsableEndpoint = Boolean(externalUrlForContainer(container) || publishedPortForContainer(container));
-  const isManagedMigrationCandidate = labels[MANAGED_LABEL] === 'true' &&
-    /^res_[a-f0-9]{32}$/.test(String(labels['com.foxos.migration.source-resource-id'] || '')) &&
-    /^smop_[a-f0-9]{32}$/.test(String(labels['com.foxos.stateless-migration.id'] || ''));
+  const managedMigrationCandidate = isManagedMigrationCandidate(container);
 
   return Boolean(
     profile ||
-    isManagedMigrationCandidate ||
+    managedMigrationCandidate ||
     (isCoolifyApplication && (hasUsableEndpoint || container.State !== 'running')) ||
     (hasUsableEndpoint && labels['coolify.managed'] !== 'true')
   );
@@ -475,6 +480,7 @@ module.exports = {
   discoveredAppStates,
   externalUrlForContainer,
   imagePullPath,
+  isManagedMigrationCandidate,
   managedContainerForApp,
   normalizedImageRepository,
   stateForCatalogApp,

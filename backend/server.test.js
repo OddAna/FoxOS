@@ -12,6 +12,7 @@ const {
   createContainerPayload,
   discoveredAppStates,
   externalUrlForContainer,
+  isManagedMigrationCandidate,
   imagePullPath,
   stateForCatalogApp,
   validateInstallOptions
@@ -321,6 +322,11 @@ test('a server-managed migration candidate remains discoverable without a publis
   assert.equal(discovered[0].managedByFoxOS, true);
   assert.equal(discovered[0].installationSource, 'foxos');
   assert.equal(discovered[0].state, 'running');
+  assert.equal(isManagedMigrationCandidate(candidate), true);
+  assert.equal(isManagedMigrationCandidate({ ...candidate, Labels: {
+    ...candidate.Labels,
+    'com.foxos.stateless-migration.id': 'invalid'
+  } }), false);
 });
 
 test('multiple WordPress instances remain separate and use their route identities', () => {
