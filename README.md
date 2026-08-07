@@ -39,6 +39,12 @@ not use the host package manager for its own runtime.
   provider-definition card.
   Create or remove each persistent desktop shortcut and manage available
   lifecycle, access address, restart policy, ports and storage controls
+- **Password-protected application removal** — right-click an application to
+  build a short-lived, drift-checked removal plan before any destructive work.
+  FoxOS removes the exact runtime, its old copy and owned routes; optional
+  companion-service and exclusive named-volume cleanup is shown separately.
+  Shared volumes, bind paths, DNS records, Compose sources and image cache stay
+  preserved unless a future purpose-built cleanup proves they are safe
 - **Application update checks** — compare a direct tagged image with its remote
   registry digest without pulling it; Compose-built applications also follow the
   final Dockerfile base and compare public Docker Hub version metadata when the
@@ -271,8 +277,10 @@ FoxOS pulls the catalog image through the host Docker Engine, creates a labeled
 container with an `unless-stopped` restart policy, and reads its live state back
 from Docker. The store installs apps on their catalog port with a private
 `127.0.0.1` bind by default. Persistent app data is kept in a named Docker volume
-and is preserved by the store when the app is removed; the authenticated API can
-explicitly remove a FoxOS-owned volume when requested.
+and is preserved by default. Removal requires the current FoxOS password and a
+fresh server-side plan. The same warning can explicitly remove only named
+volumes whose complete consumer set is included in that plan; shared volumes
+and host bind paths are never deleted by this generic flow.
 
 The store also inspects the live Docker inventory. Existing catalog images and
 user-facing Docker or Coolify applications with a published port or proxy route
@@ -280,7 +288,8 @@ appear as installed without being re-created. Every discovered container remains
 a separate application instance, so multiple WordPress sites or repeated app
 deployments do not collapse into one card. The Store can open, start, stop, and
 restart these existing containers and can save their Docker restart policy;
-only FoxOS-owned installations can be deleted from Store. A stopped application
+removable Docker applications use the same password-protected removal planner
+from Store, Desktop and Files. A stopped application
 with a configured published port remains visible and can be started again. Known
 applications use their project logos, while custom applications use the icon
 declared by their own web route and fall back to the Docker mark when they do not

@@ -171,7 +171,7 @@ test('inactive server definitions receive trusted FoxOS 503 routes before ingres
       execCommands.push(command);
       return { exitCode: 0, output: '' };
     },
-    hostCommand: async () => ({ success: true }),
+    hostCommand: async (binary, args) => ({ success: !args.includes('-C'), output: '' }),
     connectAdmin: () => adminConnection(adminCommands),
     httpsRequest: (options, callback) => {
       requests.push(options);
@@ -218,6 +218,14 @@ test('inactive server definitions receive trusted FoxOS 503 routes before ingres
     assert.equal(repeat.reconciled, false);
     assert.deepEqual(repeat.addedDomains, []);
     assert.equal(requests.length, 1);
+
+    const removed = await manager.removeResourceAuthority(resourceId);
+    assert.equal(removed.routesRemoved, 0);
+    assert.equal(removed.inactiveDomainsRemoved, 1);
+    assert.deepEqual(removed.domains, ['stopped.example.com']);
+    assert.equal(manager.state().inactiveDomains['stopped.example.com'], undefined);
+    assert.equal(manager.state().domains['stopped.example.com'], 'legacy');
+    assert.equal(adminCommands.includes('set map /runtime/routes.map stopped.example.com legacy'), true);
   } finally {
     fs.rmSync(dataRoot, { recursive: true, force: true });
   }

@@ -24,6 +24,7 @@ import {
 import { useDialog } from '../contexts/DialogContext';
 import { useWindowManager } from '../contexts/WindowContext';
 import { useApplicationInventory } from '../contexts/ApplicationContext';
+import { useApplicationRemoval } from '../contexts/ApplicationRemovalContext';
 import { apiFetch } from '../api';
 import ApplicationLogo from '../components/ApplicationLogo';
 
@@ -60,11 +61,11 @@ const AppStoreApp = () => {
   const [apps, setApps] = useState([]);
   const [loading, setLoading] = useState(true);
   const [installing, setInstalling] = useState({});
-  const [uninstalling, setUninstalling] = useState({});
   const [actionRunning, setActionRunning] = useState({});
   const [searchQuery, setSearchQuery] = useState('');
   const [activeMenu, setActiveMenu] = useState(null);
   const { showDialog } = useDialog();
+  const { openApplicationRemoval } = useApplicationRemoval();
   const { openWindow } = useWindowManager();
   const {
     applications: inventoryApplications,
@@ -160,23 +161,19 @@ const AppStoreApp = () => {
   const handleUninstall = (event, app) => {
     event.stopPropagation();
     setActiveMenu(null);
-    showDialog({
-      title: `${app.name} Kaldırılsın mı?`,
-      message: 'Uygulama containerı kaldırılacak. Kalıcı uygulama verileri korunacak.',
-      type: 'warning',
-      confirmText: 'Kaldır',
-      onConfirm: async () => {
-        setUninstalling((current) => ({ ...current, [app.id]: true }));
-        try {
-          await apiFetch(`/api/apps/${app.id}?removeData=false`, { method: 'DELETE' });
-          await loadApps({ quiet: true });
-          await refreshApplications({ quiet: true });
-        } catch (error) {
-          showDialog({ title: 'Kaldırma Hatası', message: error.message, type: 'error' });
-        } finally {
-          setUninstalling((current) => ({ ...current, [app.id]: false }));
-        }
-      }
+    const inventoryApplication = inventoryApplications.find((application) => (
+      application.runtime && application.runtime.containerId === app.containerId
+    ));
+    if (!inventoryApplication) {
+      showDialog({
+        title: 'Kaldırma Hatası',
+        message: 'Uygulamanın sunucu envanteri doğrulanamadı. Mağazayı yenileyip tekrar deneyin.',
+        type: 'error'
+      });
+      return;
+    }
+    openApplicationRemoval(inventoryApplication, {
+      onRemoved: () => loadApps({ quiet: true })
     });
   };
 
@@ -291,7 +288,7 @@ const AppStoreApp = () => {
           {app.managedByFoxOS && (
             <>
               <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '4px 0' }} />
-              <div onClick={(event) => handleUninstall(event, app)} style={{ padding: '8px 12px', fontSize: '13px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '8px', color: '#ff5f56' }} className="menu-item"><Trash2 size={14} /> Sil</div>
+              <div onClick={(event) => handleUninstall(event, app)} style={{ padding: '8px 12px', fontSize: '13px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '8px', color: '#ff5f56' }} className="menu-item"><Trash2 size={14} /> Uygulamayı Kaldır</div>
             </>
           )}
         </div>
@@ -351,9 +348,9 @@ const AppStoreApp = () => {
                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center', position: 'relative' }}>
                   {featuredApp.installed && featuredApp.canManage && renderServiceMenu(featuredApp, 'featured')}
                   {featuredApp.installed ? (
-                    <button type="button" onClick={(event) => handleOpenApp(event, featuredApp)} disabled={uninstalling[featuredApp.id]} style={{ background: 'rgba(255,255,255,0.2)', color: '#fff', border: '1px solid rgba(255,255,255,0.4)', padding: '8px 24px', borderRadius: '20px', fontSize: '14px', fontWeight: 'bold', cursor: uninstalling[featuredApp.id] ? 'wait' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: '8px', opacity: uninstalling[featuredApp.id] ? 0.7 : 1 }}>
-                      {uninstalling[featuredApp.id] ? <Loader2 size={16} className="spin" /> : <Check size={16} />}
-                      {uninstalling[featuredApp.id] ? 'Kaldırılıyor...' : 'Aç'}
+                    <button type="button" onClick={(event) => handleOpenApp(event, featuredApp)} style={{ background: 'rgba(255,255,255,0.2)', color: '#fff', border: '1px solid rgba(255,255,255,0.4)', padding: '8px 24px', borderRadius: '20px', fontSize: '14px', fontWeight: 'bold', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+                      <Check size={16} />
+                      Aç
                     </button>
                   ) : (
                     <button type="button" onClick={(event) => handleInstall(event, featuredApp)} disabled={installing[featuredApp.id]} style={{ background: '#fff', color: '#000', border: 'none', padding: '8px 24px', borderRadius: '20px', fontSize: '14px', fontWeight: 'bold', cursor: installing[featuredApp.id] ? 'wait' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
@@ -401,8 +398,8 @@ const AppStoreApp = () => {
                     <div style={{ display: 'flex', gap: '8px', alignItems: 'center', position: 'relative' }}>
                       {app.installed && app.canManage && renderServiceMenu(app, 'grid')}
                       {app.installed ? (
-                        <button type="button" onClick={(event) => handleOpenApp(event, app)} disabled={uninstalling[app.id]} style={{ background: 'transparent', color: '#0ea5e9', border: '1px solid #0ea5e9', padding: '6px 16px', borderRadius: '16px', fontSize: '13px', fontWeight: 'bold', cursor: uninstalling[app.id] ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: '6px', opacity: uninstalling[app.id] ? 0.7 : 1 }}>
-                          {uninstalling[app.id] ? <Loader2 size={14} className="spin" /> : <Check size={14} />} {uninstalling[app.id] ? 'Kaldırılıyor...' : 'Aç'}
+                        <button type="button" onClick={(event) => handleOpenApp(event, app)} style={{ background: 'transparent', color: '#0ea5e9', border: '1px solid #0ea5e9', padding: '6px 16px', borderRadius: '16px', fontSize: '13px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <Check size={14} /> Aç
                         </button>
                       ) : installing[app.id] ? (
                         <button type="button" disabled style={{ background: 'rgba(255,255,255,0.1)', color: '#888', border: 'none', padding: '6px 16px', borderRadius: '16px', fontSize: '13px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '6px' }}><Loader2 size={14} className="spin" /> Bekle...</button>

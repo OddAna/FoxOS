@@ -114,6 +114,8 @@ const dockerMock = http.createServer((req, res) => {
   }
   if (req.method === 'GET' && mockContainer && req.url === '/containers/' + mockContainer.Id + '/json') {
     return respond(200, {
+      Id: mockContainer.Id,
+      Name: mockContainer.Names && mockContainer.Names[0] || '/' + mockContainer.Id.slice(0, 12),
       Image: mockContainer.ImageID || 'sha256:' + '9'.repeat(64),
       Config: {
         Image: mockContainer.Image || 'unknown',
@@ -130,6 +132,7 @@ const dockerMock = http.createServer((req, res) => {
       NetworkSettings: mockContainer.NetworkSettings || { Networks: {} },
       State: {
         Status: mockContainer.State || 'unknown',
+        Running: mockContainer.State === 'running',
         Health: mockContainer.HealthStatus ? { Status: mockContainer.HealthStatus } : null
       }
     });
@@ -568,6 +571,23 @@ test('setup creates an authenticated session and unlocks the workspace', async (
     username: 'tester'
   });
 
+  const removalPlanId = 'arplan_' + '1'.repeat(32);
+  const wrongRemovalPassword = await fetch(baseUrl() + '/api/application-removal-plans/' + removalPlanId + '/apply', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: 'definitely-wrong' })
+  });
+  assert.equal(wrongRemovalPassword.status, 401);
+  assert.equal((await wrongRemovalPassword.json()).code, 'application-removal-password-invalid');
+
+  const correctRemovalPassword = await fetch(baseUrl() + '/api/application-removal-plans/' + removalPlanId + '/apply', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: 'correct-horse-battery' })
+  });
+  assert.equal(correctRemovalPassword.status, 404);
+  assert.equal((await correctRemovalPassword.json()).code, 'application-removal-plan-not-found');
+
   const connectionsResponse = await fetch(baseUrl() + '/api/connections', {
     headers: { Cookie: cookie }
   });
@@ -658,6 +678,41 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   assert.equal(lastContainerPayload.Image, 'corentinth/it-tools:latest');
   assert.equal(lastContainerPayload.Labels['com.foxos.app.id'], 'it-tools');
 
+  const installedInventoryResponse = await fetch(baseUrl() + '/api/applications', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(installedInventoryResponse.status, 200);
+  const installedInventory = await installedInventoryResponse.json();
+  const installedApplication = installedInventory.applications.find((application) => (
+    application.runtime.containerId === mockContainerId
+  ));
+  assert.ok(installedApplication);
+  const removalPlanResponse = await fetch(
+    baseUrl() + '/api/applications/' + installedApplication.id + '/removal-plans',
+    { method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json' }, body: '{}' }
+  );
+  assert.equal(removalPlanResponse.status, 201);
+  const removalPlan = (await removalPlanResponse.json()).plan;
+  assert.match(removalPlan.planId, /^arplan_[a-f0-9]{32}$/);
+  const plannedRemovalResponse = await fetch(
+    baseUrl() + '/api/application-removal-plans/' + removalPlan.planId + '/apply',
+    {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: 'correct-horse-battery' })
+    }
+  );
+  assert.equal(plannedRemovalResponse.status, 200);
+  assert.equal((await plannedRemovalResponse.json()).operation.status, 'completed');
+  assert.equal(mockContainer, null);
+
+  const reinstallResponse = await fetch(baseUrl() + '/api/apps/it-tools/install', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ hostPort: 54321, bindAddress: '127.0.0.1' })
+  });
+  assert.equal(reinstallResponse.status, 201);
+
   const stopResponse = await fetch(baseUrl() + '/api/apps/it-tools/stop', {
     method: 'POST',
     headers: { Cookie: cookie }
@@ -669,8 +724,9 @@ test('setup creates an authenticated session and unlocks the workspace', async (
     method: 'DELETE',
     headers: { Cookie: cookie }
   });
-  assert.equal(removeResponse.status, 200);
-  assert.equal(mockContainer, null);
+  assert.equal(removeResponse.status, 409);
+  assert.equal((await removeResponse.json()).code, 'password-protected-application-removal-required');
+  assert.notEqual(mockContainer, null);
 
   mockContainer = {
     Id: 'c'.repeat(64),

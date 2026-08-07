@@ -244,6 +244,19 @@ function createApplicationDomainManager({
       .map(([resourceId, preference]) => [resourceId, preference.primaryDomain]));
   }
 
+  function forgetApplication(applicationId) {
+    if (!RESOURCE_ID_PATTERN.test(String(applicationId || ''))) {
+      return { applicationId, forgotten: false };
+    }
+    const current = state();
+    if (!current.preferences[applicationId]) {
+      return { applicationId, forgotten: false };
+    }
+    delete current.preferences[applicationId];
+    persist(current);
+    return { applicationId, forgotten: true };
+  }
+
   function snapshotResource(resourceId) {
     const snapshot = resourceRegistry.getLatest && resourceRegistry.getLatest();
     return snapshot && (snapshot.resources || []).find((resource) => resource.id === resourceId) || null;
@@ -1206,6 +1219,7 @@ function createApplicationDomainManager({
   return {
     applyPlan,
     createPlan,
+    forgetApplication,
     getStatus,
     paths: { root, stateFile, lockFile },
     primaryDomains,

@@ -871,6 +871,46 @@ function createIngressAuthorityManager({
     await deactivatePublicAuthorityIfUnused();
   }
 
+  async function removeResourceAuthority(resourceId) {
+    if (!RESOURCE_ID_PATTERN.test(String(resourceId || ''))) {
+      throw new IngressAuthorityError('Application resource ID is invalid', 400, 'invalid-resource-id');
+    }
+    const current = state();
+    current.inactiveDomains = { ...(current.inactiveDomains || {}) };
+    const routeIds = Object.values(current.routes || {})
+      .filter((route) => route.resourceId === resourceId)
+      .map((route) => route.routeId);
+    const domains = new Set(routeIds
+      .map((routeId) => current.routes[routeId] && current.routes[routeId].domain)
+      .filter(Boolean));
+    for (const routeId of routeIds) delete current.routes[routeId];
+    let inactiveDomainsRemoved = 0;
+    for (const [domain, inactive] of Object.entries(current.inactiveDomains)) {
+      if (!inactive || inactive.resourceId !== resourceId) continue;
+      delete current.inactiveDomains[domain];
+      domains.add(domain);
+      inactiveDomainsRemoved += 1;
+    }
+    if (!routeIds.length && !inactiveDomainsRemoved) {
+      return { resourceId, routesRemoved: 0, inactiveDomainsRemoved: 0, domains: [] };
+    }
+    for (const domain of domains) {
+      if (!Object.values(current.routes).some((route) => route.domain === domain)) {
+        current.domains[domain] = 'legacy';
+      }
+    }
+    current.routes = await reloadCaddy(current.routes, null, {}, current.inactiveDomains);
+    persist(current);
+    for (const domain of domains) await setRuntimeMap(domain, 'legacy');
+    await deactivatePublicAuthorityIfUnused();
+    return {
+      resourceId,
+      routesRemoved: routeIds.length,
+      inactiveDomainsRemoved,
+      domains: [...domains].sort()
+    };
+  }
+
   function httpsProbe({ hostname, connectHost = hostname, port = 443, requestPath = '/', expectedRouteId = null, timeoutMs = 10000 }) {
     return new Promise((resolve, reject) => {
       const request = httpsRequest({
@@ -1008,6 +1048,7 @@ function createIngressAuthorityManager({
     inspectOwnedInfrastructure,
     paths: { root, authorityFile, routeMapFile, caddyRoutesFile },
     parkRoutes,
+    removeResourceAuthority,
     removeRoutes,
     reconcilePublicAuthority,
     reconcileInactiveDomains,

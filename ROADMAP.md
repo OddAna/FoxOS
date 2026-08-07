@@ -481,6 +481,14 @@ target blocks only adoption/migration operations that require restore proof.
   container or application; the same application's Settings page can recreate
   it. A browser refresh, agent rebuild or new browser session preserves the
   choice through the stable application ID.
+- [x] Add plan-bound application removal to Desktop, Files and Store. The
+  short-lived plan fingerprints the exact Docker runtimes and relationships;
+  apply requires the current FoxOS password, cleans server-owned routes,
+  shortcut state, old runtime copies and empty Compose networks, and can
+  separately include companion services or exclusively owned named volumes.
+  Shared volumes, bind paths, DNS records, Compose sources and image cache are
+  preserved. FoxOS core and generic host/systemd services fail closed instead
+  of accepting an unsafe uninstall guess.
 - [x] Add mutation-free application update checks to both the desktop context
   menu and Uygulama Yöneticisi. Direct tagged images compare local and remote
   repository digests through Docker Engine. Compose-built services follow their

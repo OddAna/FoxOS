@@ -7,6 +7,7 @@ import { getFileIcon } from '../utils/fileIcons';
 import { apiFetch } from '../api';
 import ApplicationLogo from '../components/ApplicationLogo';
 import { useApplicationInventory } from '../contexts/ApplicationContext';
+import { useApplicationRemoval } from '../contexts/ApplicationRemovalContext';
 import { APPLICATION_STATUS, applicationOperationalState } from '../utils/applicationStatus';
 import {
   DESKTOP_ROOT,
@@ -22,6 +23,7 @@ import {
 
 const FilesApp = ({ initialPath = 'Masaüstü' }) => {
   const { showDialog } = useDialog();
+  const { openApplicationRemoval } = useApplicationRemoval();
   const {
     actions: applicationActions,
     applications,
@@ -1069,18 +1071,23 @@ const FilesApp = ({ initialPath = 'Masaüstü' }) => {
               {contextMenu.file.application.capabilities.checkUpdates && (
                 <div className="context-item" onClick={() => checkApplicationUpdate(contextMenu.file.application)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><RotateCw size={14} /> Güncellemeleri Denetle</div>
               )}
-              <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '4px 0' }} />
-              {contextMenu.file.application.capabilities.stop ? (
-                <div className="context-item" onClick={() => runApplicationAction(contextMenu.file.application, 'stop')} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><Square size={14} /> Durdur</div>
-              ) : contextMenu.file.application.capabilities.start ? (
-                <div className="context-item" onClick={() => runApplicationAction(contextMenu.file.application, 'start')} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><Play size={14} /> Başlat</div>
-              ) : null}
-              {contextMenu.file.application.capabilities.restart && (
-                <div className="context-item" onClick={() => runApplicationAction(contextMenu.file.application, 'restart')} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><RotateCw size={14} /> Yeniden Başlat</div>
+              {(contextMenu.file.application.capabilities.stop || contextMenu.file.application.capabilities.start || contextMenu.file.application.capabilities.restart) && (
+                <>
+                  <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '4px 0' }} />
+                  {contextMenu.file.application.capabilities.stop ? (
+                    <div className="context-item" onClick={() => runApplicationAction(contextMenu.file.application, 'stop')} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><Square size={14} /> Durdur</div>
+                  ) : contextMenu.file.application.capabilities.start ? (
+                    <div className="context-item" onClick={() => runApplicationAction(contextMenu.file.application, 'start')} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><Play size={14} /> Başlat</div>
+                  ) : null}
+                  {contextMenu.file.application.capabilities.restart && (
+                    <div className="context-item" onClick={() => runApplicationAction(contextMenu.file.application, 'restart')} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><RotateCw size={14} /> Yeniden Başlat</div>
+                  )}
+                </>
               )}
               <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '4px 0' }} />
               <div className="context-item" onClick={() => moveApplicationToDesktop(contextMenu.file.application)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>Masaüstüne Taşı</div>
-              <div className="context-item" onClick={() => removeApplicationShortcut(contextMenu.file.application)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', color: '#ff8a84', display: 'flex', alignItems: 'center', gap: '6px' }}><X size={14} /> Masaüstünden Kaldır</div>
+              <div className="context-item" onClick={() => removeApplicationShortcut(contextMenu.file.application)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><X size={14} /> Masaüstünden Kaldır</div>
+              <div className="context-item" onClick={() => openApplicationRemoval(contextMenu.file.application)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', color: '#ff5f56', display: 'flex', alignItems: 'center', gap: '6px' }}><Trash2 size={14} /> Uygulamayı Kaldır</div>
             </>
           ) : contextMenu.type === 'file' ? (
             <>

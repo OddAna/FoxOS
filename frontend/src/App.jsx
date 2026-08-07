@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Play, RotateCw, Settings as SettingsIcon, Square, X } from 'lucide-react';
+import { Play, RotateCw, Settings as SettingsIcon, Square, Trash2, X } from 'lucide-react';
 import './index.css';
 import { WindowProvider, useWindowManager } from './contexts/WindowContext';
 import { DialogProvider, useDialog } from './contexts/DialogContext';
@@ -24,6 +24,7 @@ import {
   folderApplicationOperationalState
 } from './utils/desktopShortcuts';
 import { ApplicationProvider, useApplicationInventory } from './contexts/ApplicationContext';
+import { ApplicationRemovalProvider, useApplicationRemoval } from './contexts/ApplicationRemovalContext';
 import { useAuth } from './contexts/AuthContext';
 import SetupScreen from './components/auth/SetupScreen';
 import LockScreen from './components/auth/LockScreen';
@@ -84,6 +85,7 @@ const createDesktopPointerPreview = (draggedItems, fileElements) => {
 const Desktop = () => {
   const { windows, openWindow } = useWindowManager();
   const { showDialog } = useDialog();
+  const { openApplicationRemoval } = useApplicationRemoval();
   const {
     actions: applicationActions,
     applications,
@@ -1046,17 +1048,22 @@ const Desktop = () => {
               {desktopMenu.item.application.capabilities.checkUpdates && (
                 <div className="context-item" onClick={() => checkApplicationUpdate(desktopMenu.item.application)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><RotateCw size={14} /> Güncellemeleri Denetle</div>
               )}
-              <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '4px 0' }}></div>
-              {desktopMenu.item.application.capabilities.stop ? (
-                <div className="context-item" onClick={() => runApplicationAction(desktopMenu.item.application, 'stop')} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><Square size={14} /> Durdur</div>
-              ) : desktopMenu.item.application.capabilities.start ? (
-                <div className="context-item" onClick={() => runApplicationAction(desktopMenu.item.application, 'start')} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><Play size={14} /> Başlat</div>
-              ) : null}
-              {desktopMenu.item.application.capabilities.restart && (
-                <div className="context-item" onClick={() => runApplicationAction(desktopMenu.item.application, 'restart')} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><RotateCw size={14} /> Yeniden Başlat</div>
+              {(desktopMenu.item.application.capabilities.stop || desktopMenu.item.application.capabilities.start || desktopMenu.item.application.capabilities.restart) && (
+                <>
+                  <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '4px 0' }} />
+                  {desktopMenu.item.application.capabilities.stop ? (
+                    <div className="context-item" onClick={() => runApplicationAction(desktopMenu.item.application, 'stop')} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><Square size={14} /> Durdur</div>
+                  ) : desktopMenu.item.application.capabilities.start ? (
+                    <div className="context-item" onClick={() => runApplicationAction(desktopMenu.item.application, 'start')} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><Play size={14} /> Başlat</div>
+                  ) : null}
+                  {desktopMenu.item.application.capabilities.restart && (
+                    <div className="context-item" onClick={() => runApplicationAction(desktopMenu.item.application, 'restart')} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><RotateCw size={14} /> Yeniden Başlat</div>
+                  )}
+                </>
               )}
-              <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '4px 0' }}></div>
-              <div className="context-item" onClick={() => removeDesktopShortcut(desktopMenu.item.application)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', color: '#ff8a84', display: 'flex', alignItems: 'center', gap: '6px' }}><X size={14} /> Masaüstünden Kaldır</div>
+              <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '4px 0' }} />
+              <div className="context-item" onClick={() => removeDesktopShortcut(desktopMenu.item.application)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><X size={14} /> Masaüstünden Kaldır</div>
+              <div className="context-item" onClick={() => openApplicationRemoval(desktopMenu.item.application)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', color: '#ff5f56', display: 'flex', alignItems: 'center', gap: '6px' }}><Trash2 size={14} /> Uygulamayı Kaldır</div>
             </>
           ) : desktopMenu.type === 'file' ? (
             <>
@@ -1099,9 +1106,11 @@ function App() {
   return (
     <DialogProvider>
       <ApplicationProvider>
-        <WindowProvider>
-          <Desktop />
-        </WindowProvider>
+        <ApplicationRemovalProvider>
+          <WindowProvider>
+            <Desktop />
+          </WindowProvider>
+        </ApplicationRemovalProvider>
       </ApplicationProvider>
     </DialogProvider>
   );

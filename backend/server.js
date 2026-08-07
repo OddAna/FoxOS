@@ -127,6 +127,10 @@ const {
   createEncryptedVolumeSnapshotAdapter
 } = require('./applicationUpdateManager');
 const {
+  ApplicationRemovalError,
+  createApplicationRemovalManager
+} = require('./applicationRemovalManager');
+const {
   DESKTOP_ROOT,
   DesktopShortcutError,
   createDesktopShortcutManager
@@ -873,6 +877,15 @@ const applicationDomainManager = createApplicationDomainManager({
   panelBaseUrl: process.env.FOXOS_ROUTE_BASE_URL || null,
   dnsAutomation: cloudflareConnectionManager
 });
+const applicationRemovalManager = createApplicationRemovalManager({
+  dataRoot: DATA_ROOT,
+  dockerRequest,
+  getApplicationInventory,
+  resourceRegistry,
+  ingressAuthority: ingressAuthorityManager,
+  desktopShortcutManager,
+  applicationDomainManager
+});
 const applicationComposeManager = createApplicationComposeManager({
   dataRoot: DATA_ROOT,
   hostRoot: HOST_ROOT,
@@ -1158,6 +1171,17 @@ function sendApplicationUpdateError(res, error, action) {
       ? 'Güncelleme denetimi tamamlanamadı'
       : error.message,
     code: error.code || 'application-update-error'
+  });
+}
+
+function sendApplicationRemovalError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof ApplicationRemovalError)
+      ? 'Uygulama kaldırma işlemi tamamlanamadı'
+      : error.message,
+    code: error.code || 'application-removal-error'
   });
 }
 
@@ -2673,6 +2697,48 @@ app.get('/api/applications', async (req, res) => {
   }
 });
 
+app.post('/api/applications/:applicationId/removal-plans', async (req, res) => {
+  try {
+    res.status(201).json({
+      plan: await applicationRemovalManager.createPlan(req.params.applicationId)
+    });
+  } catch (error) {
+    sendApplicationRemovalError(res, error, 'Could not plan application removal');
+  }
+});
+
+app.post('/api/application-removal-plans/:planId/apply', async (req, res) => {
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  const retryAfter = checkLoginRateLimit(req);
+  if (retryAfter) {
+    res.setHeader('Retry-After', String(retryAfter));
+    return res.status(429).json({
+      error: 'Çok fazla hatalı şifre denemesi yapıldı. Daha sonra tekrar deneyin.',
+      code: 'application-removal-password-rate-limited'
+    });
+  }
+  const authRecord = readAuthRecord();
+  const password = typeof body.password === 'string' ? body.password : '';
+  if (!authRecord || !passwordMatches(password, authRecord)) {
+    recordFailedLogin(req);
+    return res.status(401).json({
+      error: 'Şifre hatalı. Uygulama kaldırılmadı.',
+      code: 'application-removal-password-invalid'
+    });
+  }
+  loginAttempts.delete(loginKey(req));
+  try {
+    res.json({
+      operation: await applicationRemovalManager.applyPlan(req.params.planId, {
+        includeLinkedServices: body.includeLinkedServices === true,
+        removeData: body.removeData === true
+      })
+    });
+  } catch (error) {
+    sendApplicationRemovalError(res, error, 'Could not remove application');
+  }
+});
+
 app.put('/api/applications/:applicationId/desktop-shortcut', async (req, res) => {
   try {
     const inventory = await getApplicationInventory();
@@ -2964,32 +3030,11 @@ app.post('/api/apps/:appId/:action', async (req, res) => {
   }
 });
 
-app.delete('/api/apps/:appId', async (req, res) => {
-  const catalogApp = getCatalogApp(req.params.appId);
-  if (!catalogApp) {
-    return res.status(404).json({ error: 'Application not found in the FoxOS catalog' });
-  }
-  if (appInstallOperations.has(catalogApp.id)) {
-    return res.status(409).json({ error: 'Wait for the current install operation to finish' });
-  }
-
-  try {
-    const containers = await dockerRequest('GET', '/containers/json?all=1');
-    const container = managedContainerForApp(containers, catalogApp.id);
-    if (!container) {
-      return res.status(404).json({ error: 'Application is not installed' });
-    }
-
-    await dockerRequest('DELETE', '/containers/' + container.Id + '?force=1&v=0');
-    if (req.query.removeData === 'true') {
-      for (const volume of catalogApp.volumes || []) {
-        await dockerRequest('DELETE', '/volumes/' + encodeURIComponent(volume.name));
-      }
-    }
-    res.json({ success: true, dataRemoved: req.query.removeData === 'true' });
-  } catch (error) {
-    res.status(502).json({ error: error.message });
-  }
+app.delete('/api/apps/:appId', (req, res) => {
+  res.status(409).json({
+    error: 'Uygulama kaldırma işlemi şifreli kaldırma planı üzerinden yapılmalıdır.',
+    code: 'password-protected-application-removal-required'
+  });
 });
 
 app.get('/api/containers/:id/settings', async (req, res) => {
