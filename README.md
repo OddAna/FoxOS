@@ -40,6 +40,11 @@ not use the host package manager for its own runtime.
   registry digest without pulling it; Compose-built applications also follow the
   final Dockerfile base and compare public Docker Hub version metadata when the
   running build exposes a version, as n8n does
+- **Confirmed application updates** — when a verified Compose update exists,
+  update the application and its reverse-dependent sidecars together, encrypt
+  named-volume data before cutover, verify Docker and public health, and restore
+  the previous images and data automatically on failure. Successful operations
+  retain an explicit rollback action
 - **Compose source editor** — open only the real Compose files proven by Docker
   project metadata, reject stale or invalid YAML writes, encrypt the previous
   revision and save atomically without silently recreating the running service
@@ -339,6 +344,11 @@ The authenticated API exposes:
 | Endpoint | Purpose |
 | --- | --- |
 | `GET /api/applications` | Read the canonical user-facing application inventory, including inactive installed definitions and host-native systemd/WireGuard services, with stable resource identity, truthful runtime state, access address and capability gates |
+| `GET /api/applications/:applicationId/update-check` | Read only the selected runtime and registry metadata to determine whether a verifiable update exists |
+| `POST /api/applications/:applicationId/update-plans` | Bind a verified Compose update to exact source revisions, service/image identities, reverse-dependent sidecars and writable named volumes without mutation |
+| `POST /api/application-update-plans/:planId/apply` | Build/pull, encrypt state, recreate and health-gate an explicitly confirmed application update with automatic rollback |
+| `GET /api/applications/:applicationId/update-status` | Read the application's latest update or rollback operation |
+| `POST /api/application-update-operations/:operationId/rollback` | Restore the pre-update images and encrypted named-volume snapshots after explicit data-loss confirmation |
 | `POST /api/resources/scan` | Run a read-only inventory and atomically store a new snapshot |
 | `GET /api/resources` | Read the latest stored snapshot, ownership status, relationships, conflicts and adoption blockers |
 | `GET /api/resources/export` | Download a redacted provider-neutral migration plan |
@@ -1256,9 +1266,12 @@ Do not copy its contents into Git or logs.
 - The App Store catalog is intentionally small and reviewed; arbitrary Compose
   files and untrusted install scripts are not accepted through the UI. The only
   Compose support is the fixed, strict, no-persistence disposable CLI/API pilot
-- Image update/rollback is currently limited to the two reviewed tags of the
-  fixed disposable canary; normal Store and imported applications are not
-  eligible yet
+- The fixed disposable image-update pilot remains limited to its two reviewed
+  tags. Separately, real application update/rollback accepts only running,
+  single-instance Compose services with exact source labels and writable named
+  volumes. Direct containers, scaled services, writable bind mounts and host
+  services are not eligible yet. A provider-managed Compose project may still
+  be overwritten by that provider's later deployment until migration completes
 - Application Manifest schema 2 can describe and audit imported application state,
   and can bind the fixed FoxOS OCI/source-build/Compose canaries to immutable
   local revisions. It can also reference an authenticated encrypted workload
@@ -1317,6 +1330,7 @@ FoxOS/
 │   ├── sourceDeploymentManager.js # Public Git commit, Docker build, health gate and rollback pilot
 │   ├── composeDeploymentManager.js # Strict service graph, serial queue, group cutover and rollback
 │   ├── imageUpdateManager.js # Reviewed registry digest, candidate health and exact rollback
+│   ├── applicationUpdateManager.js # Confirmed Compose update, encrypted state snapshot and rollback
 │   ├── workloadEvidenceManager.js # Encrypted source archive and environment evidence capture
 │   ├── statefulRehearsalManager.js # Same-host encrypted restore and isolated health proof
 │   ├── statefulShadowManager.js # Persistent internal FoxOS-owned stateful shadow

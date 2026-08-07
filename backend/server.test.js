@@ -430,6 +430,16 @@ test('health is public while management APIs require a session', async () => {
   assert.equal(connectionsResponse.status, 401);
   const applicationOperationsId = 'res_' + '7'.repeat(32);
   assert.equal((await fetch(baseUrl() + '/api/applications/' + applicationOperationsId + '/update-check')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/applications/' + applicationOperationsId + '/update-plans', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/applications/' + applicationOperationsId + '/update-status')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/application-update-plans/auplan_' + '8'.repeat(32) + '/apply', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/application-update-operations/auop_' + '9'.repeat(32) + '/rollback', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
   assert.equal((await fetch(baseUrl() + '/api/applications/' + applicationOperationsId + '/compose-files')).status, 401);
   assert.equal((await fetch(baseUrl() + '/api/applications/' + applicationOperationsId + '/desktop-shortcut', {
     method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{"visible":false}'

@@ -19,6 +19,12 @@ import ApplicationLogo from '../components/ApplicationLogo';
 import ApplicationStatus from '../components/ApplicationStatus';
 import { useApplicationInventory } from '../contexts/ApplicationContext';
 import { useDialog } from '../contexts/DialogContext';
+import {
+  applyApplicationUpdate,
+  checkAndPlanApplicationUpdate,
+  rollbackApplicationUpdate,
+  updateConfirmationMessage
+} from '../utils/applicationUpdates';
 
 const copyText = async (value) => {
   if (navigator.clipboard && window.isSecureContext) {
@@ -72,7 +78,9 @@ const ApplicationManager = ({ target }) => {
   const [domainMessage, setDomainMessage] = useState(null);
   const [shortcutSaving, setShortcutSaving] = useState(false);
   const [updateChecking, setUpdateChecking] = useState(false);
+  const [updateApplying, setUpdateApplying] = useState(false);
   const [updateStatus, setUpdateStatus] = useState(null);
+  const [updateOperation, setUpdateOperation] = useState(null);
   const [composeState, setComposeState] = useState(null);
   const [composeLoading, setComposeLoading] = useState(false);
   const [composeSaving, setComposeSaving] = useState(false);
@@ -88,6 +96,7 @@ const ApplicationManager = ({ target }) => {
       setTargetContainerId(null);
       setDomainMessage(null);
       setUpdateStatus(null);
+      setUpdateOperation(null);
       setMessage(null);
       return;
     }
@@ -119,6 +128,33 @@ const ApplicationManager = ({ target }) => {
   const canEditSelectedCompose = Boolean(
     selectedApplication && selectedApplication.capabilities.editCompose
   );
+
+  useEffect(() => {
+    if (!selectedApplicationId) {
+      setUpdateStatus(null);
+      setUpdateOperation(null);
+      return undefined;
+    }
+    let active = true;
+    setUpdateStatus(null);
+    setUpdateOperation(null);
+    apiFetch(`/api/applications/${selectedApplicationId}/update-status`)
+      .then((response) => response.json())
+      .then((payload) => {
+        if (!active || !payload.operation) return;
+        const operation = payload.operation;
+        setUpdateOperation(operation);
+        setUpdateStatus({
+          status: operation.status === 'completed' ? 'up-to-date' : 'unknown',
+          updateAvailable: operation.status === 'completed' ? false : null,
+          current: operation.status === 'completed' ? operation.latest : operation.current,
+          latest: operation.latest,
+          message: operation.message
+        });
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [selectedApplicationId]);
 
   useEffect(() => {
     if (!selectedContainerId) {
@@ -338,16 +374,79 @@ const ApplicationManager = ({ target }) => {
     if (!selectedApplication) return;
     setUpdateChecking(true);
     setUpdateStatus(null);
+    setUpdateOperation(null);
     setMessage(null);
     try {
-      const response = await apiFetch(`/api/applications/${selectedApplication.id}/update-check`);
-      const payload = await response.json();
-      setUpdateStatus(payload.update);
+      const { update, plan } = await checkAndPlanApplicationUpdate(selectedApplication.id);
+      setUpdateStatus(update);
+      if (plan) {
+        showDialog({
+          title: 'Güncellemeyi Uygula',
+          message: updateConfirmationMessage(plan),
+          type: 'confirm',
+          confirmText: 'Güncelle',
+          cancelText: 'Vazgeç',
+          onConfirm: () => runApplicationUpdate(plan)
+        });
+      }
     } catch (updateError) {
       setMessage({ type: 'error', text: updateError.message });
     } finally {
       setUpdateChecking(false);
     }
+  };
+
+  const runApplicationUpdate = async (plan) => {
+    setUpdateApplying(true);
+    setMessage(null);
+    try {
+      const operation = await applyApplicationUpdate(plan.planId);
+      setUpdateOperation(operation);
+      setUpdateStatus({
+        status: 'up-to-date',
+        updateAvailable: false,
+        current: operation.latest,
+        latest: operation.latest,
+        message: operation.message
+      });
+      await refreshApplications();
+      showDialog({ title: 'Güncelleme Tamamlandı', message: operation.message, type: 'success' });
+    } catch (updateError) {
+      setMessage({ type: 'error', text: updateError.message });
+    } finally {
+      setUpdateApplying(false);
+    }
+  };
+
+  const confirmUpdateRollback = () => {
+    if (!updateOperation || !updateOperation.rollbackAvailable) return;
+    showDialog({
+      title: 'Güncellemeyi Geri Al',
+      message: 'Uygulama güncelleme öncesindeki imajlara ve şifreli veri yedeğine dönecek. Güncellemeden sonra oluşan veriler kaybolur.',
+      type: 'warning',
+      confirmText: 'Geri Al',
+      cancelText: 'Vazgeç',
+      onConfirm: async () => {
+        setUpdateApplying(true);
+        setMessage(null);
+        try {
+          const operation = await rollbackApplicationUpdate(updateOperation.operationId);
+          setUpdateOperation(operation);
+          setUpdateStatus({
+            status: 'unknown',
+            updateAvailable: null,
+            current: operation.current,
+            latest: operation.latest,
+            message: operation.message
+          });
+          await refreshApplications();
+        } catch (rollbackError) {
+          setMessage({ type: 'error', text: rollbackError.message });
+        } finally {
+          setUpdateApplying(false);
+        }
+      }
+    });
   };
 
   const selectComposeFile = (file) => {
@@ -580,8 +679,8 @@ const ApplicationManager = ({ target }) => {
             <button type="button" onClick={() => runAction(selectedApplication, 'restart')} disabled={Boolean(pendingAction) || !canRestart} style={{ background: 'rgba(255,255,255,0.08)', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 14px', borderRadius: '8px', cursor: pendingAction || !canRestart ? 'not-allowed' : 'pointer', opacity: canRestart ? 1 : 0.5, display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px' }}>
               {pendingAction === 'restart' ? <Loader2 size={15} className="spin" /> : <RotateCw size={15} />} Yeniden Başlat
             </button>
-            <button type="button" onClick={checkForUpdates} disabled={updateChecking || !selectedApplication.capabilities.checkUpdates} style={{ background: 'rgba(255,255,255,0.08)', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 14px', borderRadius: '8px', cursor: updateChecking ? 'wait' : selectedApplication.capabilities.checkUpdates ? 'pointer' : 'not-allowed', opacity: selectedApplication.capabilities.checkUpdates ? 1 : 0.5, display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px' }}>
-              {updateChecking ? <Loader2 size={15} className="spin" /> : <RotateCw size={15} />} Güncellemeleri Denetle
+            <button type="button" onClick={checkForUpdates} disabled={updateChecking || updateApplying || !selectedApplication.capabilities.checkUpdates} style={{ background: 'rgba(255,255,255,0.08)', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 14px', borderRadius: '8px', cursor: updateChecking || updateApplying ? 'wait' : selectedApplication.capabilities.checkUpdates ? 'pointer' : 'not-allowed', opacity: selectedApplication.capabilities.checkUpdates ? 1 : 0.5, display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px' }}>
+              {updateChecking || updateApplying ? <Loader2 size={15} className="spin" /> : <RotateCw size={15} />} {updateApplying ? 'Güncelleniyor...' : 'Güncellemeleri Denetle'}
             </button>
             <button type="button" onClick={changeDesktopShortcut} disabled={shortcutSaving} style={{ background: 'rgba(255,255,255,0.08)', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 14px', borderRadius: '8px', cursor: shortcutSaving ? 'wait' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px' }}>
               {shortcutSaving ? <Loader2 size={15} className="spin" /> : selectedApplication.desktopShortcutVisible === false ? <Plus size={15} /> : <X size={15} />}
@@ -595,6 +694,11 @@ const ApplicationManager = ({ target }) => {
                 <div style={{ marginTop: '4px', color: '#aaa', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '12px' }}>
                   {updateStatus.current && updateStatus.current.version || 'bilinmiyor'} → {updateStatus.latest && updateStatus.latest.version || 'bilinmiyor'}
                 </div>
+              )}
+              {updateOperation && updateOperation.rollbackAvailable && (
+                <button type="button" onClick={confirmUpdateRollback} disabled={updateApplying} style={{ marginTop: '10px', background: 'transparent', color: '#fbbf24', border: '1px solid rgba(245,158,11,0.5)', padding: '7px 11px', borderRadius: '8px', cursor: updateApplying ? 'wait' : 'pointer', fontSize: '12px' }}>
+                  Güncellemeyi Geri Al
+                </button>
               )}
             </div>
           )}

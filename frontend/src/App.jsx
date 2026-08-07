@@ -22,6 +22,11 @@ import { useAuth } from './contexts/AuthContext';
 import SetupScreen from './components/auth/SetupScreen';
 import LockScreen from './components/auth/LockScreen';
 import { apiFetch } from './api';
+import {
+  applyApplicationUpdate,
+  checkAndPlanApplicationUpdate,
+  updateConfirmationMessage
+} from './utils/applicationUpdates';
 
 const Desktop = () => {
   const { windows, openWindow } = useWindowManager();
@@ -557,9 +562,26 @@ const Desktop = () => {
   const checkApplicationUpdate = async (application) => {
     setDesktopMenu(null);
     try {
-      const response = await apiFetch(`/api/applications/${application.id}/update-check`);
-      const payload = await response.json();
-      const result = payload.update;
+      const { update: result, plan } = await checkAndPlanApplicationUpdate(application.id);
+      if (plan) {
+        showDialog({
+          title: 'Güncellemeyi Uygula',
+          message: updateConfirmationMessage(plan),
+          type: 'confirm',
+          confirmText: 'Güncelle',
+          cancelText: 'Vazgeç',
+          onConfirm: async () => {
+            try {
+              const operation = await applyApplicationUpdate(plan.planId);
+              await refreshApplications();
+              showDialog({ title: 'Güncelleme Tamamlandı', message: operation.message, type: 'success' });
+            } catch (error) {
+              showDialog({ title: 'Güncelleme Tamamlanamadı', message: error.message, type: 'error' });
+            }
+          }
+        });
+        return;
+      }
       showDialog({
         title: result.status === 'update-available' ? 'Güncelleme Bulundu' : 'Güncelleme Denetimi',
         message: result.message,

@@ -96,6 +96,10 @@ const {
   createApplicationUpdateChecker
 } = require('./applicationUpdateChecker');
 const {
+  createApplicationUpdateManager,
+  createEncryptedVolumeSnapshotAdapter
+} = require('./applicationUpdateManager');
+const {
   DesktopShortcutError,
   createDesktopShortcutManager
 } = require('./desktopShortcutManager');
@@ -543,6 +547,105 @@ function runExactHostObservation(operation) {
   });
 }
 
+function runExactApplicationCompose({ operation, project, services, overrideFile = null }) {
+  const allowedOperations = new Set(['build', 'pull', 'stop', 'up', 'rollback']);
+  const namePattern = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/;
+  const invalid = (
+    !allowedOperations.has(operation) || !project ||
+    !namePattern.test(String(project.projectName || '')) ||
+    !Array.isArray(project.files) || !project.files.length || project.files.length > 8 ||
+    !Array.isArray(services) || !services.length || services.length > 16 ||
+    services.some((service) => !namePattern.test(String(service || '')))
+  );
+  if (invalid) {
+    return Promise.reject(new ApplicationUpdateError(
+      'Compose güncelleme komutu güvenli çalışma sınırının dışında.',
+      409,
+      'application-update-compose-command-blocked'
+    ));
+  }
+
+  const hostPaths = project.files.map((file) => String(file.hostPath || ''));
+  if (overrideFile) hostPaths.push(String(overrideFile));
+  const workingDirectory = path.posix.normalize(String(project.workingDirectory || ''));
+  if (
+    !workingDirectory.startsWith('/') || workingDirectory === '/opt/foxos' || workingDirectory.startsWith('/opt/foxos/') ||
+    hostPaths.some((hostPath) => (
+      !hostPath.startsWith('/') || !/\.ya?ml$/i.test(hostPath) ||
+      hostPath === '/opt/foxos' || hostPath.startsWith('/opt/foxos/') ||
+      /[\r\n\0]/.test(hostPath)
+    ))
+  ) {
+    return Promise.reject(new ApplicationUpdateError(
+      'Compose güncelleme yolu güvenli çalışma sınırının dışında.',
+      409,
+      'application-update-compose-path-blocked'
+    ));
+  }
+  for (const hostPath of hostPaths) {
+    const mounted = path.resolve(HOST_ROOT, '.' + path.posix.normalize(hostPath));
+    if (mounted !== path.resolve(HOST_ROOT) && !mounted.startsWith(path.resolve(HOST_ROOT) + path.sep)) {
+      return Promise.reject(new ApplicationUpdateError('Compose yolu doğrulanamadı.', 409, 'application-update-compose-path-blocked'));
+    }
+    let stats;
+    try { stats = fs.lstatSync(mounted); } catch {
+      return Promise.reject(new ApplicationUpdateError('Compose kaynağı bulunamadı.', 409, 'application-update-compose-path-blocked'));
+    }
+    if (!stats.isFile() || stats.isSymbolicLink()) {
+      return Promise.reject(new ApplicationUpdateError('Compose kaynağı normal bir dosya değil.', 409, 'application-update-compose-path-blocked'));
+    }
+  }
+  const mountedWorkingDirectory = path.resolve(HOST_ROOT, '.' + workingDirectory);
+  let workingDirectoryValid = false;
+  try {
+    workingDirectoryValid = (
+      mountedWorkingDirectory !== path.resolve(HOST_ROOT) &&
+      mountedWorkingDirectory.startsWith(path.resolve(HOST_ROOT) + path.sep) &&
+      fs.statSync(mountedWorkingDirectory).isDirectory()
+    );
+  } catch {}
+  if (!workingDirectoryValid) {
+    return Promise.reject(new ApplicationUpdateError('Compose çalışma dizini doğrulanamadı.', 409, 'application-update-compose-path-blocked'));
+  }
+
+  const hostExecutable = ['/usr/bin/docker', '/usr/local/bin/docker', '/bin/docker'].find((candidate) => (
+    fs.existsSync(path.resolve(HOST_ROOT, '.' + candidate))
+  ));
+  if (!hostExecutable) {
+    return Promise.reject(new ApplicationUpdateError('Sunucuda Docker Compose bulunamadı.', 503, 'application-update-compose-unavailable'));
+  }
+  const args = ['compose', '--project-name', project.projectName, '--project-directory', workingDirectory];
+  for (const file of project.files) args.push('-f', file.hostPath);
+  if (overrideFile) args.push('-f', overrideFile);
+  if (operation === 'build') args.push('build', '--pull', ...services);
+  if (operation === 'pull') args.push('pull', ...services);
+  if (operation === 'stop') args.push('stop', '--timeout', '60', ...services);
+  if (operation === 'up') args.push('up', '-d', '--no-deps', '--wait', '--wait-timeout', '300', ...services);
+  if (operation === 'rollback') args.push('up', '-d', '--no-deps', '--no-build', '--wait', '--wait-timeout', '300', ...services);
+
+  const invocation = HOST_EXECUTION === 'nsenter' ? {
+    executable: 'nsenter',
+    args: ['--target', '1', '--mount', '--uts', '--ipc', '--net', '--pid', '--', hostExecutable, ...args]
+  } : { executable: hostExecutable, args };
+  return new Promise((resolve, reject) => {
+    execFile(invocation.executable, invocation.args, {
+      timeout: 15 * 60 * 1000,
+      maxBuffer: 8 * 1024 * 1024,
+      windowsHide: true
+    }, (error, stdout, stderr) => {
+      const output = String(stdout || '') + String(stderr || '');
+      if (error) {
+        return reject(new ApplicationUpdateError(
+          'Docker Compose ' + operation + ' işlemi başarısız oldu' + (output.trim() ? ': ' + output.trim().slice(-4000) : '.'),
+          409,
+          'application-update-compose-' + operation + '-failed'
+        ));
+      }
+      resolve({ success: true, output });
+    });
+  });
+}
+
 const dockerClient = createDockerClient(DOCKER_SOCKET);
 const dockerRequest = dockerClient.request;
 const encryptionStore = createEncryptionStore({ dataRoot: DATA_ROOT });
@@ -637,6 +740,21 @@ const applicationUpdateChecker = createApplicationUpdateChecker({
   hostRoot: HOST_ROOT,
   dockerRequest,
   getApplicationInventory
+});
+const applicationUpdateVolumeSnapshots = createEncryptedVolumeSnapshotAdapter({
+  dataRoot: DATA_ROOT,
+  hostRoot: HOST_ROOT,
+  dockerRequest,
+  encryptionStore
+});
+const applicationUpdateManager = createApplicationUpdateManager({
+  dataRoot: DATA_ROOT,
+  hostRoot: HOST_ROOT,
+  dockerRequest,
+  getApplicationInventory,
+  checkApplicationUpdate: (applicationId) => applicationUpdateChecker.check(applicationId),
+  composeRunner: runExactApplicationCompose,
+  volumeSnapshots: applicationUpdateVolumeSnapshots
 });
 const productionStatelessMigrationAdapter = createProductionStatelessMigrationAdapter({
   dataRoot: DATA_ROOT,
@@ -2160,6 +2278,50 @@ app.get('/api/applications/:applicationId/update-check', async (req, res) => {
     res.json({ update: await applicationUpdateChecker.check(req.params.applicationId) });
   } catch (error) {
     sendApplicationUpdateError(res, error, 'Could not check application image updates');
+  }
+});
+
+app.post('/api/applications/:applicationId/update-plans', async (req, res) => {
+  try {
+    res.json({ plan: await applicationUpdateManager.createPlan(req.params.applicationId) });
+  } catch (error) {
+    sendApplicationUpdateError(res, error, 'Could not create application update plan');
+  }
+});
+
+app.get('/api/applications/:applicationId/update-status', (req, res) => {
+  try {
+    res.json({ operation: applicationUpdateManager.current(req.params.applicationId) });
+  } catch (error) {
+    sendApplicationUpdateError(res, error, 'Could not read application update status');
+  }
+});
+
+app.post('/api/application-update-plans/:planId/apply', async (req, res) => {
+  try {
+    res.json({ operation: await applicationUpdateManager.applyPlan(req.params.planId, {
+      confirmation: req.body && req.body.confirmation
+    }) });
+  } catch (error) {
+    sendApplicationUpdateError(res, error, 'Could not apply application update');
+  }
+});
+
+app.get('/api/application-update-operations/:operationId', (req, res) => {
+  try {
+    res.json({ operation: applicationUpdateManager.getOperation(req.params.operationId) });
+  } catch (error) {
+    sendApplicationUpdateError(res, error, 'Could not read application update operation');
+  }
+});
+
+app.post('/api/application-update-operations/:operationId/rollback', async (req, res) => {
+  try {
+    res.json({ operation: await applicationUpdateManager.rollbackOperation(req.params.operationId, {
+      confirmation: req.body && req.body.confirmation
+    }) });
+  } catch (error) {
+    sendApplicationUpdateError(res, error, 'Could not roll back application update');
   }
 });
 

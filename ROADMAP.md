@@ -458,6 +458,16 @@ target blocks only adoption/migration operations that require restore proof.
   exact service source and final Dockerfile `FROM`; public Docker Hub version
   metadata closes the otherwise invisible local-build case used by n8n. The
   check performs no pull, build, restart, recreate or update apply.
+- [x] Turn a verified Compose application update result into a separately
+  confirmed transaction from both Uygulama Yöneticisi and the desktop context
+  menu. Bind the exact Compose revisions, current container/image identities
+  and remote digest; update the selected service with all reverse-dependent
+  sidecars; stream writable named volumes into encrypted owner-only snapshots;
+  require Compose and public endpoint health; and automatically restore the
+  previous images and data on failure. Retain explicit post-success rollback.
+  Reject scaled services and writable bind mounts rather than pretending their
+  recovery is proven. External-provider projects remain overwrite-prone until
+  migration completes.
 - [x] Add the authenticated Compose source editor to each application page. It
   accepts only regular `.yml`/`.yaml` files named by the selected container's
   Docker Compose labels, never a user-supplied path; protects FoxOS core paths,
@@ -467,7 +477,7 @@ target blocks only adoption/migration operations that require restore proof.
   redeploy the application. Provider-owned files explicitly warn that the
   provider may overwrite them until migration is complete.
 - [ ] Add reviewed environment/secret editing, logs, health history, resource
-  limits, update apply/rollback and backup/restore controls from the same
+  limits, direct-container/host-service updates and general backup/restore controls from the same
   canonical application record as their safety contracts become complete.
 - [ ] On first installation, run the server scan before presenting applications,
   then offer the optional migration selection flow. Declining migration must

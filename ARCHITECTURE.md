@@ -354,7 +354,7 @@ FoxOS state is the update and rollback authority. This fixed lab is not approval
 for arbitrary image repositories, credentials, persistent applications, routes,
 production workloads or Store update controls.
 
-### Implemented boundary: Application shortcuts, update checks and Compose source editing
+### Implemented boundary: Application shortcuts, updates and Compose source editing
 
 The canonical application inventory now carries one server-persisted desktop
 shortcut preference per stable application ID. Hiding a shortcut changes only
@@ -380,14 +380,30 @@ configuration or key material and does not adopt or mutate a host service.
 Host-service management requires the dedicated manifest, continuity and exact
 rollback gates tracked in the roadmap.
 
-The application update check is deliberately separate from the disposable
-image-update apply transaction. It performs Docker and registry reads only. A
+The application update check remains separate from every apply transaction and
+performs Docker and registry reads only. A
 direct tagged image is compared by repository digest. For a Compose-built
 service, FoxOS resolves only the exact Compose files and service recorded in the
 container labels, follows the final external Dockerfile base, and may compare
 the running image's OCI version with anonymous public Docker Hub metadata. It
 does not pull an image, populate the image cache, build, restart, recreate,
-change desired state or claim that an ambiguous source is current.
+change desired state or claim that an ambiguous source is current. When it
+finds a verified update, the UI creates a separate no-mutation application
+update plan and asks for explicit confirmation.
+
+The confirmed application update transaction currently accepts only an exact,
+running Docker Compose project resolved from the selected container's labels.
+It binds the current container and image identities, Compose file revisions and
+remote digest; selects the application service plus transitive reverse-dependent
+sidecars; and rejects scaled services, writable bind mounts, FoxOS core and
+`/opt/foxos`. Previous image IDs receive local recovery tags before build/pull.
+After preparation, the bounded service group stops and each writable named
+volume is streamed through AES-256-GCM into owner-only local state. Compose then
+recreates the exact service group and must prove Docker health plus the public
+endpoint. Any failed cutover restores the encrypted pre-update volume snapshots
+and prior images automatically. A completed operation retains the same evidence
+for an explicit manual rollback. Only one application update may mutate the
+server at a time.
 
 The Compose editor is an authenticated source-file operation, not deployment or
 ownership adoption. File paths come only from `com.docker.compose.*` metadata;
@@ -400,10 +416,12 @@ atomic replacement preserving the original owner and mode. The operation record
 contains fingerprints and metadata, never Compose content.
 
 Saving a Compose source does not run `docker compose`, pull, build, restart or
-recreate a service. An external-provider path remains externally authoritative
-and is marked as overwrite-prone until migration produces a server-owned
-manifest/source. General update apply, Compose reconciliation and rollback of a
-running production application remain separate incomplete safety contracts.
+recreate a service. The update transaction is a separate operation and never
+interprets an editor save as deployment approval. An external-provider path
+remains externally authoritative and is marked as overwrite-prone until
+migration produces a server-owned manifest/source. Direct-container updates,
+writable-bind restoration, scaled Compose services and host-service updates
+remain incomplete safety contracts.
 
 ### Implemented boundary: Application Manifest
 

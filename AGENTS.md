@@ -120,9 +120,19 @@
   retained previous revision and exact rollback. Do not widen its **apply** path
   to Store apps, imported containers, arbitrary registries, credentials,
   persistence, secrets, routes or real workloads without Burak's explicit
-  approval and the missing safety gates in `ROADMAP.md`. The separate
-  application update-check path may read tagged registry metadata but must not
-  pull, build, restart, recreate or imply that an unknown result is current.
+  approval. The separate application update-check path remains read-only and
+  must not imply that an unknown result is current.
+- Real application updates belong only to `applicationUpdateManager.js`, never
+  to the disposable image-update manager. Preserve its exact Compose-label
+  source binding, file-revision and runtime drift checks, selected-service plus
+  reverse-dependent sidecar graph, previous-image tags, encrypted streaming
+  named-volume snapshots, serialized process lock, Compose health wait, public
+  endpoint proof and automatic rollback. Reject scaled services, writable bind
+  mounts, missing Compose sources, FoxOS core and `/opt/foxos`; do not silently
+  broaden the contract to direct containers or host services. Apply and manual
+  rollback require their exact confirmations. Provider provenance remains a
+  warning because a later provider deployment can overwrite the result until
+  migration finishes.
 - The application Compose editor is a source-file editor, not a deployment or
   adoption shortcut. Resolve files only from the exact selected container's
   `com.docker.compose.*` labels; reject client-supplied paths, symlinks,
