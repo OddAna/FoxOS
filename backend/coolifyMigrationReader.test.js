@@ -43,6 +43,12 @@ test('optional Coolify reader encrypts its token and persists only projected mig
         postgres_password: hidden,
         internal_db_url: hidden
       }];
+      if (endpoint === 'applications/app-uuid/envs') return [{
+        key: 'APP_API_TOKEN', real_value: hidden, is_runtime: true
+      }];
+      if (endpoint === 'services/service-uuid/envs') return [{
+        key: 'SERVICE_PASSWORD', real_value: hidden, is_runtime: true
+      }];
       throw new Error('unexpected endpoint');
     };
     const reader = createCoolifyMigrationReader({
@@ -78,8 +84,16 @@ test('optional Coolify reader encrypts its token and persists only projected mig
     assert.equal(scan.resources.find((resource) => resource.externalId === 'app-uuid').name, 'stopped-site');
     assert.equal(scan.resources.find((resource) => resource.externalId === 'service-uuid').serviceType, 'wireguard-easy');
     assert.equal(scan.resources.find((resource) => resource.externalId === 'service-uuid').name, 'WireGuard Easy');
+    const applicationArtifact = scan.resources.find((resource) => resource.externalId === 'app-uuid').recoveryArtifact;
+    assert.equal(applicationArtifact.encrypted, true);
+    assert.equal(applicationArtifact.plaintextSecretValuesIncluded, false);
+    assert.equal(reader.readRecoveryArtifact(applicationArtifact).environment[0].value, hidden);
 
-    const persisted = [reader.paths.configFile, reader.paths.tokenFile]
+    const persisted = [
+      reader.paths.configFile,
+      reader.paths.tokenFile,
+      ...fs.readdirSync(reader.paths.recoveryRoot).map((file) => path.join(reader.paths.recoveryRoot, file))
+    ]
       .map((file) => fs.readFileSync(file).toString('utf8')).join('\n');
     assert.equal(persisted.includes(token), false);
     assert.equal(persisted.includes(hidden), false);

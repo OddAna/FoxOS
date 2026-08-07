@@ -83,6 +83,7 @@ function managerHarness({ snapshot, internalProbe = null }) {
       approved: input.kind === 'runtime-transfer-apply',
       source: 'foxos-ui'
     }),
+    readProviderRecoveryArtifact: () => ({ schemaVersion: 1, provider: 'coolify' }),
     wait: async () => {},
     randomUUID: () => '12345678-1234-1234-1234-1234567890ab'
   });
@@ -206,7 +207,17 @@ test('an inactive provider definition becomes a local server definition without 
           providerKind: 'application',
           serviceType: 'dockerfile',
           source: { type: 'git' },
-          declaredRoutes: [{ domain: 'directus.example.com', scheme: 'https', path: '/' }]
+          declaredRoutes: [{ domain: 'directus.example.com', scheme: 'https', path: '/' }],
+          recoveryArtifact: {
+            schemaVersion: 1,
+            artifactId: 'pdef_' + 'a'.repeat(32),
+            revision: 'pdef_rev_' + 'b'.repeat(32),
+            file: 'provider-definitions/recovery/pdef_' + 'a'.repeat(32) + '-pdef_rev_' + 'b'.repeat(32) + '.foxosenc',
+            encrypted: true,
+            authenticated: true,
+            keyId: 'key_' + 'c'.repeat(24),
+            plaintextSecretValuesIncluded: false
+          }
         }
       }
     }]
@@ -231,6 +242,7 @@ test('an inactive provider definition becomes a local server definition without 
     const operation = await manager.execute(plan.planId, 'one-time-ui-grant');
     assert.equal(operation.status, 'server-definition-adopted');
     assert.equal(operation.manifests[0].source.type, 'git');
+    assert.equal(operation.manifests[0].guarantees.providerNeutralRecoveryCaptured, true);
     assert.equal(dockerCalls.length, 0);
   } finally {
     fs.rmSync(dataRoot, { recursive: true, force: true });

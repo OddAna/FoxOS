@@ -417,9 +417,16 @@ function createMigrationOrchestrator({
       !resource.migrationStorage || resource.migrationStorage.status === 'ready'
     );
     const statefulReviewEligible = statefulAdapterEligible && statefulStorageReady;
+    const providerDefinitionArtifact = resource.provenance && resource.provenance.externalDefinition &&
+      resource.provenance.externalDefinition.recoveryArtifact;
+    const providerDefinitionReady = Boolean(
+      resource.kind === 'provider-definition' && providerDefinitionArtifact &&
+      providerDefinitionArtifact.encrypted === true && providerDefinitionArtifact.authenticated === true &&
+      providerDefinitionArtifact.plaintextSecretValuesIncluded === false
+    );
     const runtimeTransferEligible = Boolean(
       migrationRequired && (
-        resource.kind === 'provider-definition' ||
+        providerDefinitionReady ||
         resource.kind === 'container' && resource.runtime &&
         resource.runtime.state === 'running' && resource.runtime.inspection === 'complete' &&
         (

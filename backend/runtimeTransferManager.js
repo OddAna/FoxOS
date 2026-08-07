@@ -164,6 +164,20 @@ function runtimeManifest(resource, environmentRevision) {
 
 function definitionManifest(resource) {
   const external = resource.provenance && resource.provenance.externalDefinition || {};
+  const recoveryArtifact = external.recoveryArtifact;
+  if (
+    !recoveryArtifact || recoveryArtifact.schemaVersion !== 1 ||
+    !/^pdef_[a-f0-9]{32}$/.test(String(recoveryArtifact.artifactId || '')) ||
+    !/^pdef_rev_[a-f0-9]{32}$/.test(String(recoveryArtifact.revision || '')) ||
+    recoveryArtifact.encrypted !== true || recoveryArtifact.authenticated !== true ||
+    recoveryArtifact.plaintextSecretValuesIncluded !== false
+  ) {
+    throw new RuntimeTransferError(
+      'The inactive provider definition has no encrypted recovery artifact',
+      409,
+      'provider-definition-recovery-artifact-missing'
+    );
+  }
   return {
     schemaVersion: RUNTIME_TRANSFER_SCHEMA_VERSION,
     resourceId: resource.id,
@@ -175,11 +189,13 @@ function definitionManifest(resource) {
     serviceType: external.serviceType || null,
     declaredRoutes: external.declaredRoutes || resource.declaredRoutes || [],
     observedStatus: external.status || resource.runtime && resource.runtime.status || null,
+    recoveryArtifact,
     provenance: { importedFrom: resource.provider },
     guarantees: {
       secretValuesIncluded: false,
       providerRuntimeRequired: false,
-      activationPerformed: false
+      activationPerformed: false,
+      providerNeutralRecoveryCaptured: true
     }
   };
 }
@@ -193,6 +209,7 @@ function createRuntimeTransferManager({
   certificateImporter,
   ingressAuthority,
   approvalVerifier,
+  readProviderRecoveryArtifact,
   routingNetwork = 'foxos-routing',
   clock = () => new Date(),
   randomUUID = () => crypto.randomUUID(),
@@ -204,6 +221,7 @@ function createRuntimeTransferManager({
     !secretManager || typeof secretManager.getEnvironmentRevision !== 'function' ||
     !certificateImporter || typeof certificateImporter.importDomain !== 'function' ||
     !ingressAuthority || typeof ingressAuthority.stageRoutes !== 'function' ||
+    typeof readProviderRecoveryArtifact !== 'function' ||
     typeof approvalVerifier !== 'function'
   ) throw new Error('Runtime transfer manager requires Docker, registry, secret, certificate, ingress and approval adapters');
 
@@ -288,7 +306,18 @@ function createRuntimeTransferManager({
       : memberResources(snapshot, resource, plannedResource);
     const routes = normalizedRoutes(resource);
     const manifests = resource.kind === 'provider-definition'
-      ? [definitionManifest(resource)]
+      ? (() => {
+          const manifest = definitionManifest(resource);
+          const recovered = readProviderRecoveryArtifact(manifest.recoveryArtifact);
+          if (!recovered || recovered.schemaVersion !== 1 || recovered.provider !== resource.provider) {
+            throw new RuntimeTransferError(
+              'The encrypted provider definition could not be authenticated',
+              409,
+              'provider-definition-recovery-artifact-invalid'
+            );
+          }
+          return [manifest];
+        })()
       : members.map((member) => runtimeManifest(
           member,
           secretManager.getEnvironmentRevision(member.id)

@@ -938,6 +938,7 @@ const runtimeTransferManager = createRuntimeTransferManager({
   certificateImporter,
   ingressAuthority: ingressAuthorityManager,
   approvalVerifier: (input) => uiApprovalManager.verify(input),
+  readProviderRecoveryArtifact: (artifact) => coolifyMigrationReader.readRecoveryArtifact(artifact),
   routingNetwork: process.env.FOXOS_ROUTE_NETWORK || 'foxos-routing'
 });
 const statelessMigrationManager = createStatelessMigrationManager({

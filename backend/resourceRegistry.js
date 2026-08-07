@@ -749,6 +749,29 @@ function declaredRoutes(observation) {
   }).filter(Boolean);
 }
 
+function providerRecoveryArtifact(observation) {
+  const artifact = observation && observation.recoveryArtifact;
+  if (
+    !artifact || artifact.schemaVersion !== 1 ||
+    !/^pdef_[a-f0-9]{32}$/.test(String(artifact.artifactId || '')) ||
+    !/^pdef_rev_[a-f0-9]{32}$/.test(String(artifact.revision || '')) ||
+    !/^provider-definitions\/recovery\/pdef_[a-f0-9]{32}-pdef_rev_[a-f0-9]{32}\.foxosenc$/.test(String(artifact.file || '')) ||
+    !/^key_[a-f0-9]{24}$/.test(String(artifact.keyId || '')) ||
+    artifact.encrypted !== true || artifact.authenticated !== true ||
+    artifact.plaintextSecretValuesIncluded !== false
+  ) return null;
+  return {
+    schemaVersion: 1,
+    artifactId: artifact.artifactId,
+    revision: artifact.revision,
+    file: artifact.file,
+    encrypted: true,
+    authenticated: true,
+    keyId: artifact.keyId,
+    plaintextSecretValuesIncluded: false
+  };
+}
+
 function statusState(value) {
   const status = String(value || '').toLowerCase();
   if (status.startsWith('running') || status.startsWith('active')) return 'running';
@@ -781,7 +804,8 @@ function normalizeObservedResource(observation, resourceId) {
         source: observation.source || null,
         declaredRoutes: declaredRoutes(observation),
         observedUpdatedAt: observation.observedUpdatedAt || null,
-        runtimePresent: false
+        runtimePresent: false,
+        recoveryArtifact: providerRecoveryArtifact(observation)
       } : null,
       hostConfiguration: !providerDefinition ? observation.configuration || null : null
     },
@@ -1130,7 +1154,8 @@ function createResourceRegistry({
           source: observation.source || null,
           declaredRoutes: declaredRoutes(observation),
           observedUpdatedAt: observation.observedUpdatedAt || null,
-          runtimePresent: true
+          runtimePresent: true,
+          recoveryArtifact: providerRecoveryArtifact(observation)
         };
         for (const resource of matchingResources) resource.provenance.externalDefinition = definition;
         continue;

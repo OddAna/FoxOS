@@ -4,6 +4,7 @@ const path = require('node:path');
 const { atomicWriteJson } = require('./resourceRegistry');
 
 const COOLIFY_READER_SCHEMA_VERSION = 1;
+const PROVIDER_DEFINITION_RECOVERY_SCHEMA_VERSION = 1;
 const PROVIDER = 'coolify';
 const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
 const TOKEN_PATTERN = /^\S{20,2048}$/;
@@ -67,6 +68,76 @@ function normalizeStatus(value) {
   return safeText(value, 96) || 'unknown';
 }
 
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]));
+}
+
+function canonicalJson(value) {
+  return JSON.stringify(canonicalize(value));
+}
+
+function hash(value, length = 32) {
+  return crypto.createHash('sha256').update(String(value)).digest('hex').slice(0, length);
+}
+
+function selectedFields(row, fields) {
+  return Object.fromEntries(fields
+    .filter((field) => row && row[field] !== undefined)
+    .map((field) => [field, row[field]]));
+}
+
+function recoveryEnvironment(rows = []) {
+  return rows.map((row) => ({
+    key: safeText(row.key, 128),
+    value: String(row.real_value !== undefined && row.real_value !== null ? row.real_value : row.value || ''),
+    isBuildtime: row.is_buildtime === true,
+    isRuntime: row.is_runtime !== false,
+    isLiteral: row.is_literal === true,
+    isMultiline: row.is_multiline === true,
+    isRequired: row.is_required === true || row.is_really_required === true,
+    isCoolifyMetadata: row.is_coolify === true
+  })).filter((entry) => entry.key);
+}
+
+function recoveryDefinition(kind, row, environment = []) {
+  const fields = kind === 'application' ? [
+    'name', 'description', 'build_pack', 'git_repository', 'git_branch', 'git_commit_sha',
+    'docker_registry_image_name', 'docker_registry_image_tag', 'dockerfile', 'dockerfile_location',
+    'dockerfile_target_build', 'docker_compose', 'docker_compose_raw', 'docker_compose_location',
+    'base_directory', 'publish_directory', 'install_command', 'build_command', 'start_command',
+    'pre_deployment_command', 'post_deployment_command', 'ports_exposes', 'ports_mappings',
+    'fqdn', 'redirect', 'health_check_enabled', 'health_check_method', 'health_check_scheme',
+    'health_check_host', 'health_check_port', 'health_check_path', 'health_check_return_code',
+    'health_check_interval', 'health_check_timeout', 'health_check_retries',
+    'health_check_start_period', 'custom_docker_run_options', 'custom_labels',
+    'is_http_basic_auth_enabled', 'http_basic_auth_username', 'http_basic_auth_password',
+    'limits_cpus', 'limits_cpu_shares', 'limits_cpuset', 'limits_memory',
+    'limits_memory_reservation', 'limits_memory_swap', 'limits_memory_swappiness',
+    'compose_parsing_version'
+  ] : kind === 'service' ? [
+    'name', 'description', 'service_type', 'docker_compose', 'docker_compose_raw',
+    'connect_to_docker_network', 'compose_parsing_version'
+  ] : [
+    'name', 'description', 'database_type', 'image', 'postgres_user', 'postgres_password',
+    'postgres_db', 'postgres_host_auth_method', 'postgres_initdb_args', 'postgres_conf',
+    'init_scripts', 'internal_db_url', 'external_db_url', 'is_public', 'public_port',
+    'ports_mappings', 'enable_ssl', 'ssl_mode', 'custom_docker_run_options',
+    'limits_cpus', 'limits_cpu_shares', 'limits_cpuset', 'limits_memory',
+    'limits_memory_reservation', 'limits_memory_swap', 'limits_memory_swappiness'
+  ];
+  return {
+    schemaVersion: PROVIDER_DEFINITION_RECOVERY_SCHEMA_VERSION,
+    provider: PROVIDER,
+    providerKind: kind,
+    externalId: safeText(row.uuid, 128),
+    definition: selectedFields(row, fields),
+    environment: recoveryEnvironment(environment),
+    encryptedSecretValuesPresent: true
+  };
+}
+
 function repositoryName(value) {
   const repository = String(value || '').trim().replace(/\.git$/i, '');
   if (!repository) return null;
@@ -91,7 +162,7 @@ function serviceName(row) {
   return safeText(row.service_type, 128) || 'Unnamed service';
 }
 
-function projectApplication(row) {
+function projectApplication(row, recoveryArtifact = null) {
   return {
     sourceKind: 'provider-definition',
     provider: PROVIDER,
@@ -110,11 +181,12 @@ function projectApplication(row) {
       composeParsingVersion: safeText(row.compose_parsing_version, 96)
     },
     routes: safeFqdns(row.fqdn),
-    observedUpdatedAt: safeText(row.updated_at, 64)
+    observedUpdatedAt: safeText(row.updated_at, 64),
+    recoveryArtifact
   };
 }
 
-function projectService(row) {
+function projectService(row, recoveryArtifact = null) {
   return {
     sourceKind: 'provider-definition',
     provider: PROVIDER,
@@ -128,11 +200,12 @@ function projectService(row) {
       composeParsingVersion: safeText(row.compose_parsing_version, 96)
     },
     routes: [],
-    observedUpdatedAt: safeText(row.updated_at, 64)
+    observedUpdatedAt: safeText(row.updated_at, 64),
+    recoveryArtifact
   };
 }
 
-function projectDatabase(row) {
+function projectDatabase(row, recoveryArtifact = null) {
   return {
     sourceKind: 'provider-definition',
     provider: PROVIDER,
@@ -144,7 +217,8 @@ function projectDatabase(row) {
     image: safeText(row.image, 512),
     source: { type: 'database-image' },
     routes: [],
-    observedUpdatedAt: safeText(row.updated_at, 64)
+    observedUpdatedAt: safeText(row.updated_at, 64),
+    recoveryArtifact
   };
 }
 
@@ -201,6 +275,7 @@ function createCoolifyMigrationReader({
     throw new Error('Coolify migration reader requires data, encryption and API adapters');
   }
   const root = path.join(dataRoot, 'connections', 'coolify-reader');
+  const recoveryRoot = path.join(dataRoot, 'provider-definitions', 'recovery');
   const configFile = path.join(root, 'config.json');
   const tokenFile = path.join(root, 'token.foxosenc');
   const encryptionContext = {
@@ -208,6 +283,61 @@ function createCoolifyMigrationReader({
     provider: PROVIDER,
     schemaVersion: COOLIFY_READER_SCHEMA_VERSION
   };
+
+  function recoveryContext(artifactId, revision) {
+    return {
+      purpose: 'foxos-provider-definition-recovery',
+      schemaVersion: PROVIDER_DEFINITION_RECOVERY_SCHEMA_VERSION,
+      provider: PROVIDER,
+      artifactId,
+      revision
+    };
+  }
+
+  function writeRecoveryArtifact(kind, row, environment = []) {
+    const payload = recoveryDefinition(kind, row, environment);
+    const artifactId = 'pdef_' + hash(PROVIDER + '\0' + payload.externalId, 32);
+    const revision = 'pdef_rev_' + hash(canonicalJson(payload), 32);
+    const file = path.join(recoveryRoot, artifactId + '-' + revision + '.foxosenc');
+    encryptionStore.atomicWriteBuffer(
+      file,
+      encryptionStore.encryptBuffer(
+        Buffer.from(canonicalJson(payload), 'utf8'),
+        recoveryContext(artifactId, revision)
+      )
+    );
+    return {
+      schemaVersion: PROVIDER_DEFINITION_RECOVERY_SCHEMA_VERSION,
+      artifactId,
+      revision,
+      file: path.relative(dataRoot, file),
+      encrypted: true,
+      authenticated: true,
+      keyId: encryptionStore.keyId(),
+      plaintextSecretValuesIncluded: false
+    };
+  }
+
+  function readRecoveryArtifact(artifact) {
+    if (
+      !artifact || artifact.schemaVersion !== PROVIDER_DEFINITION_RECOVERY_SCHEMA_VERSION ||
+      !/^pdef_[a-f0-9]{32}$/.test(String(artifact.artifactId || '')) ||
+      !/^pdef_rev_[a-f0-9]{32}$/.test(String(artifact.revision || '')) ||
+      artifact.file !== path.join('provider-definitions', 'recovery',
+        artifact.artifactId + '-' + artifact.revision + '.foxosenc')
+    ) throw new CoolifyMigrationReaderError('Provider recovery artifact is invalid', 409, 'recovery-artifact-invalid');
+    const payload = JSON.parse(encryptionStore.decryptBuffer(
+      fs.readFileSync(path.join(dataRoot, artifact.file)),
+      recoveryContext(artifact.artifactId, artifact.revision)
+    ).toString('utf8'));
+    if (
+      !payload || payload.schemaVersion !== PROVIDER_DEFINITION_RECOVERY_SCHEMA_VERSION ||
+      payload.provider !== PROVIDER || !payload.externalId ||
+      artifact.artifactId !== 'pdef_' + hash(PROVIDER + '\0' + payload.externalId, 32) ||
+      artifact.revision !== 'pdef_rev_' + hash(canonicalJson(payload), 32)
+    ) throw new CoolifyMigrationReaderError('Provider recovery artifact is stale', 409, 'recovery-artifact-stale');
+    return payload;
+  }
 
   function readConfig() {
     try {
@@ -242,10 +372,18 @@ function createCoolifyMigrationReader({
       apiRequest({ baseUrl, token, endpoint: 'services' }),
       apiRequest({ baseUrl, token, endpoint: 'databases' })
     ]);
+    const applicationResources = await Promise.all(applications.map(async (row) => {
+      const environment = await apiRequest({ baseUrl, token, endpoint: `applications/${row.uuid}/envs` });
+      return projectApplication(row, writeRecoveryArtifact('application', row, environment));
+    }));
+    const serviceResources = await Promise.all(services.map(async (row) => {
+      const environment = await apiRequest({ baseUrl, token, endpoint: `services/${row.uuid}/envs` });
+      return projectService(row, writeRecoveryArtifact('service', row, environment));
+    }));
     const resources = [
-      ...applications.map(projectApplication),
-      ...services.map(projectService),
-      ...databases.map(projectDatabase)
+      ...applicationResources,
+      ...serviceResources,
+      ...databases.map((row) => projectDatabase(row, writeRecoveryArtifact('database', row)))
     ].filter((resource) => resource.externalId);
     return resources.sort((left, right) => (
       left.name.localeCompare(right.name) || left.externalId.localeCompare(right.externalId)
@@ -301,7 +439,8 @@ function createCoolifyMigrationReader({
 
   return {
     configure,
-    paths: { configFile, root, tokenFile },
+    paths: { configFile, recoveryRoot, root, tokenFile },
+    readRecoveryArtifact,
     scan,
     status
   };
