@@ -154,7 +154,8 @@
   service with a Docker health check, one exact recovered public route and
   existing named volumes; reject builds, bind mounts, host/device privileges,
   custom process or network modes and ambiguous routes. Resolve environment
-  only from authenticated encrypted recovery, never persist its values, pull
+  only from authenticated encrypted recovery, discard provider routing/name
+  metadata variables, never persist values, pull
   exactly `latest`, the declared tag or the declared digest (never every
   repository tag), bind the immutable image ID, create a controller-neutral readable runtime,
   prove health plus trusted FoxOS HTTPS before success and remove only the new

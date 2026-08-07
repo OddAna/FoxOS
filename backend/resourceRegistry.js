@@ -21,6 +21,7 @@ const SAFE_LABEL_KEYS = new Set([
   'com.foxos.managed',
   'com.foxos.app.id',
   'com.foxos.app.name',
+  'com.foxos.image.reference',
   'com.foxos.core',
   'com.foxos.gateway',
   'com.foxos.adoption.disposable',

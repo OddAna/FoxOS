@@ -391,7 +391,8 @@ provider UUIDs never become their primary name.
 An adopted inactive single-service definition may now be activated directly by
 the server when its authenticated encrypted recovery artifact compiles to the
 bounded runtime contract. The contract permits one image, an exact public
-domain/private port, a Docker health check, recovered runtime environment and
+domain/private port, a Docker health check, recovered application environment
+(excluding provider routing/name metadata) and
 already-existing named volumes. It rejects builds, bind mounts, privileged host
 access, custom commands/network modes and ambiguous routes. FoxOS imports the
 preserved certificate without starting the old proxy, pulls and records the

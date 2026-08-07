@@ -149,10 +149,7 @@ test('activates one recovered service with existing data and a FoxOS-owned route
   assert.equal(operation.trafficProof.healthy, true);
   assert.equal(scanCount, 1);
   assert.equal(createdPayload.Image, IMAGE_ID);
-  assert.deepEqual(createdPayload.Env, [
-    'SERVICE_URL_FIREFOX_5800=https://firefox.example.com',
-    'VNC_PASSWORD=never-persist-this-secret'
-  ]);
+  assert.deepEqual(createdPayload.Env, ['VNC_PASSWORD=never-persist-this-secret']);
   assert.deepEqual(createdPayload.HostConfig.Mounts, [{
     Type: 'volume',
     Source: 'provider_firefox_config',

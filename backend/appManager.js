@@ -381,6 +381,9 @@ function discoveredAppStates(containers, catalogApps) {
       const hasMultipleProfileInstances = profile && profileCounts.get(profile.id) > 1;
       const appId = 'discovered-' + (profile ? profile.id + '-' : '') + slugify(stableName);
       const managedByFoxOS = labels[MANAGED_LABEL] === 'true';
+      const imageReference = managedByFoxOS && String(labels['com.foxos.image.reference'] || '').trim()
+        ? String(labels['com.foxos.image.reference']).trim()
+        : container.Image;
 
       return {
         id: appId,
@@ -393,7 +396,7 @@ function discoveredAppStates(containers, catalogApps) {
         category: profile ? profile.category : 'Web Apps',
         summary: profile ? profile.description : 'Bu sunucuda önceden kurulmuş uygulama.',
         description: profile ? profile.description : 'Bu uygulama sunucunun mevcut Docker kurulumunda otomatik olarak keşfedildi.',
-        image: container.Image,
+        image: imageReference,
         logoUrl: profile && profile.logoUrl
           ? profile.logoUrl
           : externalUrl ? '/api/apps/' + encodeURIComponent(appId) + '/icon' : null,

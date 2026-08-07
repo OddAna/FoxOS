@@ -187,9 +187,14 @@ function resolvedEnvironment(service, recoveredEnvironment) {
   return entries;
 }
 
+function isProviderMetadataEnvironmentKey(key) {
+  return /^COOLIFY_/.test(key) || /^SERVICE_(?:FQDN|URL|NAME)_/.test(key);
+}
+
 function recoveredEnvFileEnvironment(rows = []) {
   return rows.filter((row) => (
-    row && row.isRuntime !== false && row.isCoolifyMetadata !== true
+    row && row.isRuntime !== false && row.isCoolifyMetadata !== true &&
+    !isProviderMetadataEnvironmentKey(String(row.key || ''))
   )).map((row) => {
     const key = String(row.key || '');
     const value = String(row.value !== undefined ? row.value : '');
@@ -437,7 +442,7 @@ function compileContract(resource, recovered) {
   const environment = mergeEnvironment(
     usesEnvFile ? recoveredEnvFileEnvironment(recovered.environment || []) : [],
     resolvedEnvironment(service, recoveredEnvironment)
-  );
+  ).filter((entry) => !isProviderMetadataEnvironmentKey(entry.slice(0, entry.indexOf('='))));
   if (usesEnvFile && environment.length === 0) {
     throw new InactiveDefinitionRuntimeError(
       'Pasif uygulamanın env-file değerleri şifreli recovery kaydında bulunamadı.',

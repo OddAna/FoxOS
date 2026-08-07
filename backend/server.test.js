@@ -384,7 +384,8 @@ test('a recovered Firefox runtime keeps its readable application identity and ic
     Labels: {
       'com.foxos.managed': 'true',
       'com.foxos.app.id': 'res_' + '8'.repeat(32),
-      'com.foxos.app.name': 'firefox'
+      'com.foxos.app.name': 'firefox',
+      'com.foxos.image.reference': 'jlesage/firefox'
     },
     Ports: []
   };
@@ -395,6 +396,7 @@ test('a recovered Firefox runtime keeps its readable application identity and ic
   assert.equal(discovered[0].name, 'Firefox');
   assert.equal(discovered[0].containerPort, null);
   assert.equal(discovered[0].managedByFoxOS, true);
+  assert.equal(discovered[0].image, 'jlesage/firefox');
   assert.equal(discovered[0].logoUrl.endsWith('/firefox.svg'), true);
 });
 

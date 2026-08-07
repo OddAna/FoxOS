@@ -129,7 +129,7 @@ function applicationProjection({
     category: app.category || 'Web Apps',
     summary: app.summary || null,
     description: app.description || null,
-    image: container && container.Image || app.image || null,
+    image: app.image || container && container.Image || null,
     logoUrl: applicationLogoUrl(app, id, externalUrl),
     externalUrl: externalUrl || null,
     hostPort: app.hostPort || null,
