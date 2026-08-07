@@ -542,6 +542,7 @@ function createIngressAuthorityManager({
     }
     for (const route of routeInputs) validateRoute(route);
     const current = state();
+    current.inactiveDomains = { ...(current.inactiveDomains || {}) };
     for (const input of routeInputs) {
       const collision = Object.values(current.routes || {}).find((route) => (
         route.routeId !== input.routeId && route.status !== 'removed' &&
@@ -549,14 +550,116 @@ function createIngressAuthorityManager({
       ));
       if (collision) throw new IngressAuthorityError('A FoxOS route already owns this domain and path', 409, 'foxos-route-conflict');
       current.routes[input.routeId] = { ...input, status: 'staged', stagedAt: now() };
+      delete current.inactiveDomains[input.domain];
       if (!current.domains[input.domain]) current.domains[input.domain] = 'legacy';
     }
-    current.routes = await reloadCaddy(current.routes, infrastructure.gateway.Id);
+    current.routes = await reloadCaddy(
+      current.routes,
+      infrastructure.gateway.Id,
+      {},
+      current.inactiveDomains
+    );
     persist(current);
     for (const domain of new Set(routeInputs.map((route) => route.domain))) {
       await setRuntimeMap(domain, current.domains[domain]);
     }
     return routeInputs.map((route) => current.routes[route.routeId]);
+  }
+
+  async function parkRoutes(entries) {
+    if (!Array.isArray(entries) || !entries.length) {
+      throw new IngressAuthorityError('At least one stopped production route is required', 400, 'empty-stopped-routes');
+    }
+    const normalized = entries.map((entry) => ({
+      routeId: String(entry && entry.routeId || ''),
+      domain: String(entry && entry.domain || '').toLowerCase(),
+      resourceId: String(entry && entry.resourceId || '')
+    }));
+    if (normalized.some((entry) => (
+      !/^smroute_[a-f0-9]{24}$/.test(entry.routeId) ||
+      !DOMAIN_PATTERN.test(entry.domain) ||
+      !RESOURCE_ID_PATTERN.test(entry.resourceId)
+    ))) {
+      throw new IngressAuthorityError('Stopped FoxOS route input is invalid', 400, 'invalid-stopped-route');
+    }
+
+    const infrastructure = await inspectOwnedInfrastructure();
+    const previous = state();
+    const next = JSON.parse(JSON.stringify(previous));
+    next.inactiveDomains = { ...(next.inactiveDomains || {}) };
+    const parked = [];
+    for (const entry of normalized) {
+      const route = next.routes[entry.routeId];
+      if (!route) continue;
+      if (route.domain !== entry.domain) {
+        throw new IngressAuthorityError('Stopped FoxOS route ownership changed', 409, 'stopped-route-conflict');
+      }
+      delete next.routes[entry.routeId];
+      if (Object.values(next.routes).some((candidate) => (
+        candidate.status !== 'removed' && candidate.domain === entry.domain
+      ))) {
+        throw new IngressAuthorityError('Stopped FoxOS domain still has another active route', 409, 'stopped-domain-conflict');
+      }
+      const existing = next.inactiveDomains[entry.domain];
+      if (existing && existing.resourceId !== entry.resourceId) {
+        throw new IngressAuthorityError('Stopped FoxOS domain ownership changed', 409, 'inactive-domain-conflict');
+      }
+      next.inactiveDomains[entry.domain] = {
+        resourceId: entry.resourceId,
+        responseStatus: 503,
+        activatedAt: existing && existing.activatedAt || now()
+      };
+      next.domains[entry.domain] = 'foxos';
+      parked.push(entry);
+    }
+    if (!parked.length) return { parked: false, routes: [] };
+
+    const updatedMaps = [];
+    try {
+      next.routes = await reloadCaddy(
+        next.routes,
+        infrastructure.gateway.Id,
+        {},
+        next.inactiveDomains
+      );
+      for (const entry of parked) {
+        const proof = await httpsProbe({
+          hostname: entry.domain,
+          connectHost: gatewayContainer,
+          port: 443,
+          requestPath: '/'
+        });
+        if (proof.tlsValid !== true || proof.statusCode !== 503) {
+          throw new IngressAuthorityError(
+            'Stopped FoxOS domain did not produce its trusted stopped response',
+            503,
+            'stopped-domain-proof-failed'
+          );
+        }
+      }
+      persist(next);
+      for (const entry of parked) {
+        await setRuntimeMap(entry.domain, 'foxos');
+        updatedMaps.push(entry.domain);
+      }
+      return { parked: true, routes: parked.map((entry) => entry.routeId) };
+    } catch (error) {
+      try {
+        previous.routes = await reloadCaddy(
+          previous.routes,
+          infrastructure.gateway.Id,
+          {},
+          previous.inactiveDomains || {}
+        );
+        persist(previous);
+        for (const domain of updatedMaps) {
+          await setRuntimeMap(domain, previous.domains && previous.domains[domain] || 'legacy');
+        }
+      } catch {
+        // Preserve the original failure; the persisted authority remains the recovery source.
+      }
+      throw error;
+    }
   }
 
   function adminCommand(command) {
@@ -904,6 +1007,7 @@ function createIngressAuthorityManager({
     httpsProbe,
     inspectOwnedInfrastructure,
     paths: { root, authorityFile, routeMapFile, caddyRoutesFile },
+    parkRoutes,
     removeRoutes,
     reconcilePublicAuthority,
     reconcileInactiveDomains,

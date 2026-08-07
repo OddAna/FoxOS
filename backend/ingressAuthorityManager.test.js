@@ -223,6 +223,85 @@ test('inactive server definitions receive trusted FoxOS 503 routes before ingres
   }
 });
 
+test('stopped application routes are atomically parked behind a trusted 503 response', async () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-ingress-parked-route-'));
+  const adminCommands = [];
+  const gatewayId = 'a'.repeat(64);
+  const ingressId = 'b'.repeat(64);
+  const routeId = 'smroute_' + 'c'.repeat(24);
+  const operationId = 'rtop_' + 'd'.repeat(32);
+  const resourceId = 'res_' + 'e'.repeat(32);
+  const manager = createIngressAuthorityManager({
+    dataRoot,
+    dockerRequest: async (method, requestPath) => {
+      assert.equal(method, 'GET');
+      if (requestPath === '/networks/foxos-routing') {
+        return { Internal: true, Labels: { 'com.foxos.routing': 'true', 'com.foxos.core': 'true' }, Containers: {} };
+      }
+      if (requestPath === '/containers/foxos-gateway/json') {
+        return { Id: gatewayId, State: { Running: true }, Config: { Labels: { 'com.foxos.gateway': 'true' } } };
+      }
+      if (requestPath === '/containers/foxos-ingress/json') {
+        return { Id: ingressId, State: { Running: true }, Config: { Labels: { 'com.foxos.ingress': 'true' } } };
+      }
+      throw new Error('Unexpected Docker request: ' + requestPath);
+    },
+    dockerExec: async () => ({ exitCode: 0, output: '' }),
+    hostCommand: async () => ({ success: true }),
+    connectAdmin: () => adminConnection(adminCommands),
+    httpsRequest: (options, callback) => {
+      const request = new EventEmitter();
+      request.setTimeout = () => {};
+      request.destroy = (error) => request.emit('error', error);
+      request.end = () => {
+        assert.equal(options.hostname, 'foxos-gateway');
+        assert.equal(options.servername, 'stopped.example.com');
+        const response = new EventEmitter();
+        response.statusCode = 503;
+        response.headers = { 'x-foxos-inactive': 'true' };
+        response.socket = { authorized: true };
+        response.resume = () => setImmediate(() => response.emit('end'));
+        callback(response);
+      };
+      return request;
+    },
+    clock: () => new Date('2026-08-07T13:00:00.000Z')
+  });
+
+  fs.writeFileSync(manager.paths.authorityFile, JSON.stringify({
+    schemaVersion: 1,
+    owner: 'foxos',
+    publicAuthorityActive: true,
+    legacyBridge: null,
+    domains: { 'stopped.example.com': 'foxos' },
+    routes: {
+      [routeId]: {
+        routeId,
+        operationId,
+        domain: 'stopped.example.com',
+        path: '/',
+        alias: 'app-stopped-example',
+        privatePort: 3000,
+        status: 'active',
+        runtimeContainerId: 'f'.repeat(64),
+        runtimeAddress: '10.0.10.90'
+      }
+    },
+    inactiveDomains: {}
+  }));
+
+  try {
+    const result = await manager.parkRoutes([{ routeId, domain: 'stopped.example.com', resourceId }]);
+    assert.deepEqual(result, { parked: true, routes: [routeId] });
+    assert.equal(manager.state().routes[routeId], undefined);
+    assert.equal(manager.state().inactiveDomains['stopped.example.com'].resourceId, resourceId);
+    assert.match(fs.readFileSync(manager.paths.caddyRoutesFile, 'utf8'), /respond 503/);
+    assert.equal(adminCommands.includes('set map /runtime/routes.map stopped.example.com foxos'), true);
+  } finally {
+    fs.rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
 test('legacy readiness waits for a browser-trusted response before traffic authority', async () => {
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-ingress-legacy-'));
   let requests = 0;

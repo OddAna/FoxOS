@@ -154,7 +154,10 @@ test('activates one recovered service with existing data and a FoxOS-owned route
       importDomain: async (input) => { ingressCalls.push(['certificate', input]); return {}; }
     },
     ingressAuthority: {
+      state: () => ({ routes: {} }),
+      parkRoutes: async () => ({ parked: false, routes: [] }),
       reconcileInactiveDomains: async (input) => { ingressCalls.push(['inactive', input]); return {}; },
+      refreshOperationRuntime: async () => ({}),
       stageRoutes: async (input) => { ingressCalls.push(['stage', input]); return input; },
       switchDomain: async (domain, target) => { ingressCalls.push(['switch', domain, target]); return {}; },
       httpsProbe: async () => ({ statusCode: 200, tlsValid: true, expectedRoute: true }),
@@ -258,7 +261,10 @@ test('activates a recovered Nixpacks Git application from its newest immutable l
     readRecoveryArtifact: () => recoveredApplication(),
     certificateImporter: { importDomain: async () => ({}) },
     ingressAuthority: {
+      state: () => ({ routes: {} }),
+      parkRoutes: async () => ({ parked: false, routes: [] }),
       reconcileInactiveDomains: async () => ({}),
+      refreshOperationRuntime: async () => ({}),
       stageRoutes: async (routes) => routes,
       switchDomain: async () => ({}),
       httpsProbe: async () => ({ statusCode: 200, tlsValid: true, expectedRoute: true }),
@@ -292,6 +298,101 @@ test('activates a recovered Nixpacks Git application from its newest immutable l
   assert.equal(createdPayload.Healthcheck, undefined);
   assert.equal(createdPayload.Labels['com.foxos.image.reference'], runtimeReference);
   assert.equal(Object.keys(createdPayload.Labels).some((key) => key.startsWith('coolify.')), false);
+});
+
+test('parks stopped managed routes before other activations and restores them on start', async () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-inactive-runtime-lifecycle-'));
+  const routeId = 'smroute_' + 'd'.repeat(24);
+  const operationId = 'rtop_' + 'e'.repeat(32);
+  const snapshot = { snapshotId: 'snap_' + '9'.repeat(32), resources: [applicationResource()] };
+  let running = false;
+  let routes = {
+    [routeId]: {
+      routeId,
+      operationId,
+      domain: 'cp.example.com',
+      path: '/',
+      alias: 'app-' + 'f'.repeat(20),
+      privatePort: 3000,
+      status: 'active'
+    }
+  };
+  const parked = [];
+  const staged = [];
+  let scanCount = 0;
+  const manager = createInactiveDefinitionRuntimeManager({
+    dataRoot,
+    dockerRequest: async (method, requestPath) => {
+      if (method === 'GET' && requestPath === `/containers/${CANDIDATE_ID}/json`) {
+        return { Id: CANDIDATE_ID, Image: IMAGE_ID, State: { Running: running, Status: running ? 'running' : 'exited' } };
+      }
+      if (method === 'POST' && requestPath === `/containers/${CANDIDATE_ID}/start?t=10`) {
+        running = true;
+        return null;
+      }
+      throw new Error(`Unexpected Docker call: ${method} ${requestPath}`);
+    },
+    resourceRegistry: {
+      getLatest: () => snapshot,
+      scan: async () => { scanCount += 1; return snapshot; }
+    },
+    readRecoveryArtifact: () => recoveredApplication(),
+    certificateImporter: { importDomain: async () => ({}) },
+    ingressAuthority: {
+      state: () => ({ routes }),
+      parkRoutes: async (entries) => {
+        parked.push(...entries);
+        for (const entry of entries) delete routes[entry.routeId];
+        return { parked: true, routes: entries.map((entry) => entry.routeId) };
+      },
+      reconcileInactiveDomains: async () => ({}),
+      refreshOperationRuntime: async () => ({}),
+      stageRoutes: async (entries) => {
+        staged.push(...entries);
+        for (const entry of entries) routes[entry.routeId] = entry;
+        return entries;
+      },
+      switchDomain: async () => ({}),
+      httpsProbe: async () => ({ statusCode: 200, tlsValid: true, expectedRoute: true }),
+      removeRoutes: async () => ({})
+    },
+    wait: async () => {}
+  });
+
+  const operationFile = path.join(manager.paths.operationsRoot, operationId + '.json');
+  fs.writeFileSync(operationFile, JSON.stringify({
+    schemaVersion: 1,
+    operationId,
+    resourceId: RESOURCE_ID,
+    status: 'server-definition-runtime-active',
+    image: { imageId: IMAGE_ID },
+    route: {
+      routeId,
+      domain: 'cp.example.com',
+      path: '/',
+      privatePort: 3000,
+      alias: 'app-' + 'f'.repeat(20)
+    },
+    candidateContainerId: CANDIDATE_ID,
+    trafficProof: { healthy: true, tlsValid: true, expectedRoute: true }
+  }));
+
+  try {
+    const reconciliation = await manager.reconcileStoppedRuntimes();
+    assert.deepEqual(reconciliation, { reconciled: true, routes: [routeId] });
+    assert.equal(parked.length, 1);
+    assert.equal(JSON.parse(fs.readFileSync(operationFile, 'utf8')).trafficProof.healthy, false);
+
+    const result = await manager.manageContainer(CANDIDATE_ID, 'start');
+    assert.equal(result.handled, true);
+    assert.equal(running, true);
+    assert.equal(staged.length, 1);
+    assert.equal(staged[0].routeId, routeId);
+    assert.equal(JSON.parse(fs.readFileSync(operationFile, 'utf8')).trafficProof.healthy, true);
+    assert.equal(scanCount, 2);
+  } finally {
+    fs.rmSync(dataRoot, { recursive: true, force: true });
+  }
 });
 
 test('route-less Nixpacks definitions remain startable and require internal HTTP proof', () => {
@@ -343,6 +444,9 @@ test('does not advertise activation for unsupported recovered kinds', () => {
     readRecoveryArtifact: () => recovered({ providerKind: 'database' }),
     certificateImporter: { importDomain: async () => ({}) },
     ingressAuthority: {
+      state: () => ({ routes: {} }),
+      parkRoutes: async () => ({ parked: false, routes: [] }),
+      refreshOperationRuntime: async () => ({}),
       stageRoutes: async () => [],
       switchDomain: async () => ({}),
       httpsProbe: async () => ({}),

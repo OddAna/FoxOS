@@ -639,7 +639,8 @@ function createInactiveDefinitionRuntimeManager({
     typeof resourceRegistry.getLatest !== 'function' || typeof resourceRegistry.scan !== 'function' ||
     typeof readRecoveryArtifact !== 'function' || !certificateImporter ||
     typeof certificateImporter.importDomain !== 'function' || !ingressAuthority ||
-    typeof ingressAuthority.stageRoutes !== 'function'
+    typeof ingressAuthority.stageRoutes !== 'function' || typeof ingressAuthority.parkRoutes !== 'function' ||
+    typeof ingressAuthority.refreshOperationRuntime !== 'function' || typeof ingressAuthority.state !== 'function'
   ) throw new Error('Inactive-definition runtime manager requires Docker, Registry, recovery and ingress adapters');
 
   const operationsRoot = path.join(dataRoot, 'inactive-definition-runtimes', 'operations');
@@ -653,6 +654,24 @@ function createInactiveDefinitionRuntimeManager({
     operation.updatedAt = now();
     atomicWriteJson(path.join(operationsRoot, operation.operationId + '.json'), operation);
     return operation;
+  }
+
+  function operations() {
+    return fs.readdirSync(operationsRoot)
+      .filter((file) => file.endsWith('.json'))
+      .sort()
+      .map((file) => JSON.parse(fs.readFileSync(path.join(operationsRoot, file), 'utf8')))
+      .filter((operation) => (
+        operation && operation.status === 'server-definition-runtime-active' &&
+        OPERATION_ID_PATTERN.test(String(operation.operationId || '')) &&
+        RESOURCE_ID_PATTERN.test(String(operation.resourceId || '')) &&
+        CONTAINER_ID_PATTERN.test(String(operation.candidateContainerId || ''))
+      ));
+  }
+
+  function operationForContainer(containerId) {
+    if (!CONTAINER_ID_PATTERN.test(String(containerId || ''))) return null;
+    return operations().find((operation) => operation.candidateContainerId === containerId) || null;
   }
 
   function resourceFor(resourceId) {
@@ -911,6 +930,128 @@ function createInactiveDefinitionRuntimeManager({
     );
   }
 
+  async function reconcileStoppedRuntimes() {
+    const authority = ingressAuthority.state();
+    const stopped = [];
+    for (const operation of operations()) {
+      const route = operation.route || {};
+      if (
+        !route.domain || !route.routeId ||
+        !authority.routes || !authority.routes[route.routeId]
+      ) continue;
+      let details;
+      try {
+        details = await dockerRequest('GET', '/containers/' + operation.candidateContainerId + '/json');
+      } catch (error) {
+        if (!/No such container|not found|404/i.test(String(error && error.message || ''))) throw error;
+      }
+      if (details && details.State && details.State.Running === true) continue;
+      stopped.push({
+        operation,
+        routeId: route.routeId,
+        domain: route.domain,
+        resourceId: operation.resourceId
+      });
+    }
+    if (!stopped.length) return { reconciled: false, routes: [] };
+
+    const result = await ingressAuthority.parkRoutes(stopped.map(({ routeId, domain, resourceId }) => ({
+      routeId,
+      domain,
+      resourceId
+    })));
+    for (const entry of stopped) {
+      entry.operation.runtimeState = 'stopped';
+      entry.operation.trafficProof = {
+        healthy: false,
+        tlsValid: true,
+        expectedRoute: false,
+        internal: false,
+        statusCode: 503,
+        verifiedAt: now()
+      };
+      persist(entry.operation);
+    }
+    await resourceRegistry.scan();
+    return { reconciled: result.parked === true, routes: result.routes };
+  }
+
+  async function restoreRuntime(operation, contract) {
+    const containerId = operation.candidateContainerId;
+    await waitForReady(containerId, operation.image.imageId, contract.requiresDockerHealth);
+    let proof;
+    if (contract.route.domain) {
+      const authority = ingressAuthority.state();
+      const existing = authority.routes && authority.routes[operation.route.routeId];
+      if (existing) {
+        await ingressAuthority.refreshOperationRuntime(operation.operationId, containerId);
+      } else {
+        await ingressAuthority.stageRoutes([{
+          routeId: operation.route.routeId,
+          operationId: operation.operationId,
+          domain: operation.route.domain,
+          path: operation.route.path,
+          alias: operation.route.alias,
+          privatePort: operation.route.privatePort
+        }]);
+      }
+      await ingressAuthority.switchDomain(contract.route.domain, 'foxos');
+      proof = await waitForPublicProof(contract, operation.route.routeId);
+    } else {
+      proof = await waitForInternalProof(contract, operation.route.alias);
+    }
+    operation.runtimeState = 'running';
+    operation.trafficProof = {
+      healthy: true,
+      tlsValid: contract.route.domain ? true : null,
+      expectedRoute: contract.route.domain ? true : null,
+      internal: contract.route.domain ? false : true,
+      statusCode: proof.statusCode,
+      verifiedAt: now()
+    };
+    persist(operation);
+    await resourceRegistry.scan();
+    return operation;
+  }
+
+  async function manageContainer(containerId, action) {
+    if (!CONTAINER_ID_PATTERN.test(String(containerId || '')) || !['start', 'stop', 'restart'].includes(action)) {
+      throw new InactiveDefinitionRuntimeError('Uygulama çalışma komutu geçersiz.', 400, 'inactive-runtime-action-invalid');
+    }
+    const operation = operationForContainer(containerId);
+    if (!operation) return { handled: false };
+    if (locks.has(operation.resourceId)) {
+      throw new InactiveDefinitionRuntimeError(
+        'Bu uygulama için başka bir çalışma işlemi sürüyor.',
+        409,
+        'inactive-definition-operation-locked'
+      );
+    }
+    locks.add(operation.resourceId);
+    try {
+      await reconcileStoppedRuntimes();
+      if (action === 'stop') {
+        await dockerRequest('POST', '/containers/' + containerId + '/stop?t=10');
+        await reconcileStoppedRuntimes();
+        return { handled: true, action, operationId: operation.operationId };
+      }
+
+      const { resource } = resourceFor(operation.resourceId);
+      const contract = contractFor(resource);
+      await dockerRequest('POST', '/containers/' + containerId + '/' + action + '?t=10');
+      try {
+        await restoreRuntime(operation, contract);
+      } catch (error) {
+        try { await dockerRequest('POST', '/containers/' + containerId + '/stop?t=10'); } catch { /* already stopped */ }
+        try { await reconcileStoppedRuntimes(); } catch { /* preserve the original restore failure */ }
+        throw error;
+      }
+      return { handled: true, action, operationId: operation.operationId };
+    } finally {
+      locks.delete(operation.resourceId);
+    }
+  }
+
   async function activate(resourceId) {
     if (locks.has(resourceId)) {
       throw new InactiveDefinitionRuntimeError(
@@ -927,6 +1068,7 @@ function createInactiveDefinitionRuntimeManager({
     try {
       const { resource } = resourceFor(resourceId);
       contract = contractFor(resource);
+      await reconcileStoppedRuntimes();
       await ensureContainerNameAvailable(contract.containerName);
       await ensureVolumes(contract.volumes);
 
@@ -1070,6 +1212,7 @@ function createInactiveDefinitionRuntimeManager({
         proof = await waitForInternalProof(contract, routeAlias);
       }
       operation.status = 'server-definition-runtime-active';
+      operation.runtimeState = 'running';
       operation.trafficProof = {
         healthy: true,
         tlsValid: contract.route.domain ? true : null,
@@ -1117,7 +1260,14 @@ function createInactiveDefinitionRuntimeManager({
 
   fs.mkdirSync(operationsRoot, { recursive: true, mode: 0o700 });
   fs.chmodSync(operationsRoot, 0o700);
-  return { activate, capability, paths: { operationsRoot } };
+  return {
+    activate,
+    capability,
+    manageContainer,
+    operationForContainer,
+    paths: { operationsRoot },
+    reconcileStoppedRuntimes
+  };
 }
 
 module.exports = {

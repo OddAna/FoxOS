@@ -2920,9 +2920,15 @@ app.post('/api/containers/:id/:action', async (req, res) => {
     if (details.Config && details.Config.Labels && details.Config.Labels['com.foxos.core'] === 'true') {
       return res.status(409).json({ error: 'FoxOS cannot manage its own core container' });
     }
-    await dockerRequest('POST', '/containers/' + id + '/' + action + '?t=10');
+    const managed = await inactiveDefinitionRuntimeManager.manageContainer(id, action);
+    if (!managed.handled) {
+      await dockerRequest('POST', '/containers/' + id + '/' + action + '?t=10');
+    }
     res.json({ success: true });
   } catch (error) {
+    if (error instanceof InactiveDefinitionRuntimeError) {
+      return sendInactiveDefinitionRuntimeError(res, error, 'Could not change managed application runtime state');
+    }
     res.status(502).json({ error: error.message });
   }
 });
