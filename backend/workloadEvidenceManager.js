@@ -86,6 +86,10 @@ function environmentCaptureConfirmation(planId) {
   return 'CAPTURE WORKLOAD ENVIRONMENT ' + planId;
 }
 
+function workloadSecretName(resourceId, environmentName) {
+  return 'workload/' + hash(resourceId + '\0' + environmentName, 32);
+}
+
 function validateUsername(value) {
   const username = String(value || '').trim();
   if (!username || username.length > 128 || /[\r\n\0]/.test(username)) {
@@ -554,7 +558,7 @@ function createWorkloadEvidenceManager({
       if (excludedNames.has(name)) {
         excluded[name] = 'provider-runtime-metadata';
       } else if (secretNames.has(name)) {
-        const secret = secretManager.putSecret('workload/' + resource.id + '/' + name, value);
+        const secret = secretManager.putSecret(workloadSecretName(resource.id, name), value);
         secretRefs[name] = { secretId: secret.secretId, revision: secret.revision };
       } else {
         ordinary[name] = value;

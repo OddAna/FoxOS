@@ -48,7 +48,7 @@ function resource() {
         nanoCpus: null,
         pidsLimit: null
       },
-      environmentVariableCount: 6,
+      environmentVariableCount: 7,
       inspection: 'complete'
     },
     ports: [{ privatePort: 3000, protocol: 'tcp', hostIp: null, hostPort: null }],
@@ -98,7 +98,8 @@ function harness() {
           'COOLIFY_FQDN=site.example.test',
           'SERVICE_URL_SITE=https://site.example.test',
           'DAAS_HUB_SHARED_SECRET=' + RUNTIME_SECRET_VALUE,
-          'HIGHLEVEL_API_TOKEN=another-encrypted-runtime-value'
+          'HIGHLEVEL_API_TOKEN=another-encrypted-runtime-value',
+          'EVOLUTION_PROVIDER_REALLY_LONG_OPTIONAL_CONFIGURATION_API_TOKEN='
         ]
       }
     };
@@ -190,15 +191,19 @@ test('environment capture classifies sensitive names, rejects drift and persists
       confirmation: PLAN_ENVIRONMENT_CONFIRMATION
     });
     assert.deepEqual(plan.ordinaryNames, ['CRM_TARGET', 'NODE_ENV']);
-    assert.deepEqual(plan.secretNames, ['DAAS_HUB_SHARED_SECRET', 'HIGHLEVEL_API_TOKEN']);
+    assert.deepEqual(plan.secretNames, [
+      'DAAS_HUB_SHARED_SECRET',
+      'EVOLUTION_PROVIDER_REALLY_LONG_OPTIONAL_CONFIGURATION_API_TOKEN',
+      'HIGHLEVEL_API_TOKEN'
+    ]);
     assert.deepEqual(plan.excludedNames, ['COOLIFY_FQDN', 'SERVICE_URL_SITE']);
     assert.equal(plan.valuesIncluded, false);
     assert.equal(JSON.stringify(plan).includes(RUNTIME_SECRET_VALUE), false);
     assert.deepEqual(dockerCalls.map((call) => call.method), ['GET']);
 
     const capture = await manager.captureEnvironment(plan.planId, plan.confirmation);
-    assert.equal(capture.environment.variableCount, 6);
-    assert.equal(capture.environment.managedVariableCount, 4);
+    assert.equal(capture.environment.variableCount, 7);
+    assert.equal(capture.environment.managedVariableCount, 5);
     assert.equal(capture.environment.excludedVariableCount, 2);
     assert.deepEqual(capture.environment.excluded, [
       { name: 'COOLIFY_FQDN', reason: 'provider-runtime-metadata' },
@@ -210,7 +215,7 @@ test('environment capture classifies sensitive names, rejects drift and persists
     assert.deepEqual(dockerCalls.map((call) => call.method), ['GET', 'GET']);
     const environment = secretManager.getEnvironmentRevision(RESOURCE_ID);
     assert.equal(environment.revision, capture.environment.revision);
-    assert.equal(environment.secretRefs.length, 2);
+    assert.equal(environment.secretRefs.length, 3);
     assert.deepEqual(environment.excluded, [
       { name: 'COOLIFY_FQDN', reason: 'provider-runtime-metadata' },
       { name: 'SERVICE_URL_SITE', reason: 'provider-runtime-metadata' }
@@ -258,7 +263,7 @@ test('stateful application environment evidence stays GET-only while source capt
     assert.equal(plan.guarantees.runtimeMutated, false);
     const capture = await manager.captureEnvironment(plan.planId, plan.confirmation);
     assert.equal(capture.stateClass, 'stateful');
-    assert.equal(capture.environment.managedVariableCount, 4);
+    assert.equal(capture.environment.managedVariableCount, 5);
     assert.deepEqual(dockerCalls.map((call) => call.method), ['GET', 'GET']);
 
     await assert.rejects(
@@ -293,7 +298,7 @@ test('database, worker and agent group members can capture provider-neutral envi
       setSnapshot(snapshot(member));
 
       const capture = await manager.captureEnvironmentForMigration(RESOURCE_ID);
-      assert.equal(capture.environment.managedVariableCount, 4);
+      assert.equal(capture.environment.managedVariableCount, 5);
       assert.equal(capture.guarantees.runtimeMutated, false);
       assert.deepEqual(dockerCalls.map((call) => call.method), ['GET', 'GET']);
     } finally {
