@@ -43,14 +43,20 @@ export const ApplicationProvider = ({ children }) => {
     const allowed = application.capabilities && application.capabilities[action];
     const containerId = application.runtime && application.runtime.containerId;
     const hostService = application.installation && application.installation.state === 'host-service';
-    if (!allowed || (!containerId && !hostService)) throw new Error('Bu işlem uygulama için kullanılamıyor');
+    const inactiveDefinition = application.installation &&
+      application.installation.state === 'inactive-definition' && action === 'start';
+    if (!allowed || (!containerId && !hostService && !inactiveDefinition)) {
+      throw new Error('Bu işlem uygulama için kullanılamıyor');
+    }
     if (pendingActions.current.has(application.id)) throw new Error('Uygulamada başka bir işlem sürüyor');
 
     pendingActions.current.add(application.id);
     setActions((current) => ({ ...current, [application.id]: action }));
     try {
       await apiFetch(
-        hostService
+        inactiveDefinition
+          ? `/api/inactive-definitions/${application.id}/start`
+          : hostService
           ? `/api/host-services/${application.id}/${action}`
           : `/api/containers/${containerId}/${action}`,
         { method: 'POST' }

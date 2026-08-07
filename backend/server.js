@@ -63,6 +63,10 @@ const {
 } = require('./runtimeTransferManager');
 const { createTraefikCertificateImporter } = require('./traefikCertificateImporter');
 const { createInactiveDefinitionIngressReconciler } = require('./inactiveDefinitionIngressReconciler');
+const {
+  InactiveDefinitionRuntimeError,
+  createInactiveDefinitionRuntimeManager
+} = require('./inactiveDefinitionRuntimeManager');
 const { createUiApprovalManager } = require('./uiApprovalManager');
 const { createBackupManager } = require('./backupManager');
 const {
@@ -946,6 +950,15 @@ const runtimeTransferManager = createRuntimeTransferManager({
   readProviderRecoveryArtifact: (artifact) => coolifyMigrationReader.readRecoveryArtifact(artifact),
   routingNetwork: process.env.FOXOS_ROUTE_NETWORK || 'foxos-routing'
 });
+const inactiveDefinitionRuntimeManager = createInactiveDefinitionRuntimeManager({
+  dataRoot: DATA_ROOT,
+  dockerRequest,
+  resourceRegistry,
+  readRecoveryArtifact: (artifact) => coolifyMigrationReader.readRecoveryArtifact(artifact),
+  certificateImporter,
+  ingressAuthority: ingressAuthorityManager,
+  routingNetwork: process.env.FOXOS_ROUTE_NETWORK || 'foxos-routing'
+});
 const statelessMigrationManager = createStatelessMigrationManager({
   dataRoot: DATA_ROOT,
   getServerMigrationPlan: (planId) => migrationOrchestrator.getPlan(planId),
@@ -1238,6 +1251,17 @@ function sendRuntimeTransferError(res, error, action) {
   });
 }
 
+function sendInactiveDefinitionRuntimeError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof InactiveDefinitionRuntimeError)
+      ? 'Pasif uygulama etkinleştirilemedi'
+      : error.message,
+    code: error.code || 'inactive-definition-runtime-error'
+  });
+}
+
 function sendStatelessMigrationError(res, error, action) {
   const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
   if (status >= 500) console.error(action + ':', error.message);
@@ -1401,13 +1425,23 @@ async function getApplicationInventory() {
       containers: context.containers,
       resources: snapshot && snapshot.resources || [],
       domainPreferences: applicationDomainManager.primaryDomains()
-    }).map((application) => ({
-      ...application,
-      desktopShortcutVisible: desktopShortcutManager.isVisible(
-        application.id,
-        application.desktopShortcutDefaultVisible !== false
-      )
-    }))
+    }).map((application) => {
+      const inactiveCapability = application.installation &&
+        application.installation.state === 'inactive-definition'
+        ? inactiveDefinitionRuntimeManager.capability(application.id)
+        : null;
+      return {
+        ...application,
+        capabilities: inactiveCapability && inactiveCapability.available === true
+          ? { ...application.capabilities, start: true }
+          : application.capabilities,
+        activation: inactiveCapability,
+        desktopShortcutVisible: desktopShortcutManager.isVisible(
+          application.id,
+          application.desktopShortcutDefaultVisible !== false
+        )
+      };
+    })
   };
 }
 
@@ -2526,6 +2560,16 @@ app.put('/api/applications/:applicationId/desktop-shortcut', async (req, res) =>
     ) });
   } catch (error) {
     sendDesktopShortcutError(res, error, 'Could not update desktop shortcut visibility');
+  }
+});
+
+app.post('/api/inactive-definitions/:resourceId/start', async (req, res) => {
+  try {
+    res.status(201).json({
+      operation: await inactiveDefinitionRuntimeManager.activate(req.params.resourceId)
+    });
+  } catch (error) {
+    sendInactiveDefinitionRuntimeError(res, error, 'Could not activate inactive application definition');
   }
 });
 

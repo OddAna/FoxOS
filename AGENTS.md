@@ -149,6 +149,15 @@
   until a verifiable runtime exists. An explicit shortcut override may expose
   the record on the desktop but must not create or imply a runtime. Never use a
   provider UUID as its visible primary name.
+- Starting an adopted inactive provider definition is a server-owned recovery
+  transaction, never a provider API call. Accept only one image-based Compose
+  service with a Docker health check, one exact recovered public route and
+  existing named volumes; reject builds, bind mounts, host/device privileges,
+  custom process or network modes and ambiguous routes. Resolve environment
+  only from authenticated encrypted recovery, never persist its values, pull
+  and bind the immutable image ID, create a controller-neutral readable runtime,
+  prove health plus trusted FoxOS HTTPS before success and remove only the new
+  candidate on failure. Preserve the original volume and inactive route.
 - A completed stateless migration keeps its logical application identity after
   an explicitly cleaned cold source disappears. Registry may fall back only to
   the exact operation-bound, FoxOS-managed candidate; Application Manager must

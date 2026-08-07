@@ -374,6 +374,30 @@ test('multiple WordPress instances remain separate and use their route identitie
   assert.equal(discovered.every((appState) => appState.logoUrl.endsWith('/wordpress.svg')), true);
 });
 
+test('a recovered Firefox runtime keeps its readable application identity and icon', () => {
+  const container = {
+    Id: '6'.repeat(64),
+    Image: 'jlesage/firefox@sha256:' + '7'.repeat(64),
+    Names: ['/firefox'],
+    State: 'running',
+    Status: 'Up 1 minute (healthy)',
+    Labels: {
+      'com.foxos.managed': 'true',
+      'com.foxos.app.id': 'res_' + '8'.repeat(32),
+      'com.foxos.app.name': 'firefox'
+    },
+    Ports: []
+  };
+
+  const discovered = discoveredAppStates([container], []);
+  assert.equal(discovered.length, 1);
+  assert.equal(discovered[0].profileId, 'firefox');
+  assert.equal(discovered[0].name, 'Firefox');
+  assert.equal(discovered[0].containerPort, null);
+  assert.equal(discovered[0].managedByFoxOS, true);
+  assert.equal(discovered[0].logoUrl.endsWith('/firefox.svg'), true);
+});
+
 test('custom application icon discovery resolves safe favicon sources', () => {
   const candidates = iconCandidatesFromHtml(`
     <link href="/assets/app-mark.svg" rel="icon">

@@ -467,3 +467,71 @@ test('host-native services are server-owned and expose real systemd lifecycle co
   assert.equal(failedService.capabilities.start, true);
   assert.equal(failedService.capabilities.stop, false);
 });
+
+test('a recovered inactive definition runtime replaces the stopped definition card without duplication', () => {
+  const logicalResourceId = 'res_' + '1'.repeat(32);
+  const candidateResourceId = 'res_' + '2'.repeat(32);
+  const candidateContainerId = '3'.repeat(64);
+  const applications = buildApplicationInventory({
+    appStates: [{
+      id: 'discovered-firefox',
+      installed: true,
+      canManage: true,
+      managedByFoxOS: true,
+      installationSource: 'foxos',
+      name: 'firefox',
+      publisher: 'Sunucu',
+      externalUrl: null,
+      containerId: candidateContainerId,
+      containerName: 'firefox',
+      state: 'running',
+      status: 'Up 1 minute (healthy)'
+    }],
+    containers: [{
+      Id: candidateContainerId,
+      Image: 'jlesage/firefox@sha256:' + '4'.repeat(64),
+      Names: ['/firefox'],
+      State: 'running',
+      Status: 'Up 1 minute (healthy)'
+    }],
+    resources: [{
+      id: logicalResourceId,
+      kind: 'provider-definition',
+      name: 'firefox',
+      provider: 'coolify',
+      ownership: 'observed',
+      provenance: { externalDefinition: { providerKind: 'service', serviceType: 'firefox' } },
+      runtime: { containerId: null, state: 'stopped' },
+      management: {
+        owner: 'foxos',
+        state: 'active',
+        lifecycle: 'inactive-definition-runtime',
+        candidateContainerId,
+        candidateResourceId,
+        domains: ['firefox.example.com'],
+        authorityActive: true
+      }
+    }, {
+      id: candidateResourceId,
+      kind: 'container',
+      name: 'firefox',
+      provider: 'foxos',
+      ownership: 'foxos-managed',
+      runtime: {
+        containerId: candidateContainerId,
+        state: 'running',
+        health: { status: 'healthy' }
+      }
+    }]
+  });
+
+  assert.equal(applications.length, 1);
+  assert.equal(applications[0].id, logicalResourceId);
+  assert.equal(applications[0].name, 'firefox.example.com');
+  assert.equal(applications[0].externalUrl, 'https://firefox.example.com');
+  assert.equal(applications[0].runtime.containerId, candidateContainerId);
+  assert.equal(applications[0].runtime.operationalState, 'running');
+  assert.equal(applications[0].managedByServer, true);
+  assert.equal(applications[0].capabilities.stop, true);
+  assert.equal(applications[0].capabilities.start, false);
+});

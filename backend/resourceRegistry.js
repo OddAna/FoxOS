@@ -15,6 +15,7 @@ const VERIFIED_RUNTIME_TRANSFER_STATUSES = new Set([
   'server-runtime-adopted',
   'server-definition-adopted'
 ]);
+const VERIFIED_INACTIVE_RUNTIME_STATUS = 'server-definition-runtime-active';
 
 const SAFE_LABEL_KEYS = new Set([
   'com.foxos.managed',
@@ -319,6 +320,57 @@ function readFoxosMigrationManagement(dataRoot, resources = []) {
         completedAt: operation.completedAt || null
       });
     }
+  }
+
+  const inactiveRuntimeOperations = listJson(path.join(
+    dataRoot,
+    'inactive-definition-runtimes',
+    'operations'
+  ));
+  for (const operation of inactiveRuntimeOperations) {
+    if (
+      !operation || operation.status !== VERIFIED_INACTIVE_RUNTIME_STATUS ||
+      !/^rtop_[a-f0-9]{32}$/.test(String(operation.operationId || '')) ||
+      !/^res_[a-f0-9]{32}$/.test(String(operation.resourceId || '')) ||
+      !/^[a-f0-9]{12,64}$/.test(String(operation.candidateContainerId || ''))
+    ) continue;
+    const candidateResource = resourcesByContainerId.get(operation.candidateContainerId) || null;
+    const route = operation.route || {};
+    const authorityRoute = route.routeId && authority && authority.routes && authority.routes[route.routeId] || null;
+    const domains = route.domain ? [route.domain] : [];
+    const routeAuthorityActive = Boolean(
+      route.domain && authority && authority.owner === 'foxos' &&
+      authority.publicAuthorityActive === true && authorityRoute &&
+      authorityRoute.operationId === operation.operationId && authorityRoute.status === 'active' &&
+      authority.domains && authority.domains[route.domain] === 'foxos'
+    );
+    const candidateRunning = Boolean(
+      candidateResource && candidateResource.runtime && candidateResource.runtime.state === 'running'
+    );
+    const trafficVerified = Boolean(
+      operation.trafficProof && operation.trafficProof.healthy === true &&
+      operation.trafficProof.tlsValid === true && operation.trafficProof.expectedRoute === true
+    );
+    recordManagement(operation.resourceId, {
+      owner: 'foxos',
+      logicalResourceId: operation.resourceId,
+      state: routeAuthorityActive && trafficVerified ? 'active' : 'attention-required',
+      lifecycle: 'inactive-definition-runtime',
+      operationId: operation.operationId,
+      routeId: route.routeId || null,
+      domains,
+      candidateContainerId: operation.candidateContainerId,
+      candidateResourceId: candidateResource && candidateResource.id || operation.candidateResourceId || null,
+      authorityActive: routeAuthorityActive,
+      candidateRunning,
+      trafficVerified,
+      sourcePreserved: true,
+      sourceName: operation.application && operation.application.name || null,
+      sourceProvider: 'coolify',
+      sourceOwnership: 'observed',
+      automaticMigrationAllowed: false,
+      completedAt: operation.completedAt || null
+    });
   }
   return managementByResourceId;
 }

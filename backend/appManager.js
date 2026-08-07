@@ -49,6 +49,17 @@ const DISCOVERED_APP_PROFILES = Object.freeze([
     description: 'WhatsApp bağlantıları ve otomasyonları için kendi sunucunuzda çalışan API.'
   }),
   Object.freeze({
+    id: 'firefox',
+    name: 'Firefox',
+    publisher: 'Mozilla',
+    category: 'Web Apps',
+    containerPort: 5800,
+    logoUrl: DASHBOARD_ICON_BASE + 'firefox.svg',
+    imageRepositories: Object.freeze(['jlesage/firefox']),
+    serviceNames: Object.freeze(['firefox']),
+    description: 'Sunucuda çalışan ve tarayıcıdan erişilebilen Firefox masaüstü uygulaması.'
+  }),
+  Object.freeze({
     id: 'n8n',
     name: 'n8n',
     publisher: 'n8n',
@@ -298,10 +309,13 @@ function isDiscoverableApplication(container) {
   );
   const hasUsableEndpoint = Boolean(externalUrlForContainer(container) || publishedPortForContainer(container));
   const managedMigrationCandidate = isManagedMigrationCandidate(container);
+  const managedApplication = labels[MANAGED_LABEL] === 'true' &&
+    /^res_[a-f0-9]{32}$/.test(String(labels[APP_ID_LABEL] || ''));
 
   return Boolean(
     profile ||
     managedMigrationCandidate ||
+    managedApplication ||
     (isCoolifyApplication && (hasUsableEndpoint || container.State !== 'running')) ||
     (hasUsableEndpoint && labels['coolify.managed'] !== 'true')
   );

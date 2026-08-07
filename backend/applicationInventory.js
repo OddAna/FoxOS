@@ -382,18 +382,25 @@ function buildApplicationInventory({ appStates = [], containers = [], resources 
     .filter((resource) => resource && resource.runtime && resource.runtime.containerId)
     .map((resource) => [resource.runtime.containerId, resource]));
   const consumedContainerIds = new Set();
+  const consumedResourceIds = new Set();
   const applications = [];
 
   for (const sourceResource of resources) {
     const management = sourceResource && sourceResource.management;
     const sourceContainerId = sourceResource && sourceResource.runtime && sourceResource.runtime.containerId;
     const candidateContainerId = management && management.candidateContainerId;
+    const recoveredDefinitionRuntime = Boolean(
+      sourceResource && sourceResource.kind === 'provider-definition' &&
+      management && management.lifecycle === 'inactive-definition-runtime'
+    );
     if (
-      !sourceContainerId || !candidateContainerId || !management || management.owner !== 'foxos'
+      (!sourceContainerId && !recoveredDefinitionRuntime) || !candidateContainerId ||
+      !management || management.owner !== 'foxos'
     ) continue;
 
     const groupStates = installedApps.filter((app) => (
-      app.containerId === sourceContainerId || app.containerId === candidateContainerId
+      (sourceContainerId && app.containerId === sourceContainerId) ||
+      app.containerId === candidateContainerId
     ));
     if (!groupStates.length) continue;
 
@@ -424,6 +431,7 @@ function buildApplicationInventory({ appStates = [], containers = [], resources 
     }));
     consumedContainerIds.add(sourceContainerId);
     consumedContainerIds.add(candidateContainerId);
+    consumedResourceIds.add(sourceResource.id);
   }
 
   for (const app of installedApps) {
@@ -453,7 +461,9 @@ function buildApplicationInventory({ appStates = [], containers = [], resources 
     }));
 
   for (const resource of resources
-    .filter((candidate) => candidate && candidate.kind === 'provider-definition')
+    .filter((candidate) => (
+      candidate && candidate.kind === 'provider-definition' && !consumedResourceIds.has(candidate.id)
+    ))
     .sort((left, right) => left.id.localeCompare(right.id))) {
     const declaredDomains = definitionRoutes(resource)
       .map(externalHostname)

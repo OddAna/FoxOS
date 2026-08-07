@@ -433,6 +433,13 @@ target blocks only adoption/migration operations that require restore proof.
   explicit persistent shortcut; schema-v1 shortcut choices migrate without
   loss. Duplicate unnamed definitions receive deterministic visible ordinals
   instead of exposing provider UUIDs.
+- [x] Activate adopted inactive single-service definitions without restarting
+  or calling the old provider. Compile only a bounded encrypted-recovery
+  contract, reuse existing named volumes, pull and pin the immutable image,
+  require Docker health plus trusted FoxOS HTTPS, keep secrets out of operation
+  state and roll back only the newly created candidate on failure. Replace the
+  stopped definition card with the verified runtime while preserving its stable
+  logical application and desktop shortcut.
 - [x] Include discovered administrator-owned systemd units and WireGuard
   interfaces in the same Application Manager inventory with their real unit and
   active/failed/stopped state. Keep them off the desktop by default, allow an

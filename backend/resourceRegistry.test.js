@@ -878,3 +878,52 @@ test('a preserved rollback container does not create a false active host-port co
   assert.equal(conflicts.some((conflict) => conflict.type === 'host-port'), false);
   assert.equal(conflicts.some((conflict) => conflict.type === 'shared-volume'), true);
 });
+
+test('inactive definition runtime projects its verified candidate onto the logical resource', () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-registry-inactive-runtime-'));
+  const resourceId = 'res_' + '1'.repeat(32);
+  const candidateResourceId = 'res_' + '2'.repeat(32);
+  const candidateContainerId = '3'.repeat(64);
+  const operationId = 'rtop_' + '4'.repeat(32);
+  const routeId = 'smroute_' + '5'.repeat(24);
+  const domain = 'firefox.example.com';
+  fs.mkdirSync(path.join(dataRoot, 'inactive-definition-runtimes', 'operations'), { recursive: true });
+  fs.mkdirSync(path.join(dataRoot, 'ingress'), { recursive: true });
+  fs.writeFileSync(path.join(
+    dataRoot,
+    'inactive-definition-runtimes',
+    'operations',
+    operationId + '.json'
+  ), JSON.stringify({
+    schemaVersion: 1,
+    operationId,
+    resourceId,
+    status: 'server-definition-runtime-active',
+    candidateContainerId,
+    candidateResourceId,
+    application: { name: 'firefox' },
+    route: { routeId, domain, path: '/', privatePort: 5800 },
+    trafficProof: { healthy: true, tlsValid: true, expectedRoute: true },
+    completedAt: '2026-08-07T14:00:00.000Z'
+  }));
+  fs.writeFileSync(path.join(dataRoot, 'ingress', 'authority.json'), JSON.stringify({
+    owner: 'foxos',
+    publicAuthorityActive: true,
+    domains: { [domain]: 'foxos' },
+    routes: { [routeId]: { operationId, domain, status: 'active' } }
+  }));
+
+  const management = readFoxosMigrationManagement(dataRoot, [{
+    id: candidateResourceId,
+    runtime: { containerId: candidateContainerId, state: 'running' }
+  }]).get(resourceId);
+  assert.equal(management.owner, 'foxos');
+  assert.equal(management.state, 'active');
+  assert.equal(management.lifecycle, 'inactive-definition-runtime');
+  assert.equal(management.candidateContainerId, candidateContainerId);
+  assert.equal(management.candidateResourceId, candidateResourceId);
+  assert.deepEqual(management.domains, [domain]);
+  assert.equal(management.authorityActive, true);
+  assert.equal(management.candidateRunning, true);
+  assert.equal(management.trafficVerified, true);
+});
