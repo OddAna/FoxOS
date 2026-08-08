@@ -118,7 +118,7 @@ async function migrationSourceContainer({ dataRoot, details, dockerRequest }) {
   if (CONTAINER_ID_PATTERN.test(directSourceId)) {
     try {
       const source = await dockerRequest('GET', '/containers/' + directSourceId + '/json');
-      if (source && source.Id === directSourceId && source.Image === details.Image) return source;
+      if (source && source.Id === directSourceId && IMAGE_DIGEST_PATTERN.test(String(source.Image || ''))) return source;
     } catch {
       // A retained stateless source may have been removed after its rollback window.
     }
@@ -141,7 +141,7 @@ async function migrationSourceContainer({ dataRoot, details, dockerRequest }) {
   if (
     !plan || plan.planId !== operation.planId || !plan.resource || plan.resource.resourceId !== sourceResourceId ||
     !source || !CONTAINER_ID_PATTERN.test(String(source.containerId || '')) ||
-    !IMAGE_DIGEST_PATTERN.test(String(source.imageId || '')) || source.imageId !== details.Image
+    !IMAGE_DIGEST_PATTERN.test(String(source.imageId || ''))
   ) return null;
   try {
     const sourceDetails = await dockerRequest('GET', '/containers/' + source.containerId + '/json');

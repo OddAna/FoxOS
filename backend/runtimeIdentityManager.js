@@ -48,6 +48,7 @@ function definedObject(value) {
 function clonedHostConfig(hostConfig) {
   return definedObject({
     Binds: hostConfig.Binds,
+    Mounts: hostConfig.Mounts,
     NetworkMode: hostConfig.NetworkMode,
     RestartPolicy: hostConfig.RestartPolicy,
     AutoRemove: hostConfig.AutoRemove,

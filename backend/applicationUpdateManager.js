@@ -14,6 +14,8 @@ const {
   resolveComposeProject
 } = require('./composeSource');
 const { ApplicationUpdateError } = require('./applicationUpdateChecker');
+const { imagePullPath } = require('./inactiveDefinitionRuntimeManager');
+const { clonedContainerPayload, networkAttachments } = require('./runtimeIdentityManager');
 
 const APPLICATION_UPDATE_OPERATION_SCHEMA_VERSION = 1;
 const APPLY_APPLICATION_UPDATE_CONFIRMATION = 'UYGULAMA GÜNCELLEMESİNİ UYGULA';
@@ -23,7 +25,11 @@ const PLAN_ID_PATTERN = /^auplan_[a-f0-9]{32}$/;
 const OPERATION_ID_PATTERN = /^auop_[a-f0-9]{32}$/;
 const COMPOSE_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/;
 const IMAGE_ID_PATTERN = /^sha256:[a-f0-9]{64}$/;
+const IMAGE_DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/;
 const VOLUME_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,254}$/;
+const CONTAINER_ID_PATTERN = /^[a-f0-9]{12,64}$/;
+const STATEFUL_MIGRATION_ID_PATTERN = /^stmop_[a-f0-9]{32}$/;
+const STATELESS_MIGRATION_ID_PATTERN = /^smop_[a-f0-9]{32}$/;
 const MAX_UPDATE_SERVICES = 16;
 const MAX_UPDATE_VOLUMES = 16;
 const MAX_SNAPSHOT_BYTES = 64 * 1024 * 1024 * 1024;
@@ -48,6 +54,110 @@ function recordPath(directory, id) {
 
 function nowIso(clock) {
   return new Date(clock()).toISOString();
+}
+
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]));
+}
+
+function managedRuntimeFingerprint(details) {
+  const material = {
+    id: details && details.Id || null,
+    image: details && details.Image || null,
+    name: details && details.Name || null,
+    config: details && details.Config || null,
+    hostConfig: details && details.HostConfig || null,
+    mounts: details && details.Mounts || [],
+    networks: networkAttachments(details)
+  };
+  return 'sha256:' + crypto.createHash('sha256').update(JSON.stringify(canonicalize(material))).digest('hex');
+}
+
+function managedBindingDescriptor(dataRoot, details) {
+  const labels = details && details.Config && details.Config.Labels || {};
+  const statefulId = String(labels['com.foxos.stateful-migration.id'] || '').trim();
+  const statelessId = String(labels['com.foxos.stateless-migration.id'] || '').trim();
+  if (STATEFUL_MIGRATION_ID_PATTERN.test(statefulId)) {
+    return {
+      kind: 'stateful',
+      expectedStatus: 'traffic-on-server-source-preserved',
+      operationId: statefulId,
+      operationFile: path.join(dataRoot, 'stateful-migrations', 'operations', statefulId + '.json'),
+      adapterFile: path.join(dataRoot, 'production-stateful-adapter', 'operations', statefulId + '.json')
+    };
+  }
+  if (STATELESS_MIGRATION_ID_PATTERN.test(statelessId)) {
+    return {
+      kind: 'stateless',
+      expectedStatus: 'traffic-on-foxos-source-preserved',
+      operationId: statelessId,
+      operationFile: path.join(dataRoot, 'stateless-migrations', 'operations', statelessId + '.json'),
+      adapterFile: path.join(dataRoot, 'production-stateless-adapter', 'operations', statelessId + '.json')
+    };
+  }
+  return null;
+}
+
+function verifyManagedBinding(dataRoot, details) {
+  const descriptor = managedBindingDescriptor(dataRoot, details);
+  if (!descriptor) return null;
+  const operation = readJson(descriptor.operationFile);
+  const adapter = readJson(descriptor.adapterFile);
+  if (
+    !operation || operation.operationId !== descriptor.operationId || operation.status !== descriptor.expectedStatus ||
+    !adapter || adapter.operationId !== descriptor.operationId ||
+    !operation.candidate || operation.candidate.containerId !== details.Id ||
+    !adapter.candidate || adapter.candidate.containerId !== details.Id
+  ) return null;
+  return descriptor;
+}
+
+function persistManagedBinding(dataRoot, previousDetails, replacementDetails, imageReference) {
+  const descriptor = verifyManagedBinding(dataRoot, previousDetails);
+  if (!descriptor) {
+    throw new ApplicationUpdateError(
+      'Sunucu çalışma kaydı güncel container kimliğine bağlı değil.',
+      409,
+      'application-update-managed-binding-stale'
+    );
+  }
+  const operation = readJson(descriptor.operationFile);
+  const adapter = readJson(descriptor.adapterFile);
+  const originalAdapter = JSON.parse(JSON.stringify(adapter));
+  operation.candidate = {
+    ...operation.candidate,
+    containerId: replacementDetails.Id,
+    imageId: replacementDetails.Image,
+    imageDigest: replacementDetails.Image,
+    imageReference
+  };
+  adapter.candidate = {
+    ...adapter.candidate,
+    containerId: replacementDetails.Id,
+    imageId: replacementDetails.Image,
+    imageReference
+  };
+  adapter.updatedAt = new Date().toISOString();
+  atomicWriteJson(descriptor.adapterFile, adapter);
+  try {
+    atomicWriteJson(descriptor.operationFile, operation);
+  } catch (error) {
+    atomicWriteJson(descriptor.adapterFile, originalAdapter);
+    throw error;
+  }
+  return descriptor;
+}
+
+function repositoryDigestMatches(imageDetails, digest) {
+  return IMAGE_DIGEST_PATTERN.test(String(digest || '')) &&
+    (imageDetails && imageDetails.RepoDigests || []).some((value) => String(value).endsWith('@' + digest));
+}
+
+function replacementContainerName(name, operationId) {
+  const suffix = '-previous-' + operationId.slice(-8);
+  return String(name || '').slice(0, Math.max(1, 63 - suffix.length)).replace(/-+$/g, '') + suffix;
 }
 
 function dependsOnNames(service) {
@@ -464,6 +574,8 @@ function createApplicationUpdateManager({
     return { skipped: false, status: response.status };
   },
   quiesce = () => new Promise((resolve) => setTimeout(resolve, 1000)),
+  wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  readinessAttempts = 60,
   clock = () => new Date(),
   randomUUID = () => crypto.randomUUID()
 }) {
@@ -479,7 +591,10 @@ function createApplicationUpdateManager({
     typeof routeRuntime.assertOperationRuntimeBinding !== 'function' ||
     typeof routeRuntime.rebindOperationRuntime !== 'function'
   )) throw new Error('Application update route runtime adapter is invalid');
-  if (typeof quiesce !== 'function') throw new Error('Application update quiesce adapter is invalid');
+  if (
+    typeof quiesce !== 'function' || typeof wait !== 'function' ||
+    !Number.isInteger(readinessAttempts) || readinessAttempts < 1 || readinessAttempts > 300
+  ) throw new Error('Application update timing policy is invalid');
   const root = path.join(dataRoot, 'application-updates');
   const plansRoot = path.join(root, 'plans');
   const operationsRoot = path.join(root, 'operations');
@@ -521,11 +636,17 @@ function createApplicationUpdateManager({
     }
     const project = resolveComposeProject(details, hostRoot);
     if (!project || !project.service) {
-      throw new ApplicationUpdateError(
-        'Bu uygulamanın doğrulanmış Compose kaynağı yok; otomatik güncelleme uygulanamaz.',
-        409,
-        'application-update-compose-required'
-      );
+      const binding = labels['com.foxos.managed'] === 'true' && application.managedByServer !== false
+        ? verifyManagedBinding(dataRoot, details)
+        : null;
+      if (!binding) {
+        throw new ApplicationUpdateError(
+          'Bu uygulamanın doğrulanmış Compose veya sunucu çalışma kaynağı yok; otomatik güncelleme uygulanamaz.',
+          409,
+          'application-update-source-required'
+        );
+      }
+      return { application, binding, details, labels, mode: 'server-runtime', project: null };
     }
     if (
       project.files.some((file) => file.hostPath === '/opt/foxos' || file.hostPath.startsWith('/opt/foxos/')) ||
@@ -533,7 +654,124 @@ function createApplicationUpdateManager({
     ) {
       throw new ApplicationUpdateError('FoxOS kurulum dosyaları bu işlemden korunuyor.', 409, 'core-compose-path-protected');
     }
-    return { application, details, labels, project };
+    return { application, binding: null, details, labels, mode: 'compose', project };
+  }
+
+  function writableNamedVolumes(details) {
+    const volumes = new Map();
+    for (const mount of details && details.Mounts || []) {
+      if (mount.RW === false) continue;
+      if (mount.Type !== 'volume' || !mount.Name) {
+        throw new ApplicationUpdateError(
+          'Uygulama yazılabilir bir bind/özel mount kullanıyor; geri alma garantisi olmadan güncelleme engellendi.',
+          409,
+          'application-update-writable-mount-unsupported'
+        );
+      }
+      if (!VOLUME_NAME_PATTERN.test(mount.Name)) {
+        throw new ApplicationUpdateError('Docker volume adı geçersiz.', 409, 'application-update-volume-invalid');
+      }
+      volumes.set(mount.Name, { name: mount.Name, destination: mount.Destination });
+    }
+    if (volumes.size > MAX_UPDATE_VOLUMES) {
+      throw new ApplicationUpdateError('Güncellenecek volume sayısı güvenli sınırı aşıyor.', 409, 'application-update-volume-limit');
+    }
+    return volumes;
+  }
+
+  async function assertVolumesExclusive(volumes, targetIds) {
+    if (!volumes.size) return;
+    const allContainers = await dockerRequest('GET', '/containers/json?all=true');
+    for (const container of allContainers || []) {
+      if (targetIds.has(container.Id) || container.State !== 'running') continue;
+      const shared = (container.Mounts || []).find((mount) => mount.Name && volumes.has(mount.Name));
+      if (shared) {
+        throw new ApplicationUpdateError(
+          shared.Name + ' volume alanı güncelleme grubu dışındaki çalışan bir container tarafından kullanılıyor.',
+          409,
+          'application-update-shared-volume-blocked'
+        );
+      }
+    }
+  }
+
+  async function createManagedRuntimePlan(resolved, update) {
+    const details = resolved.details;
+    const currentHealth = details.State && details.State.Health && details.State.Health.Status;
+    if (!details.State || details.State.Running !== true || (currentHealth && currentHealth !== 'healthy')) {
+      throw new ApplicationUpdateError(
+        'Sunucu çalışma örneği sağlıklı ve çalışır durumda değil.',
+        409,
+        'application-update-source-unhealthy'
+      );
+    }
+    if (
+      !IMAGE_ID_PATTERN.test(String(details.Image || '')) ||
+      !update.source || !/^[a-zA-Z0-9][a-zA-Z0-9._/:@-]{0,511}$/.test(String(update.source.reference || '')) ||
+      !update.latest || !IMAGE_DIGEST_PATTERN.test(String(update.latest.digest || ''))
+    ) {
+      throw new ApplicationUpdateError(
+        'Sunucu çalışma örneğinin güncel registry kaynağı değişmez kimlikle kanıtlanamadı.',
+        409,
+        'application-update-source-unproven'
+      );
+    }
+    const containerName = safeContainerName(details.Name);
+    const runtimeReference = String(details.Config && details.Config.Image || '').trim();
+    const networks = networkAttachments(details);
+    const initialNetwork = String(details.HostConfig && details.HostConfig.NetworkMode || '');
+    if (
+      !containerName || !COMPOSE_NAME_PATTERN.test(containerName) || !runtimeReference ||
+      !networks.length || !networks.some((network) => network.name === initialNetwork)
+    ) {
+      throw new ApplicationUpdateError(
+        'Sunucu çalışma örneğinin container veya ağ kimliği güvenle yeniden üretilemiyor.',
+        409,
+        'application-update-runtime-contract-unsupported'
+      );
+    }
+    const volumes = writableNamedVolumes(details);
+    await assertVolumesExclusive(volumes, new Set([details.Id]));
+    const planId = 'auplan_' + randomUUID().replace(/-/g, '');
+    const createdAt = nowIso(clock);
+    const plan = {
+      schemaVersion: APPLICATION_UPDATE_OPERATION_SCHEMA_VERSION,
+      planId,
+      applicationId: resolved.application.id,
+      applicationName: resolved.application.name,
+      createdAt,
+      expiresAt: new Date(new Date(createdAt).getTime() + 15 * 60 * 1000).toISOString(),
+      status: 'ready',
+      update,
+      project: {
+        mode: 'server-runtime',
+        projectName: 'server-runtime',
+        serviceName: containerName,
+        workingDirectory: null,
+        files: [],
+        rollbackOverrides: [],
+        imageReference: update.source.reference,
+        runtimeReference,
+        runtimeFingerprint: managedRuntimeFingerprint(details),
+        bindingKind: resolved.binding.kind,
+        bindingOperationId: resolved.binding.operationId
+      },
+      routeBinding: routeRuntime ? routeRuntime.operationRuntimeBinding(details.Id) : null,
+      services: [{
+        name: containerName,
+        action: 'pull',
+        containerId: details.Id,
+        containerName,
+        imageId: details.Image,
+        running: true,
+        health: currentHealth || 'running'
+      }],
+      volumes: [...volumes.values()],
+      publicUrl: resolved.application.externalUrl || null,
+      providerMayOverwrite: false
+    };
+    atomicWriteJson(recordPath(plansRoot, planId), plan);
+    return publicPlan(plan);
   }
 
   async function createPlan(applicationId) {
@@ -546,6 +784,7 @@ function createApplicationUpdateManager({
         'application-update-not-available'
       );
     }
+    if (resolved.mode === 'server-runtime') return createManagedRuntimePlan(resolved, update);
     const services = mergeComposeServices(resolved.project.files);
     const serviceNames = reverseDependentServices(services, resolved.project.serviceName);
     if (!serviceNames.length || serviceNames.length > MAX_UPDATE_SERVICES || serviceNames.some((name) => !COMPOSE_NAME_PATTERN.test(name))) {
@@ -711,6 +950,35 @@ function createApplicationUpdateManager({
       throw new ApplicationUpdateError('Güncelleme planının süresi doldu; yeniden denetleyin.', 409, 'application-update-plan-expired');
     }
     const resolved = await resolveApplication(plan.applicationId);
+    if (plan.project.mode === 'server-runtime') {
+      const service = plan.services[0];
+      if (
+        resolved.mode !== 'server-runtime' || resolved.details.Id !== service.containerId ||
+        resolved.details.Image !== service.imageId ||
+        managedRuntimeFingerprint(resolved.details) !== plan.project.runtimeFingerprint ||
+        !resolved.binding || resolved.binding.kind !== plan.project.bindingKind ||
+        resolved.binding.operationId !== plan.project.bindingOperationId
+      ) {
+        throw new ApplicationUpdateError(
+          'Sunucu çalışma örneği planlamadan sonra değişti; yeniden denetleyin.',
+          409,
+          'application-update-runtime-drift'
+        );
+      }
+      await assertVolumesExclusive(new Map(plan.volumes.map((volume) => [volume.name, volume])), new Set([service.containerId]));
+      if (plan.routeBinding && routeRuntime) {
+        routeRuntime.assertOperationRuntimeBinding(plan.routeBinding, plan.routeBinding.runtimeContainerId);
+      }
+      const update = await checkApplicationUpdate(plan.applicationId);
+      if (
+        update.updateAvailable !== true ||
+        update.latest && update.latest.digest !== (plan.update.latest && plan.update.latest.digest) ||
+        !update.source || update.source.reference !== plan.project.imageReference
+      ) {
+        throw new ApplicationUpdateError('Registry sonucu değişti; yeniden denetleyin.', 409, 'application-update-registry-drift');
+      }
+      return;
+    }
     if (
       resolved.project.projectName !== plan.project.projectName ||
       resolved.project.serviceName !== plan.project.serviceName ||
@@ -767,6 +1035,193 @@ function createApplicationUpdateManager({
     }
   }
 
+  function mutableTagParts(reference) {
+    const value = String(reference || '');
+    const lastSlash = value.lastIndexOf('/');
+    const lastColon = value.lastIndexOf(':');
+    if (lastColon <= lastSlash || value.includes('@')) return null;
+    const repository = value.slice(0, lastColon);
+    const tag = value.slice(lastColon + 1);
+    return repository && tag ? { repository, tag } : null;
+  }
+
+  async function tagManagedRuntimeImage(imageId, runtimeReference) {
+    const runtimeTag = mutableTagParts(runtimeReference);
+    if (!runtimeTag || !IMAGE_ID_PATTERN.test(String(imageId || ''))) {
+      throw new ApplicationUpdateError(
+        'Sunucu çalışma imajı değiştirilebilir yerel bir etikete bağlı değil.',
+        409,
+        'application-update-runtime-reference-unsupported'
+      );
+    }
+    await dockerRequest(
+      'POST',
+      '/images/' + encodeURIComponent(imageId) + '/tag?repo=' + encodeURIComponent(runtimeTag.repository) +
+        '&tag=' + encodeURIComponent(runtimeTag.tag)
+    );
+    const tagged = await dockerRequest('GET', '/images/' + encodeURIComponent(runtimeReference) + '/json');
+    if (!tagged || tagged.Id !== imageId) {
+      throw new ApplicationUpdateError(
+        'İmaj sunucu çalışma etiketine bağlanamadı.',
+        502,
+        'application-update-runtime-tag-failed'
+      );
+    }
+  }
+
+  async function pullManagedRuntimeImage(plan) {
+    await dockerRequest('POST', imagePullPath(plan.project.imageReference));
+    const pulled = await dockerRequest('GET', '/images/' + encodeURIComponent(plan.project.imageReference) + '/json');
+    if (
+      !pulled || !IMAGE_ID_PATTERN.test(String(pulled.Id || '')) ||
+      !repositoryDigestMatches(pulled, plan.update.latest && plan.update.latest.digest)
+    ) {
+      throw new ApplicationUpdateError(
+        'İndirilen imaj registry güncelleme digest’iyle eşleşmiyor.',
+        409,
+        'application-update-pulled-image-mismatch'
+      );
+    }
+    await tagManagedRuntimeImage(pulled.Id, plan.project.runtimeReference);
+    return pulled;
+  }
+
+  async function waitForManagedRuntime(containerId, imageId) {
+    let last = null;
+    for (let attempt = 1; attempt <= readinessAttempts; attempt += 1) {
+      last = await dockerRequest('GET', '/containers/' + containerId + '/json');
+      const running = Boolean(last && last.State && last.State.Running);
+      const health = last && last.State && last.State.Health && last.State.Health.Status;
+      if (running && last.Image === imageId && (!last.Config.Healthcheck || health === 'healthy')) return last;
+      if (last && last.State && ['exited', 'dead'].includes(last.State.Status)) break;
+      if (attempt < readinessAttempts) await wait(1000);
+    }
+    throw new ApplicationUpdateError(
+      'Yeni sunucu çalışma örneği health kontrolünü geçemedi.',
+      503,
+      'application-update-runtime-health-failed'
+    );
+  }
+
+  async function removeContainer(containerId) {
+    try {
+      const details = await dockerRequest('GET', '/containers/' + containerId + '/json');
+      if (details.State && details.State.Running) {
+        await dockerRequest('POST', '/containers/' + containerId + '/stop?t=10');
+      }
+      await dockerRequest('DELETE', '/containers/' + containerId + '?v=1&force=1');
+    } catch (error) {
+      if (!/No such container/i.test(String(error && error.message || ''))) throw error;
+    }
+  }
+
+  async function replaceManagedRuntime(plan, operation, targetImageId, targetReference, expectedContainerId) {
+    const service = plan.services[0];
+    const current = await dockerRequest('GET', '/containers/' + expectedContainerId + '/json');
+    if (
+      !current || current.Id !== expectedContainerId || !IMAGE_ID_PATTERN.test(String(current.Image || '')) ||
+      current.State && current.State.Running === true
+    ) {
+      throw new ApplicationUpdateError(
+        'Sunucu çalışma örneği güvenli değiştirme öncesinde durmuş ve sabit değil.',
+        409,
+        'application-update-runtime-not-quiesced'
+      );
+    }
+    const name = safeContainerName(current.Name) || service.containerName;
+    const networks = networkAttachments(current);
+    const initialNetwork = String(current.HostConfig && current.HostConfig.NetworkMode || '');
+    const initialAttachment = networks.find((network) => network.name === initialNetwork);
+    if (!name || !initialAttachment) {
+      throw new ApplicationUpdateError(
+        'Sunucu çalışma örneğinin ağ kimliği yeniden üretilemiyor.',
+        409,
+        'application-update-runtime-contract-unsupported'
+      );
+    }
+    const previousName = replacementContainerName(name, operation.operationId);
+    let replacementId = null;
+    let currentRenamed = false;
+    let routeRebound = false;
+    let bindingPersisted = false;
+    let routeBinding = operation.routeRuntime || plan.routeBinding || null;
+    try {
+      await dockerRequest('POST', '/containers/' + current.Id + '/rename?name=' + encodeURIComponent(previousName));
+      currentRenamed = true;
+      const aliasesFor = (attachment) => attachment.aliases.filter((alias) => (
+        alias !== current.Id && alias !== current.Id.slice(0, 12)
+      ));
+      const payload = clonedContainerPayload(current, targetReference, initialNetwork, aliasesFor(initialAttachment));
+      const created = await dockerRequest('POST', '/containers/create?name=' + encodeURIComponent(name), payload);
+      if (!created || !CONTAINER_ID_PATTERN.test(String(created.Id || ''))) {
+        throw new Error('Docker did not return a replacement container identity');
+      }
+      replacementId = created.Id;
+      for (const network of networks.filter((entry) => entry.name !== initialNetwork)) {
+        await dockerRequest('POST', '/networks/' + encodeURIComponent(network.name) + '/connect', {
+          Container: replacementId,
+          EndpointConfig: { Aliases: aliasesFor(network) }
+        });
+      }
+      await dockerRequest('POST', '/containers/' + replacementId + '/start');
+      const replacement = await waitForManagedRuntime(replacementId, targetImageId);
+      if (!replacement.Config || replacement.Config.Image !== targetReference) {
+        throw new Error('Replacement runtime image reference differs from the planned server tag');
+      }
+      if (plan.routeBinding && routeRuntime) {
+        routeBinding = await routeRuntime.rebindOperationRuntime(
+          plan.routeBinding,
+          replacement.Id,
+          routeBinding && routeBinding.runtimeContainerId || current.Id
+        );
+        routeRebound = true;
+      }
+      await publicHealthProbe(plan.publicUrl);
+      persistManagedBinding(dataRoot, current, replacement, targetReference);
+      bindingPersisted = true;
+      let cleanupError = null;
+      try {
+        await dockerRequest('DELETE', '/containers/' + current.Id + '?v=1&force=1');
+      } catch (error) {
+        cleanupError = error.message;
+      }
+      return {
+        cleanupError,
+        routeBinding,
+        service: {
+          name: service.name,
+          containerId: replacement.Id,
+          containerName: name,
+          imageId: replacement.Image,
+          previousImageId: service.imageId,
+          rollbackImage: service.rollbackImage || null,
+          health: replacement.State && replacement.State.Health && replacement.State.Health.Status || 'running'
+        }
+      };
+    } catch (error) {
+      if (bindingPersisted) throw error;
+      if (replacementId) {
+        try { await removeContainer(replacementId); } catch { /* Preserve the primary failure. */ }
+      }
+      let currentRestarted = false;
+      try {
+        await dockerRequest('POST', '/containers/' + current.Id + '/start');
+        currentRestarted = true;
+      } catch { /* Outer rollback records failure. */ }
+      if (routeRebound && routeRuntime && replacementId && currentRestarted) {
+        try {
+          await routeRuntime.rebindOperationRuntime(plan.routeBinding, current.Id, replacementId);
+        } catch { /* Preserve the primary failure for the outer rollback record. */ }
+      }
+      if (currentRenamed) {
+        try {
+          await dockerRequest('POST', '/containers/' + current.Id + '/rename?name=' + encodeURIComponent(name));
+        } catch { /* Preserve the primary failure. */ }
+      }
+      throw error;
+    }
+  }
+
   async function verifyRuntime(plan, operation) {
     const byService = await exactProjectContainers(plan.project.projectName, plan.services.map((service) => service.name));
     const verified = [];
@@ -802,6 +1257,18 @@ function createApplicationUpdateManager({
   }
 
   async function assertServicesStopped(plan) {
+    if (plan.project.mode === 'server-runtime') {
+      const service = plan.services[0];
+      const details = await dockerRequest('GET', '/containers/' + service.containerId + '/json');
+      if (details.State && details.State.Running === true) {
+        throw new ApplicationUpdateError(
+          service.name + ' çalışma örneği durmadı; veri yedeği alınmadan işlem iptal edildi.',
+          409,
+          'application-update-service-stop-unproven'
+        );
+      }
+      return;
+    }
     const byService = await exactProjectContainers(plan.project.projectName, plan.services.map((service) => service.name));
     for (const service of plan.services) {
       const container = byService.get(service.name);
@@ -850,6 +1317,56 @@ function createApplicationUpdateManager({
   }
 
   async function restoreOperation(plan, operation, { restoreVolumes = true } = {}) {
+    if (plan.project.mode === 'server-runtime') {
+      const service = operation.services[0] || {};
+      const currentId = service.containerId || plan.services[0].containerId;
+      let current = await dockerRequest('GET', '/containers/' + currentId + '/json');
+      if (current.State && current.State.Running) {
+        await dockerRequest('POST', '/containers/' + current.Id + '/stop?t=10');
+      }
+      current = await dockerRequest('GET', '/containers/' + current.Id + '/json');
+      if (current.State && current.State.Running) {
+        throw new ApplicationUpdateError(
+          'Sunucu çalışma örneği geri alma için durmadı.',
+          409,
+          'application-update-service-stop-unproven'
+        );
+      }
+      if (restoreVolumes && plan.volumes.length) await quiesce();
+      if (restoreVolumes) {
+        for (const volume of plan.volumes) {
+          const snapshot = operation.volumeSnapshots.find((candidate) => candidate.volumeName === volume.name);
+          if (!snapshot) throw new Error('Stateful rollback snapshot is missing for ' + volume.name);
+          await volumeSnapshots.restore({ snapshot, volume });
+        }
+      }
+      const previousImageId = service.previousImageId || plan.services[0].imageId;
+      await tagManagedRuntimeImage(previousImageId, plan.project.runtimeReference);
+      if (current.Image === previousImageId) {
+        await dockerRequest('POST', '/containers/' + current.Id + '/start');
+        const verified = await waitForManagedRuntime(current.Id, previousImageId);
+        await publicHealthProbe(plan.publicUrl);
+        return [{
+          name: plan.services[0].name,
+          containerId: verified.Id,
+          containerName: safeContainerName(verified.Name),
+          imageId: verified.Image,
+          previousImageId,
+          rollbackImage: service.rollbackImage || null,
+          health: verified.State && verified.State.Health && verified.State.Health.Status || 'running'
+        }];
+      }
+      const replaced = await replaceManagedRuntime(
+        plan,
+        operation,
+        previousImageId,
+        plan.project.runtimeReference,
+        current.Id
+      );
+      operation.routeRuntime = replaced.routeBinding;
+      operation.directCleanupError = replaced.cleanupError;
+      return [replaced.service];
+    }
     await composeRunner({ operation: 'stop', project: plan.project, services: plan.services.map((service) => service.name) });
     await assertServicesStopped(plan);
     if (restoreVolumes && plan.volumes.length) await quiesce();
@@ -875,6 +1392,25 @@ function createApplicationUpdateManager({
   }
 
   async function assertRollbackRuntime(plan, operation) {
+    if (plan.project.mode === 'server-runtime') {
+      const expected = operation.services[0];
+      if (!expected || !CONTAINER_ID_PATTERN.test(String(expected.containerId || ''))) {
+        throw new ApplicationUpdateError(
+          'Güncellenmiş sunucu çalışma kimliği bulunamadı.',
+          409,
+          'application-update-rollback-runtime-drift'
+        );
+      }
+      const details = await dockerRequest('GET', '/containers/' + expected.containerId + '/json');
+      if (details.Id !== expected.containerId || details.Image !== expected.imageId) {
+        throw new ApplicationUpdateError(
+          'Güncellemeden sonra sunucu çalışma kimliği değişti; otomatik geri alma engellendi.',
+          409,
+          'application-update-rollback-runtime-drift'
+        );
+      }
+      return;
+    }
     const byService = await exactProjectContainers(plan.project.projectName, plan.services.map((service) => service.name));
     for (const expected of operation.services || []) {
       const container = byService.get(expected.name);
@@ -937,20 +1473,31 @@ function createApplicationUpdateManager({
       await tagPreviousImages(operation, plan);
       operation.services = plan.services.map((service) => ({
         name: service.name,
+        containerId: service.containerId,
+        containerName: service.containerName,
         previousImageId: service.imageId,
         rollbackImage: service.rollbackImage || null
       }));
       atomicWriteJson(recordPath(operationsRoot, operationId), operation);
 
-      const buildServices = plan.services.filter((service) => service.action === 'build').map((service) => service.name);
-      const pullServices = plan.services.filter((service) => service.action === 'pull').map((service) => service.name);
-      if (buildServices.length) await composeRunner({ operation: 'build', project: plan.project, services: buildServices });
-      if (pullServices.length) await composeRunner({ operation: 'pull', project: plan.project, services: pullServices });
+      let managedImage = null;
+      if (plan.project.mode === 'server-runtime') {
+        managedImage = await pullManagedRuntimeImage(plan);
+      } else {
+        const buildServices = plan.services.filter((service) => service.action === 'build').map((service) => service.name);
+        const pullServices = plan.services.filter((service) => service.action === 'pull').map((service) => service.name);
+        if (buildServices.length) await composeRunner({ operation: 'build', project: plan.project, services: buildServices });
+        if (pullServices.length) await composeRunner({ operation: 'pull', project: plan.project, services: pullServices });
+      }
 
       operation.status = 'backing-up';
       operation.message = 'Servisler durduruluyor ve kalıcı veriler şifreli yedekleniyor.';
       atomicWriteJson(recordPath(operationsRoot, operationId), operation);
-      await composeRunner({ operation: 'stop', project: plan.project, services: plan.services.map((service) => service.name) });
+      if (plan.project.mode === 'server-runtime') {
+        await dockerRequest('POST', '/containers/' + plan.services[0].containerId + '/stop?t=10');
+      } else {
+        await composeRunner({ operation: 'stop', project: plan.project, services: plan.services.map((service) => service.name) });
+      }
       servicesStopped = true;
       await assertServicesStopped(plan);
       if (plan.volumes.length) await quiesce();
@@ -966,9 +1513,22 @@ function createApplicationUpdateManager({
       operation.message = 'Yeni imajlar uygulanıyor ve servis sağlığı doğrulanıyor.';
       atomicWriteJson(recordPath(operationsRoot, operationId), operation);
       updatedRuntimeStarted = true;
-      await composeRunner({ operation: 'up', project: plan.project, services: plan.services.map((service) => service.name) });
-      operation.services = await verifyRuntime(plan, operation);
-      operation.rollbackOverrideCleanup = cleanupSupersededRollbackOverrides(plan);
+      if (plan.project.mode === 'server-runtime') {
+        const replaced = await replaceManagedRuntime(
+          plan,
+          operation,
+          managedImage.Id,
+          plan.project.runtimeReference,
+          plan.services[0].containerId
+        );
+        operation.routeRuntime = replaced.routeBinding;
+        operation.directCleanupError = replaced.cleanupError;
+        operation.services = [replaced.service];
+      } else {
+        await composeRunner({ operation: 'up', project: plan.project, services: plan.services.map((service) => service.name) });
+        operation.services = await verifyRuntime(plan, operation);
+        operation.rollbackOverrideCleanup = cleanupSupersededRollbackOverrides(plan);
+      }
       operation.status = 'completed';
       operation.completedAt = nowIso(clock);
       operation.message = 'Güncelleme uygulandı; bağlı servisler ve erişim adresi sağlıklı.';

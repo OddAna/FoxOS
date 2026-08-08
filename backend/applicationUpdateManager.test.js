@@ -330,3 +330,242 @@ test('planning rejects a named volume that another running container can still w
     (error) => error.code === 'application-update-shared-volume-blocked'
   );
 });
+
+test('server-owned stateful runtime updates and rolls back without reactivating its retained provider Compose source', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-managed-update-'));
+  const dataRoot = path.join(root, 'data');
+  const hostRoot = path.join(root, 'host');
+  const operationId = 'stmop_' + '1'.repeat(32);
+  const oldContainerId = 'b'.repeat(64);
+  const newContainerId = 'c'.repeat(64);
+  const rollbackContainerId = 'd'.repeat(64);
+  const oldImageId = 'sha256:' + '2'.repeat(64);
+  const newImageId = 'sha256:' + '3'.repeat(64);
+  const latestDigest = 'sha256:' + '4'.repeat(64);
+  const runtimeReference = 'local/db-example-com:current';
+  const upstreamReference = 'nocodb/nocodb:latest';
+  const operationFile = path.join(dataRoot, 'stateful-migrations/operations', operationId + '.json');
+  const adapterFile = path.join(dataRoot, 'production-stateful-adapter/operations', operationId + '.json');
+  fs.mkdirSync(path.dirname(operationFile), { recursive: true });
+  fs.mkdirSync(path.dirname(adapterFile), { recursive: true });
+  fs.writeFileSync(operationFile, JSON.stringify({
+    operationId,
+    status: 'traffic-on-server-source-preserved',
+    candidate: { containerId: oldContainerId, imageId: oldImageId }
+  }));
+  fs.writeFileSync(adapterFile, JSON.stringify({
+    operationId,
+    candidate: { containerId: oldContainerId, imageId: oldImageId, imageReference: runtimeReference }
+  }));
+
+  const labels = {
+    'com.foxos.managed': 'true',
+    'com.foxos.stateful-migration.id': operationId,
+    'com.foxos.image.reference': runtimeReference
+  };
+  const networkState = {
+    'server-egress': { Aliases: null },
+    'server-routing': { Aliases: ['db-example-com'] }
+  };
+  const baseDetails = (id, image, name = '/db-example-com') => ({
+    Id: id,
+    Image: image,
+    Name: name,
+    Config: {
+      Image: runtimeReference,
+      Env: ['NC_DB=secret-value-that-must-not-be-persisted'],
+      Labels: labels,
+      ExposedPorts: { '8080/tcp': {} },
+      Healthcheck: { Test: ['CMD', 'true'] }
+    },
+    HostConfig: {
+      NetworkMode: 'server-routing',
+      RestartPolicy: { Name: 'unless-stopped', MaximumRetryCount: 0 },
+      Mounts: [{ Type: 'volume', Source: 'db-example-data', Target: '/usr/app/data' }]
+    },
+    Mounts: [{ Type: 'volume', Name: 'db-example-data', Destination: '/usr/app/data', RW: true }],
+    NetworkSettings: { Networks: JSON.parse(JSON.stringify(networkState)) },
+    State: { Running: true, Status: 'running', Health: { Status: 'healthy' } }
+  });
+  const containers = new Map([[oldContainerId, baseDetails(oldContainerId, oldImageId)]]);
+  const imageReferences = new Map([
+    [runtimeReference, oldImageId],
+    [oldImageId, oldImageId],
+    [newImageId, newImageId],
+    [upstreamReference, newImageId]
+  ]);
+  let activeContainerId = oldContainerId;
+  let createIndex = 0;
+  let routeContainerId = oldContainerId;
+  const creates = [];
+  const restores = [];
+  const routeRebinds = [];
+  const ids = ['5'.repeat(32), '6'.repeat(32)];
+  let uuidIndex = 0;
+
+  const dockerRequest = async (method, requestPath, body) => {
+    if (method === 'GET' && requestPath === '/containers/json?all=true') {
+      return [...containers.values()].map((details) => ({
+        Id: details.Id,
+        State: details.State.Running ? 'running' : 'exited',
+        Mounts: details.Mounts
+      }));
+    }
+    if (method === 'GET' && requestPath.startsWith('/containers/')) {
+      const id = requestPath.split('/')[2];
+      const details = containers.get(id);
+      if (!details) throw new Error('No such container');
+      return details;
+    }
+    if (method === 'POST' && requestPath.startsWith('/images/create?')) {
+      imageReferences.set(upstreamReference, newImageId);
+      return {};
+    }
+    if (method === 'GET' && requestPath.startsWith('/images/')) {
+      const reference = decodeURIComponent(requestPath.slice('/images/'.length).replace(/\/json$/, ''));
+      const id = imageReferences.get(reference);
+      if (!id) throw new Error('unknown image ' + reference);
+      return {
+        Id: id,
+        RepoDigests: id === newImageId ? ['nocodb/nocodb@' + latestDigest] : []
+      };
+    }
+    if (method === 'POST' && requestPath.includes('/tag?repo=')) {
+      const source = decodeURIComponent(requestPath.slice('/images/'.length, requestPath.indexOf('/tag?')));
+      const query = new URLSearchParams(requestPath.slice(requestPath.indexOf('?') + 1));
+      const sourceId = imageReferences.get(source) || source;
+      imageReferences.set(query.get('repo') + ':' + query.get('tag'), sourceId);
+      return {};
+    }
+    if (method === 'POST' && requestPath.includes('/stop?')) {
+      const id = requestPath.split('/')[2];
+      containers.get(id).State = { Running: false, Status: 'exited', Health: { Status: 'healthy' } };
+      return {};
+    }
+    if (method === 'POST' && requestPath.includes('/rename?name=')) {
+      const id = requestPath.split('/')[2];
+      containers.get(id).Name = '/' + decodeURIComponent(requestPath.split('name=')[1]);
+      return {};
+    }
+    if (method === 'POST' && requestPath.startsWith('/containers/create?name=')) {
+      const id = [newContainerId, rollbackContainerId][createIndex++];
+      const name = decodeURIComponent(requestPath.split('name=')[1]);
+      const image = imageReferences.get(body.Image);
+      const details = baseDetails(id, image, '/' + name);
+      details.Config = { ...details.Config, ...body, Image: body.Image };
+      details.HostConfig = body.HostConfig;
+      details.State = { Running: false, Status: 'created', Health: { Status: 'healthy' } };
+      details.NetworkSettings = { Networks: { 'server-routing': { Aliases: body.NetworkingConfig.EndpointsConfig['server-routing'].Aliases } } };
+      containers.set(id, details);
+      creates.push({ id, body });
+      activeContainerId = id;
+      return { Id: id };
+    }
+    if (method === 'POST' && requestPath.includes('/networks/') || method === 'POST' && requestPath.startsWith('/networks/')) {
+      const network = decodeURIComponent(requestPath.split('/')[2]);
+      const details = containers.get(body.Container);
+      details.NetworkSettings.Networks[network] = { Aliases: body.EndpointConfig.Aliases };
+      return {};
+    }
+    if (method === 'POST' && requestPath.endsWith('/start')) {
+      const id = requestPath.split('/')[2];
+      containers.get(id).State = { Running: true, Status: 'running', Health: { Status: 'healthy' } };
+      activeContainerId = id;
+      return {};
+    }
+    if (method === 'DELETE' && requestPath.startsWith('/containers/')) {
+      const id = requestPath.split('/')[2].split('?')[0];
+      containers.delete(id);
+      return {};
+    }
+    throw new Error('unexpected Docker request ' + method + ' ' + requestPath);
+  };
+
+  const manager = createApplicationUpdateManager({
+    dataRoot,
+    hostRoot,
+    dockerRequest,
+    getApplicationInventory: async () => ({ applications: [{
+      id: APPLICATION_ID,
+      name: 'db.example.com',
+      externalUrl: 'https://db.example.com',
+      managedByServer: true,
+      runtime: { containerId: activeContainerId }
+    }] }),
+    checkApplicationUpdate: async () => ({
+      status: 'update-available',
+      updateAvailable: true,
+      source: { reference: upstreamReference, type: 'migration-compose-image' },
+      current: { imageId: oldImageId, version: null, digest: 'sha256:' + '7'.repeat(64) },
+      latest: { version: null, digest: latestDigest },
+      message: 'Registry’de daha yeni bir imaj bulundu.'
+    }),
+    composeRunner: async () => { throw new Error('retained provider Compose must not run'); },
+    volumeSnapshots: {
+      create: async ({ operationId: updateOperationId, volume }) => ({
+        operationId: updateOperationId,
+        volumeName: volume.name,
+        file: 'snapshot.enc'
+      }),
+      restore: async ({ snapshot, volume }) => restores.push({ snapshot, volume })
+    },
+    routeRuntime: {
+      operationRuntimeBinding: (containerId) => ({
+        operationIds: [operationId],
+        runtimeContainerId: containerId,
+        routeIds: ['route_' + '8'.repeat(24)],
+        aliases: ['db-example-com'],
+        fingerprint: 'managed-route'
+      }),
+      assertOperationRuntimeBinding: (binding, expectedContainerId) => {
+        assert.equal(binding.fingerprint, 'managed-route');
+        assert.equal(routeContainerId, expectedContainerId);
+      },
+      rebindOperationRuntime: async (binding, containerId, expectedContainerId) => {
+        assert.equal(routeContainerId, expectedContainerId);
+        routeRebinds.push({ from: expectedContainerId, to: containerId });
+        routeContainerId = containerId;
+        return { ...binding, runtimeContainerId: containerId };
+      }
+    },
+    publicHealthProbe: async () => ({ status: 200 }),
+    quiesce: async () => {},
+    wait: async () => {},
+    readinessAttempts: 2,
+    clock: () => new Date('2026-08-08T00:00:00.000Z'),
+    randomUUID: () => ids[uuidIndex++]
+  });
+
+  const plan = await manager.createPlan(APPLICATION_ID);
+  assert.equal(plan.services.length, 1);
+  assert.equal(plan.services[0].action, 'pull');
+  assert.deepEqual(plan.statefulVolumes, ['db-example-data']);
+  const persistedPlan = fs.readFileSync(path.join(dataRoot, 'application-updates/plans', plan.planId + '.json'), 'utf8');
+  assert.equal(persistedPlan.includes('secret-value-that-must-not-be-persisted'), false);
+
+  const applied = await manager.applyPlan(plan.planId, { confirmation: APPLY_APPLICATION_UPDATE_CONFIRMATION });
+  assert.equal(applied.status, 'completed');
+  assert.equal(applied.services[0].containerId, newContainerId);
+  assert.equal(applied.services[0].imageId, newImageId);
+  assert.equal(creates[0].body.Env.includes('NC_DB=secret-value-that-must-not-be-persisted'), true);
+  assert.equal(readJsonForTest(operationFile).candidate.containerId, newContainerId);
+  assert.equal(readJsonForTest(adapterFile).candidate.containerId, newContainerId);
+
+  const rolledBack = await manager.rollbackOperation(applied.operationId, {
+    confirmation: ROLLBACK_APPLICATION_UPDATE_CONFIRMATION
+  });
+  assert.equal(rolledBack.status, 'rolled-back');
+  assert.equal(rolledBack.services[0].containerId, rollbackContainerId);
+  assert.equal(rolledBack.services[0].imageId, oldImageId);
+  assert.equal(restores.length, 1);
+  assert.deepEqual(routeRebinds, [
+    { from: oldContainerId, to: newContainerId },
+    { from: newContainerId, to: rollbackContainerId }
+  ]);
+  assert.equal(readJsonForTest(operationFile).candidate.containerId, rollbackContainerId);
+  assert.equal(readJsonForTest(adapterFile).candidate.containerId, rollbackContainerId);
+});
+
+function readJsonForTest(target) {
+  return JSON.parse(fs.readFileSync(target, 'utf8'));
+}
