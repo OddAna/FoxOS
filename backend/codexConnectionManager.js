@@ -15,6 +15,8 @@ const MAX_EVENT_BYTES = 256 * 1024;
 const MAX_EVENT_BUFFER_BYTES = 8 * 1024 * 1024;
 const MAX_PROMPT_LENGTH = 32768;
 const REQUEST_TIMEOUT_MS = 30000;
+const MODEL_LIST_PAGE_LIMIT = 100;
+const MODEL_LIST_MAX_PAGES = 5;
 const SUPPORTED_APPROVAL_METHODS = new Set([
   'item/commandExecution/requestApproval',
   'item/fileChange/requestApproval'
@@ -59,6 +61,68 @@ function normalizeCliInspection(value) {
     version: value && typeof value.version === 'string'
       ? boundedText(value.version.trim(), 120)
       : null
+  };
+}
+
+function normalizeModelCatalog(value) {
+  const models = [];
+  const seenModels = new Set();
+  for (const entry of value || []) {
+    if (!entry || typeof entry !== 'object') continue;
+    const model = typeof entry.model === 'string' ? entry.model.trim() : '';
+    if (!model || model.length > 200 || /[\r\n\0]/.test(model) || seenModels.has(model)) continue;
+
+    const efforts = [];
+    const seenEfforts = new Set();
+    for (const option of Array.isArray(entry.supportedReasoningEfforts)
+      ? entry.supportedReasoningEfforts
+      : []) {
+      const effort = typeof option === 'string'
+        ? option.trim()
+        : option && typeof option.reasoningEffort === 'string'
+          ? option.reasoningEffort.trim()
+          : '';
+      if (!/^[a-z][a-z0-9-]{0,31}$/.test(effort) || seenEfforts.has(effort)) continue;
+      seenEfforts.add(effort);
+      efforts.push(effort);
+    }
+
+    const advertisedDefault = typeof entry.defaultReasoningEffort === 'string'
+      ? entry.defaultReasoningEffort.trim()
+      : '';
+    if (/^[a-z][a-z0-9-]{0,31}$/.test(advertisedDefault) && !seenEfforts.has(advertisedDefault)) {
+      efforts.push(advertisedDefault);
+    }
+    if (!efforts.length) continue;
+
+    seenModels.add(model);
+    models.push({
+      id: typeof entry.id === 'string' && entry.id.trim()
+        ? boundedText(entry.id.trim(), 200)
+        : model,
+      model,
+      displayName: typeof entry.displayName === 'string' && entry.displayName.trim()
+        ? boundedText(entry.displayName.trim(), 200)
+        : model,
+      description: typeof entry.description === 'string'
+        ? boundedText(entry.description.trim(), 1000)
+        : '',
+      isDefault: entry.isDefault === true,
+      defaultReasoningEffort: efforts.includes(advertisedDefault) ? advertisedDefault : efforts[0],
+      supportedReasoningEfforts: efforts
+    });
+  }
+
+  if (!models.length) {
+    throw new CodexConnectionError(
+      'Codex kullanılabilir bir model bildirmedi.',
+      502,
+      'codex-model-catalog-invalid'
+    );
+  }
+  return {
+    models,
+    defaultModel: (models.find((entry) => entry.isDefault) || models[0]).model
   };
 }
 
@@ -411,6 +475,43 @@ function createCodexConnectionManager({
     return result.account || null;
   }
 
+  async function loadModelCatalog() {
+    const entries = [];
+    let cursor = null;
+    for (let page = 0; page < MODEL_LIST_MAX_PAGES; page += 1) {
+      const result = await client.request('model/list', {
+        includeHidden: false,
+        limit: MODEL_LIST_PAGE_LIMIT,
+        ...(cursor ? { cursor } : {})
+      });
+      if (!result || !Array.isArray(result.data)) {
+        throw new CodexConnectionError(
+          'Codex model kataloğu okunamadı.',
+          502,
+          'codex-model-catalog-invalid'
+        );
+      }
+      entries.push(...result.data);
+      cursor = typeof result.nextCursor === 'string' && result.nextCursor
+        ? result.nextCursor
+        : null;
+      if (!cursor) return normalizeModelCatalog(entries);
+    }
+    throw new CodexConnectionError(
+      'Codex model kataloğu güvenli sayfalama sınırını aştı.',
+      502,
+      'codex-model-catalog-invalid'
+    );
+  }
+
+  async function listModels() {
+    await requireInstalled();
+    if (!(await readAccount())) {
+      throw new CodexConnectionError('Önce Codex hesabınızı bağlayın.', 409, 'codex-account-required');
+    }
+    return loadModelCatalog();
+  }
+
   async function status() {
     const inspection = normalizeCliInspection(await inspectCli());
     const config = loadConfig();
@@ -526,7 +627,7 @@ function createCodexConnectionManager({
     return { disconnected: true, connection: await status() };
   }
 
-  async function startThread() {
+  async function startThread(model, reasoningEffort) {
     await requireInstalled();
     const account = await readAccount();
     if (!account) {
@@ -540,17 +641,52 @@ function createCodexConnectionManager({
         'codex-full-server-required'
       );
     }
+    if (model !== undefined && (typeof model !== 'string' || !model.trim())) {
+      throw new CodexConnectionError('Codex modeli geçersiz.', 400, 'codex-model-invalid');
+    }
+    if (
+      reasoningEffort !== undefined && reasoningEffort !== null &&
+      (typeof reasoningEffort !== 'string' || !reasoningEffort.trim())
+    ) {
+      throw new CodexConnectionError(
+        'Codex reasoning seviyesi geçersiz.',
+        400,
+        'codex-reasoning-effort-invalid'
+      );
+    }
+    const catalog = await loadModelCatalog();
+    const requestedModel = typeof model === 'string' ? model.trim() : catalog.defaultModel;
+    const selectedModel = catalog.models.find((entry) => entry.model === requestedModel);
+    if (!selectedModel) {
+      throw new CodexConnectionError('Codex modeli kullanılamıyor.', 400, 'codex-model-invalid');
+    }
+    const selectedEffort = typeof reasoningEffort === 'string' && reasoningEffort.trim()
+      ? reasoningEffort.trim()
+      : selectedModel.defaultReasoningEffort;
+    if (!selectedModel.supportedReasoningEfforts.includes(selectedEffort)) {
+      throw new CodexConnectionError(
+        'Seçilen reasoning seviyesi bu modelde kullanılamıyor.',
+        400,
+        'codex-reasoning-effort-invalid'
+      );
+    }
     const result = await client.request('thread/start', {
+      model: selectedModel.model,
       cwd: '/',
       approvalPolicy: 'untrusted',
       sandbox: 'danger-full-access',
-      serviceName: 'foxos'
+      serviceName: 'foxos',
+      config: { model_reasoning_effort: selectedEffort }
     });
     if (!result.thread || typeof result.thread.id !== 'string') {
       throw new CodexConnectionError('Codex konuşması başlatılamadı.', 502, 'codex-thread-response-invalid');
     }
     return {
       thread: result.thread,
+      model: typeof result.model === 'string' ? result.model : selectedModel.model,
+      reasoningEffort: typeof result.reasoningEffort === 'string'
+        ? result.reasoningEffort
+        : selectedEffort,
       accessProfile: config.accessProfile,
       workingDirectory: '/'
     };
@@ -598,12 +734,15 @@ function createCodexConnectionManager({
     events: (sequence, threadId) => client.eventsAfter(sequence, threadId),
     install: (confirmation) => serializeRuntimeMutation(() => install(confirmation)),
     interruptTurn,
+    listModels,
     resolveApproval: (requestId, decision) => client.resolveApproval(requestId, decision),
     setAccessProfile: (accessProfile, confirmation) => serializeRuntimeMutation(
       () => setAccessProfile(accessProfile, confirmation)
     ),
     startLogin,
-    startThread: () => serializeRuntimeMutation(() => startThread()),
+    startThread: (model, reasoningEffort) => serializeRuntimeMutation(
+      () => startThread(model, reasoningEffort)
+    ),
     startTurn: (threadId, text) => serializeRuntimeMutation(() => startTurn(threadId, text)),
     status,
     stop: () => client.stop()

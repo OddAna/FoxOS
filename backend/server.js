@@ -2865,9 +2865,20 @@ app.delete('/api/connections/codex', async (req, res) => {
   }
 });
 
+app.get('/api/codex/models', async (req, res) => {
+  try {
+    res.json(await codexConnectionManager.listModels());
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not read Codex models');
+  }
+});
+
 app.post('/api/codex/threads', async (req, res) => {
   try {
-    res.status(201).json(await codexConnectionManager.startThread());
+    res.status(201).json(await codexConnectionManager.startThread(
+      req.body && req.body.model,
+      req.body && req.body.reasoningEffort
+    ));
   } catch (error) {
     sendConnectionError(res, error, 'Could not start Codex thread');
   }

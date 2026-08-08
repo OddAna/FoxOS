@@ -50,10 +50,51 @@ function fakeAppServer() {
       account = null;
       return respond({ id: message.id, result: {} });
     }
+    if (message.method === 'model/list') {
+      return respond({
+        id: message.id,
+        result: {
+          data: [
+            {
+              id: 'gpt-5.6-sol',
+              model: 'gpt-5.6-sol',
+              displayName: 'GPT-5.6-Sol',
+              description: 'Frontier capability',
+              isDefault: true,
+              defaultReasoningEffort: 'low',
+              supportedReasoningEfforts: [
+                { reasoningEffort: 'low', description: 'Fast' },
+                { reasoningEffort: 'high', description: 'Deep' },
+                { reasoningEffort: 'ultra', description: 'Multi-agent' }
+              ],
+              providerInternalValue: 'must-not-leak'
+            },
+            {
+              id: 'gpt-5.6-luna',
+              model: 'gpt-5.6-luna',
+              displayName: 'GPT-5.6-Luna',
+              description: 'Efficient',
+              isDefault: false,
+              defaultReasoningEffort: 'medium',
+              supportedReasoningEfforts: [
+                { reasoningEffort: 'low', description: 'Fast' },
+                { reasoningEffort: 'medium', description: 'Balanced' },
+                { reasoningEffort: 'high', description: 'Deep' }
+              ]
+            }
+          ],
+          nextCursor: null
+        }
+      });
+    }
     if (message.method === 'thread/start') {
       return respond({
         id: message.id,
-        result: { thread: { id: 'thr_' + nextThread++, sessionId: 'thr_1' } }
+        result: {
+          thread: { id: 'thr_' + nextThread++, sessionId: 'thr_1' },
+          model: message.params.model,
+          reasoningEffort: message.params.config && message.params.config.model_reasoning_effort
+        }
       });
     }
     if (message.method === 'turn/start') {
@@ -175,11 +216,57 @@ test('Full Server threads use host root with danger-full-access and stream bound
   assert.equal(threadStart.params.cwd, '/');
   assert.equal(threadStart.params.sandbox, 'danger-full-access');
   assert.equal(threadStart.params.approvalPolicy, 'untrusted');
+  assert.equal(threadStart.params.model, 'gpt-5.6-sol');
+  assert.deepEqual(threadStart.params.config, { model_reasoning_effort: 'low' });
+  assert.equal(started.model, 'gpt-5.6-sol');
+  assert.equal(started.reasoningEffort, 'low');
 
   await fixture.manager.startTurn(started.thread.id, 'Sunucunun durumunu incele.');
   const events = fixture.manager.events(0, started.thread.id);
   assert.ok(events.events.some((event) => event.method === 'item/agentMessage/delta'));
   assert.equal(events.events.some((event) => Object.hasOwn(event, 'bufferedBytes')), false);
+  fixture.manager.stop();
+});
+
+test('Codex models are sanitized and a supported model and reasoning effort reach thread/start', async () => {
+  const fixture = createFixture({ installed: true });
+  await fixture.manager.startLogin();
+
+  const catalog = await fixture.manager.listModels();
+  assert.equal(catalog.defaultModel, 'gpt-5.6-sol');
+  assert.deepEqual(catalog.models.map((entry) => entry.model), [
+    'gpt-5.6-sol',
+    'gpt-5.6-luna'
+  ]);
+  assert.deepEqual(catalog.models[0].supportedReasoningEfforts, ['low', 'high', 'ultra']);
+  assert.equal(Object.hasOwn(catalog.models[0], 'providerInternalValue'), false);
+
+  await fixture.manager.setAccessProfile('full-server', FULL_SERVER_CONFIRMATION);
+  const started = await fixture.manager.startThread('gpt-5.6-luna', 'high');
+  assert.equal(started.model, 'gpt-5.6-luna');
+  assert.equal(started.reasoningEffort, 'high');
+  const child = fixture.children[0];
+  const threadStart = child.received.find((message) => message.method === 'thread/start');
+  assert.equal(threadStart.params.model, 'gpt-5.6-luna');
+  assert.deepEqual(threadStart.params.config, { model_reasoning_effort: 'high' });
+  fixture.manager.stop();
+});
+
+test('Codex rejects models and reasoning efforts outside the live catalog', async () => {
+  const fixture = createFixture({ installed: true });
+  await fixture.manager.startLogin();
+  await fixture.manager.setAccessProfile('full-server', FULL_SERVER_CONFIRMATION);
+
+  await assert.rejects(
+    fixture.manager.startThread('made-up-model', 'high'),
+    (error) => error.code === 'codex-model-invalid'
+  );
+  await assert.rejects(
+    fixture.manager.startThread('gpt-5.6-luna', 'ultra'),
+    (error) => error.code === 'codex-reasoning-effort-invalid'
+  );
+  const child = fixture.children[0];
+  assert.equal(child.received.some((message) => message.method === 'thread/start'), false);
   fixture.manager.stop();
 });
 

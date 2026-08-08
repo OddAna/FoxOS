@@ -497,6 +497,7 @@ test('health is public while management APIs require a session', async () => {
   assert.equal((await fetch(baseUrl() + '/api/connections/codex/install', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
   })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/codex/models')).status, 401);
   assert.equal((await fetch(baseUrl() + '/api/codex/events')).status, 401);
   const applicationOperationsId = 'res_' + '7'.repeat(32);
   assert.equal((await fetch(baseUrl() + '/api/applications/' + applicationOperationsId + '/update-check')).status, 401);
@@ -621,6 +622,12 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   });
   assert.equal(codexThreadWithoutCli.status, 409);
   assert.equal((await codexThreadWithoutCli.json()).code, 'codex-cli-not-installed');
+
+  const codexModelsWithoutCli = await fetch(baseUrl() + '/api/codex/models', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(codexModelsWithoutCli.status, 409);
+  assert.equal((await codexModelsWithoutCli.json()).code, 'codex-cli-not-installed');
 
   const filesResponse = await fetch(baseUrl() + '/api/files?path=%2F', {
     headers: { Cookie: cookie }

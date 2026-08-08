@@ -27,6 +27,37 @@ const BUTTON_STYLE = {
   padding: '8px 11px'
 };
 
+const SELECT_STYLE = {
+  minWidth: '150px',
+  border: '1px solid rgba(255,255,255,0.14)',
+  borderRadius: '7px',
+  background: 'rgba(255,255,255,0.07)',
+  color: '#fff',
+  fontSize: '12px',
+  padding: '7px 28px 7px 9px',
+  outline: 'none'
+};
+
+const MODEL_STORAGE_KEY = 'foxos.codex.model';
+const REASONING_STORAGE_KEY = 'foxos.codex.reasoning-effort';
+const REASONING_LABELS = {
+  none: 'None',
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'XHigh',
+  max: 'Max',
+  ultra: 'Ultra'
+};
+
+const storedPreference = (key) => {
+  try { return window.localStorage.getItem(key); } catch { return null; }
+};
+
+const savePreference = (key, value) => {
+  try { window.localStorage.setItem(key, value); } catch {}
+};
+
 const commandText = (value) => Array.isArray(value)
   ? value.map(String).join(' ')
   : String(value || '');
@@ -129,17 +160,29 @@ const applyEvents = (entries, events) => {
 const CodexApp = () => {
   const { openWindow } = useWindowManager();
   const [connection, setConnection] = useState(null);
+  const [models, setModels] = useState([]);
+  const [selectedModel, setSelectedModel] = useState('');
+  const [reasoningEffort, setReasoningEffort] = useState('');
+  const [activeModel, setActiveModel] = useState('');
+  const [activeReasoningEffort, setActiveReasoningEffort] = useState('');
   const [threadId, setThreadId] = useState(null);
   const [activeTurnId, setActiveTurnId] = useState(null);
   const [entries, setEntries] = useState([]);
   const [prompt, setPrompt] = useState('');
   const [loading, setLoading] = useState(true);
+  const [modelsLoading, setModelsLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const cursorRef = useRef(0);
   const bottomRef = useRef(null);
 
   const usable = Boolean(connection && connection.ready && connection.fullServer);
+  const connectionReady = Boolean(connection && connection.ready);
+  const selectedModelDetails = useMemo(
+    () => models.find((entry) => entry.model === selectedModel) || null,
+    [models, selectedModel]
+  );
+  const selectionReady = Boolean(selectedModelDetails && reasoningEffort);
 
   const openConnections = () => openWindow({
     id: 'settings',
@@ -162,6 +205,45 @@ const CodexApp = () => {
       .catch((requestError) => setError(requestError.message))
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    if (!connectionReady) {
+      setModels([]);
+      setSelectedModel('');
+      setReasoningEffort('');
+      return undefined;
+    }
+    let cancelled = false;
+    setModelsLoading(true);
+    apiFetch('/api/codex/models')
+      .then((response) => response.json())
+      .then((payload) => {
+        if (cancelled) return;
+        const availableModels = Array.isArray(payload.models) ? payload.models : [];
+        if (!availableModels.length) throw new Error('Codex model listesi boş.');
+        const savedModel = storedPreference(MODEL_STORAGE_KEY);
+        const initialModel = availableModels.find((entry) => entry.model === savedModel) ||
+          availableModels.find((entry) => entry.model === payload.defaultModel) ||
+          availableModels[0];
+        const availableEfforts = Array.isArray(initialModel.supportedReasoningEfforts)
+          ? initialModel.supportedReasoningEfforts
+          : [];
+        const savedEffort = storedPreference(REASONING_STORAGE_KEY);
+        const initialEffort = availableEfforts.includes(savedEffort)
+          ? savedEffort
+          : initialModel.defaultReasoningEffort || availableEfforts[0] || '';
+        setModels(availableModels);
+        setSelectedModel(initialModel.model);
+        setReasoningEffort(initialEffort);
+      })
+      .catch((requestError) => {
+        if (!cancelled) setError(requestError.message);
+      })
+      .finally(() => {
+        if (!cancelled) setModelsLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [connectionReady]);
 
   useEffect(() => {
     if (!threadId) return undefined;
@@ -208,17 +290,46 @@ const CodexApp = () => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [entries, busy]);
 
+  const chooseModel = (model) => {
+    const nextModel = models.find((entry) => entry.model === model);
+    if (!nextModel) return;
+    const efforts = Array.isArray(nextModel.supportedReasoningEfforts)
+      ? nextModel.supportedReasoningEfforts
+      : [];
+    const nextEffort = efforts.includes(reasoningEffort)
+      ? reasoningEffort
+      : nextModel.defaultReasoningEffort || efforts[0] || '';
+    setSelectedModel(nextModel.model);
+    setReasoningEffort(nextEffort);
+    savePreference(MODEL_STORAGE_KEY, nextModel.model);
+    if (nextEffort) savePreference(REASONING_STORAGE_KEY, nextEffort);
+  };
+
+  const chooseReasoningEffort = (effort) => {
+    if (!selectedModelDetails?.supportedReasoningEfforts?.includes(effort)) return;
+    setReasoningEffort(effort);
+    savePreference(REASONING_STORAGE_KEY, effort);
+  };
+
+  const newThreadRequestBody = () => JSON.stringify({
+    model: selectedModel,
+    reasoningEffort
+  });
+
   const startConversation = async () => {
+    if (!selectionReady) return;
     setBusy(true);
     setError(null);
     try {
       const response = await apiFetch('/api/codex/threads', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: '{}'
+        body: newThreadRequestBody()
       });
       const payload = await response.json();
       setThreadId(payload.thread.id);
+      setActiveModel(payload.model || selectedModel);
+      setActiveReasoningEffort(payload.reasoningEffort || reasoningEffort);
       setEntries([]);
       cursorRef.current = 0;
     } catch (requestError) {
@@ -242,14 +353,17 @@ const CodexApp = () => {
     }]);
     try {
       if (!currentThread) {
+        if (!selectionReady) throw new Error('Önce model ve reasoning seviyesini seçin.');
         const threadResponse = await apiFetch('/api/codex/threads', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: '{}'
+          body: newThreadRequestBody()
         });
         const threadPayload = await threadResponse.json();
         currentThread = threadPayload.thread.id;
         setThreadId(currentThread);
+        setActiveModel(threadPayload.model || selectedModel);
+        setActiveReasoningEffort(threadPayload.reasoningEffort || reasoningEffort);
         cursorRef.current = 0;
       }
       const response = await apiFetch(`/api/codex/threads/${encodeURIComponent(currentThread)}/turns`, {
@@ -323,7 +437,7 @@ const CodexApp = () => {
           </div>
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
-          <button type="button" onClick={startConversation} disabled={!usable || busy} style={{ ...BUTTON_STYLE, background: 'rgba(255,255,255,0.07)', cursor: !usable || busy ? 'not-allowed' : 'pointer', opacity: !usable || busy ? 0.45 : 1 }}>
+          <button type="button" onClick={startConversation} disabled={!usable || busy || !selectionReady} style={{ ...BUTTON_STYLE, background: 'rgba(255,255,255,0.07)', cursor: !usable || busy || !selectionReady ? 'not-allowed' : 'pointer', opacity: !usable || busy || !selectionReady ? 0.45 : 1 }}>
             <Plus size={14} /> Yeni Konuşma
           </button>
           <button type="button" onClick={openConnections} style={{ ...BUTTON_STYLE, background: 'rgba(255,255,255,0.07)', cursor: 'pointer' }}>
@@ -331,6 +445,46 @@ const CodexApp = () => {
           </button>
         </div>
       </div>
+
+      {usable && (
+        <div style={{ padding: '9px 14px', borderBottom: '1px solid rgba(255,255,255,0.09)', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '7px', color: '#aaa', fontSize: '11px' }}>
+            Model
+            <select
+              aria-label="Codex modeli"
+              value={selectedModel}
+              onChange={(event) => chooseModel(event.target.value)}
+              disabled={modelsLoading || busy || !models.length}
+              style={{ ...SELECT_STYLE, opacity: modelsLoading || busy ? 0.5 : 1 }}
+            >
+              {models.map((model) => (
+                <option key={model.model} value={model.model}>{model.displayName}</option>
+              ))}
+            </select>
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '7px', color: '#aaa', fontSize: '11px' }}>
+            Reasoning
+            <select
+              aria-label="Codex reasoning seviyesi"
+              value={reasoningEffort}
+              onChange={(event) => chooseReasoningEffort(event.target.value)}
+              disabled={modelsLoading || busy || !selectedModelDetails}
+              style={{ ...SELECT_STYLE, minWidth: '110px', opacity: modelsLoading || busy ? 0.5 : 1 }}
+            >
+              {(selectedModelDetails?.supportedReasoningEfforts || []).map((effort) => (
+                <option key={effort} value={effort}>{REASONING_LABELS[effort] || effort}</option>
+              ))}
+            </select>
+          </label>
+          <div style={{ color: '#777', fontSize: '11px' }}>
+            {modelsLoading
+              ? 'Modeller yükleniyor...'
+              : threadId && activeModel
+                ? `Aktif: ${activeModel} · ${REASONING_LABELS[activeReasoningEffort] || activeReasoningEffort}. Değişiklik sonraki yeni konuşmada uygulanır.`
+                : 'Yeni konuşma ayarları'}
+          </div>
+        </div>
+      )}
 
       {!usable ? (
         <div style={{ flex: 1, display: 'grid', placeItems: 'center', padding: '24px' }}>
@@ -428,7 +582,7 @@ const CodexApp = () => {
               {busy && activeTurnId ? (
                 <button type="button" onClick={interrupt} title="Durdur" style={{ ...BUTTON_STYLE, width: '36px', height: '36px', padding: 0, background: 'rgba(255,95,86,0.15)', color: '#ff8a84', cursor: 'pointer' }}><CircleStop size={16} /></button>
               ) : (
-                <button type="button" onClick={submitPrompt} disabled={!prompt.trim()} title="Gönder" style={{ ...BUTTON_STYLE, width: '36px', height: '36px', padding: 0, background: '#0ea5e9', border: 'none', cursor: prompt.trim() ? 'pointer' : 'not-allowed', opacity: prompt.trim() ? 1 : 0.45 }}><Send size={16} /></button>
+                <button type="button" onClick={submitPrompt} disabled={!prompt.trim() || (!threadId && !selectionReady)} title="Gönder" style={{ ...BUTTON_STYLE, width: '36px', height: '36px', padding: 0, background: '#0ea5e9', border: 'none', cursor: prompt.trim() && (threadId || selectionReady) ? 'pointer' : 'not-allowed', opacity: prompt.trim() && (threadId || selectionReady) ? 1 : 0.45 }}><Send size={16} /></button>
               )}
             </div>
           </div>
