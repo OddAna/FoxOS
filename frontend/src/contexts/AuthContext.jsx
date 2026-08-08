@@ -1,5 +1,6 @@
 /* oxlint-disable react/only-export-components -- context hook and provider intentionally share a module */
 import React, { createContext, useState, useContext, useEffect } from 'react';
+import { AUTH_REQUIRED_EVENT } from '../api';
 
 const AuthContext = createContext();
 
@@ -11,6 +12,12 @@ export const AuthProvider = ({ children }) => {
 
   useEffect(() => {
     checkStatus();
+  }, []);
+
+  useEffect(() => {
+    const handleAuthenticationRequired = () => setAuthState('locked');
+    window.addEventListener(AUTH_REQUIRED_EVENT, handleAuthenticationRequired);
+    return () => window.removeEventListener(AUTH_REQUIRED_EVENT, handleAuthenticationRequired);
   }, []);
 
   const checkStatus = async () => {

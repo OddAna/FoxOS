@@ -484,7 +484,10 @@ target blocks only adoption/migration operations that require restore proof.
   at host `/` with `danger-full-access` and default `untrusted` approvals. The
   owner can explicitly select per-thread `never` approvals. Non-ephemeral
   app-server threads are listed and resumed from the Codex-owned persistent
-  history. OpenAI's managed app-server daemon runs on the host behind an
+  history. An optional server-private Drive memory reference injects an
+  `AGENTS.md` then `index.md` bootstrap into new and resumed threads without
+  returning the folder location or committing it to Git. OpenAI's managed
+  app-server daemon runs on the host behind an
   owner-only Unix WebSocket control socket; FoxOS owns only a disposable socket
   client, so agent recreation does not terminate the daemon or active turn.
   There is no app-server TCP listener, events are memory-bounded, every endpoint is

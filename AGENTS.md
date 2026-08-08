@@ -75,10 +75,17 @@
   default `untrusted` approvals, the explicit owner-selected per-thread `never`
   option, persisted app-server thread history, a host-owned managed app-server
   daemon, its owner-only Unix WebSocket control socket, bounded in-memory events
-  and owner-authenticated endpoints. Never spawn the
+  and owner-authenticated endpoints. The optional Drive-memory folder reference
+  is server-local private configuration: keep it out of Git and ordinary logs,
+  store it with owner-only permissions, never return its location through the
+  API, and inject its `AGENTS.md` then `index.md` bootstrap only into new or
+  resumed Codex threads when the owner has enabled memory. Never spawn the
   app-server as a FoxOS container child, expose its control socket publicly, or
   return or log Codex auth state. Recreating the FoxOS agent must close only its
-  local socket client while the host daemon and active turn continue.
+  local socket client while the host daemon and active turn continue. The FoxOS
+  owner session must survive the same recreation in owner-only persistent state;
+  never persist its raw bearer token, only a one-way digest, and remove it on
+  logout.
   Revoking Full Server must stop the runtime and block earlier threads;
   disconnect must revoke access and log out while leaving the CLI optional.
 - A clean public installation must require no external provider account, domain,

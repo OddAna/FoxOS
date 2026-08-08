@@ -25,6 +25,7 @@ const FOXOS_THREAD_SOURCES = new Set(['appServer', 'vscode']);
 const MAX_THREAD_ID_LENGTH = 256;
 const MAX_HISTORY_TURNS = 200;
 const MAX_HISTORY_ITEMS = 2000;
+const MAX_MEMORY_LABEL_LENGTH = 120;
 const DEFAULT_APPROVAL_POLICY = 'untrusted';
 const NO_APPROVAL_POLICY = 'never';
 const APPROVAL_POLICIES = new Set([
@@ -94,6 +95,57 @@ function normalizeThreadCursor(value) {
     throw new CodexConnectionError('Codex konuşma sayfası geçersiz.', 400, 'codex-thread-cursor-invalid');
   }
   return cursor;
+}
+
+function normalizeDriveFolderUrl(value) {
+  const input = typeof value === 'string' ? value.trim() : '';
+  let parsed;
+  try {
+    parsed = new URL(input);
+  } catch {
+    throw new CodexConnectionError('Drive hafıza klasörü bağlantısı geçersiz.', 400, 'codex-memory-folder-invalid');
+  }
+  const match = parsed.pathname.match(/^\/drive(?:\/u\/\d+)?\/folders\/([A-Za-z0-9_-]{10,200})\/?$/);
+  if (
+    parsed.protocol !== 'https:' || parsed.hostname !== 'drive.google.com' || parsed.port ||
+    parsed.username || parsed.password || parsed.hash || !match
+  ) {
+    throw new CodexConnectionError('Drive hafıza klasörü bağlantısı geçersiz.', 400, 'codex-memory-folder-invalid');
+  }
+  return `https://drive.google.com/drive/folders/${match[1]}`;
+}
+
+function normalizeMemoryConfig(value) {
+  if (value === undefined || value === null) return null;
+  if (!value || typeof value !== 'object') {
+    throw new CodexConnectionError('Codex hafıza kaydı desteklenmiyor.', 409, 'codex-config-invalid');
+  }
+  const label = typeof value.label === 'string' && value.label.trim()
+    ? boundedText(value.label.trim(), MAX_MEMORY_LABEL_LENGTH)
+    : 'Drive hafızası';
+  if (/\n/.test(label)) {
+    throw new CodexConnectionError('Codex hafıza kaydı desteklenmiyor.', 409, 'codex-config-invalid');
+  }
+  return {
+    enabled: value.enabled === true,
+    folderUrl: normalizeDriveFolderUrl(value.folderUrl),
+    label
+  };
+}
+
+function memoryDeveloperInstructions(config) {
+  const memory = config && config.memory;
+  if (!memory || memory.enabled !== true) return null;
+  return [
+    'FoxOS owner-configured private memory bootstrap:',
+    'Before answering the first user message in this thread, use the connected Google Drive capability to open this exact private folder:',
+    memory.folderUrl,
+    'Read AGENTS.md completely first, then read index.md. Follow the vault rules and use the compact index to open only the memory pages relevant to the user\'s actual request.',
+    'When the request concerns this FoxOS server or prior maintenance, search the same folder for foxos-46-server-operations.md and read only the relevant recent entries before acting.',
+    'If a vault instruction names a local helper that is unavailable on this server, use targeted Google Drive search, folder listing, and file fetch instead; do not treat the missing local helper as missing memory.',
+    'Do not expose or copy the folder URL, connector credentials, authentication state, tokens, or private memory into Git, repository files, command logs, or ordinary responses.',
+    'Do not claim memory was loaded unless both startup files were read successfully. If the Drive connection is unavailable, tell the owner briefly and continue with the available context.'
+  ].join('\n');
 }
 
 function normalizedTimestamp(value) {
@@ -614,6 +666,7 @@ function createCodexConnectionManager({
         schemaVersion: CONFIG_SCHEMA_VERSION,
         provider: PROVIDER,
         accessProfile: DEFAULT_ACCESS_PROFILE,
+        memory: null,
         configuredAt: null,
         updatedAt: null
       };
@@ -624,16 +677,23 @@ function createCodexConnectionManager({
     ) {
       throw new CodexConnectionError('Codex bağlantı kaydı desteklenmiyor.', 409, 'codex-config-invalid');
     }
-    return config;
+    return {
+      ...config,
+      memory: normalizeMemoryConfig(config.memory)
+    };
   }
 
-  function saveConfig(accessProfile) {
+  function saveConfig(accessProfile, memoryOverride = undefined) {
     const previous = loadConfig();
     const timestamp = now();
+    const memory = memoryOverride === undefined
+      ? previous.memory
+      : normalizeMemoryConfig(memoryOverride);
     const config = {
       schemaVersion: CONFIG_SCHEMA_VERSION,
       provider: PROVIDER,
       accessProfile,
+      ...(memory ? { memory } : {}),
       configuredAt: previous.configuredAt || timestamp,
       updatedAt: timestamp
     };
@@ -767,6 +827,10 @@ function createCodexConnectionManager({
       workingDirectory: '/',
       approvalPolicy: DEFAULT_APPROVAL_POLICY,
       supportedApprovalPolicies: [DEFAULT_APPROVAL_POLICY, NO_APPROVAL_POLICY],
+      memoryConfigured: Boolean(config.memory),
+      memoryEnabled: Boolean(config.memory && config.memory.enabled),
+      memoryLabel: config.memory ? config.memory.label : null,
+      memoryLocationIncluded: false,
       credentialsManagedByCodex: true,
       credentialIncluded: false,
       optional: true,
@@ -834,6 +898,28 @@ function createCodexConnectionManager({
       loginInProgress = false;
       await stopHostRuntime();
     }
+    return status();
+  }
+
+  async function configureMemory({ enabled, folderUrl, label } = {}) {
+    await requireInstalled();
+    if (typeof enabled !== 'boolean') {
+      throw new CodexConnectionError('Drive hafızası durumu geçersiz.', 400, 'codex-memory-enabled-invalid');
+    }
+    const config = loadConfig();
+    const nextMemory = typeof folderUrl === 'string' && folderUrl.trim()
+      ? normalizeMemoryConfig({ enabled, folderUrl, label })
+      : config.memory
+        ? { ...config.memory, enabled }
+        : null;
+    if (enabled && !nextMemory) {
+      throw new CodexConnectionError(
+        'Drive hafızasını açmak için klasör bağlantısı gerekli.',
+        400,
+        'codex-memory-folder-required'
+      );
+    }
+    saveConfig(config.accessProfile, nextMemory);
     return status();
   }
 
@@ -916,6 +1002,7 @@ function createCodexConnectionManager({
         'codex-reasoning-effort-invalid'
       );
     }
+    const developerInstructions = memoryDeveloperInstructions(config);
     const result = await client.request('thread/start', {
       model: selectedModel.model,
       cwd: '/',
@@ -923,6 +1010,7 @@ function createCodexConnectionManager({
       sandbox: 'danger-full-access',
       serviceName: 'foxos',
       ephemeral: false,
+      ...(developerInstructions ? { developerInstructions } : {}),
       config: { model_reasoning_effort: selectedEffort }
     });
     const thread = sanitizeThreadSummary(result.thread);
@@ -937,19 +1025,22 @@ function createCodexConnectionManager({
         : selectedEffort,
       approvalPolicy,
       accessProfile: config.accessProfile,
+      memoryEnabled: Boolean(config.memory && config.memory.enabled),
       workingDirectory: '/'
     };
   }
 
   async function resumeThread(threadId, requestedApprovalPolicy) {
-    await requireFullServer();
+    const config = await requireFullServer();
     const normalizedThreadId = normalizeThreadId(threadId);
     const approvalPolicy = normalizeApprovalPolicy(requestedApprovalPolicy);
+    const developerInstructions = memoryDeveloperInstructions(config);
     const result = await client.request('thread/resume', {
       threadId: normalizedThreadId,
       cwd: '/',
       approvalPolicy,
-      sandbox: 'danger-full-access'
+      sandbox: 'danger-full-access',
+      ...(developerInstructions ? { developerInstructions } : {})
     });
     const thread = sanitizeThreadWithHistory(result.thread);
     if (!thread || thread.id !== normalizedThreadId) {
@@ -963,6 +1054,7 @@ function createCodexConnectionManager({
         : null,
       approvalPolicy,
       accessProfile: FULL_SERVER_ACCESS_PROFILE,
+      memoryEnabled: Boolean(config.memory && config.memory.enabled),
       workingDirectory: '/'
     };
   }
@@ -993,6 +1085,7 @@ function createCodexConnectionManager({
 
   return {
     cancelLogin,
+    configureMemory: (memory) => serializeRuntimeMutation(() => configureMemory(memory)),
     disconnect: (confirmation) => serializeRuntimeMutation(() => disconnect(confirmation)),
     events: (sequence, threadId) => client.eventsAfter(sequence, threadId),
     install: (confirmation) => serializeRuntimeMutation(() => install(confirmation)),

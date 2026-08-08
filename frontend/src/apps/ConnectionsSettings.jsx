@@ -68,6 +68,8 @@ const ConnectionsSettings = () => {
   const [cloudflare, setCloudflare] = useState(null);
   const [codex, setCodex] = useState(null);
   const [codexLogin, setCodexLogin] = useState(null);
+  const [codexMemoryFolderUrl, setCodexMemoryFolderUrl] = useState('');
+  const [editingCodexMemory, setEditingCodexMemory] = useState(false);
   const [apiToken, setApiToken] = useState('');
   const [editingCloudflare, setEditingCloudflare] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -253,6 +255,42 @@ const ConnectionsSettings = () => {
     });
   };
 
+  const updateCodexMemory = async ({ enabled, folderUrl = null }) => {
+    setSaving('codex-memory');
+    setMessage('codex', null);
+    try {
+      const response = await apiFetch('/api/connections/codex/memory', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          enabled,
+          ...(folderUrl ? { folderUrl, label: 'Drive hafızası' } : {})
+        })
+      });
+      const payload = await response.json();
+      setCodex(payload.connection);
+      setCodexMemoryFolderUrl('');
+      setEditingCodexMemory(false);
+      setMessage('codex', {
+        type: 'success',
+        text: enabled
+          ? 'Drive hafızası açıldı. Yeni ve yeniden açılan konuşmalar hafızayı başlangıçta yükleyecek.'
+          : 'Drive hafızası kapatıldı. Sunucudaki klasör kaydı silinmedi.'
+      });
+    } catch (error) {
+      setMessage('codex', { type: 'error', text: error.message });
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const configureCodexMemory = (event) => {
+    event.preventDefault();
+    const folderUrl = codexMemoryFolderUrl.trim();
+    if (!folderUrl) return;
+    updateCodexMemory({ enabled: true, folderUrl });
+  };
+
   const openCodex = () => openWindow({
     id: 'codex',
     type: 'codex',
@@ -425,6 +463,15 @@ const ConnectionsSettings = () => {
               </div>
               <div style={{ color: '#888' }}>Çalışma dizini</div>
               <div style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>/</div>
+              <div style={{ color: '#888' }}>Drive hafızası</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '7px', color: codex.memoryEnabled ? '#75da85' : '#aaa' }}>
+                <HardDrive size={14} />
+                {codex.memoryConfigured
+                  ? codex.memoryEnabled
+                    ? `${codex.memoryLabel || 'Drive hafızası'} — otomatik`
+                    : 'Yapılandırıldı — kapalı'
+                  : 'Yapılandırılmadı'}
+              </div>
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
               {codex.fullServer ? (
@@ -439,6 +486,46 @@ const ConnectionsSettings = () => {
               )}
               <button type="button" onClick={() => loadConnections()} disabled={codexBusy} style={{ ...SECONDARY_BUTTON_STYLE, cursor: codexBusy ? 'wait' : 'pointer', opacity: codexBusy ? 0.5 : 1 }}><RefreshCw size={15} /> Kontrol Et</button>
               <button type="button" onClick={disconnectCodex} disabled={codexBusy} style={{ background: 'transparent', color: '#aaa', border: '1px solid rgba(255,255,255,0.12)', padding: '9px 14px', borderRadius: '8px', cursor: codexBusy ? 'not-allowed' : 'pointer', opacity: codexBusy ? 0.5 : 1, display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px' }}><Unplug size={15} /> Bağlantıyı Kes</button>
+            </div>
+
+            <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid rgba(255,255,255,0.09)' }}>
+              {!codex.memoryConfigured || editingCodexMemory ? (
+                <form onSubmit={configureCodexMemory}>
+                  <div style={{ color: '#aaa', fontSize: '12px', lineHeight: 1.5, marginBottom: '10px' }}>
+                    Özel Drive klasörünü bu sunucuya bağlayın. Adres yalnız sunucuda saklanır; API yanıtlarında ve Git deposunda yer almaz.
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center' }}>
+                    <input
+                      type="url"
+                      value={codexMemoryFolderUrl}
+                      onChange={(event) => { setCodexMemoryFolderUrl(event.target.value); setMessage('codex', null); }}
+                      disabled={codexBusy}
+                      placeholder="Google Drive klasör bağlantısı"
+                      autoComplete="off"
+                      spellCheck={false}
+                      style={{ flex: '1 1 300px', minWidth: 0, background: '#24242a', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 12px', borderRadius: '8px', outline: 'none', fontSize: '13px' }}
+                    />
+                    <button type="submit" disabled={codexBusy || !codexMemoryFolderUrl.trim()} style={{ ...PRIMARY_BUTTON_STYLE, cursor: codexBusy || !codexMemoryFolderUrl.trim() ? 'not-allowed' : 'pointer', opacity: codexBusy || !codexMemoryFolderUrl.trim() ? 0.5 : 1 }}>
+                      {saving === 'codex-memory' ? <Loader2 size={15} className="spin" /> : <Link2 size={15} />} Hafızayı Bağla
+                    </button>
+                    {codex.memoryConfigured && (
+                      <button type="button" onClick={() => { setEditingCodexMemory(false); setCodexMemoryFolderUrl(''); setMessage('codex', null); }} disabled={codexBusy} style={{ ...SECONDARY_BUTTON_STYLE, cursor: codexBusy ? 'not-allowed' : 'pointer', opacity: codexBusy ? 0.5 : 1 }}>Vazgeç</button>
+                    )}
+                  </div>
+                </form>
+              ) : (
+                <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px' }}>
+                  <div style={{ flex: '1 1 260px', color: '#aaa', fontSize: '12px', lineHeight: 1.5 }}>
+                    {codex.memoryEnabled
+                      ? 'Yeni ve yeniden açılan konuşmalar önce Drive hafızasını yükler.'
+                      : 'Klasör kaydı bu sunucuda duruyor; otomatik yükleme kapalı.'}
+                  </div>
+                  <button type="button" onClick={() => updateCodexMemory({ enabled: !codex.memoryEnabled })} disabled={codexBusy} style={{ ...SECONDARY_BUTTON_STYLE, cursor: codexBusy ? 'not-allowed' : 'pointer', opacity: codexBusy ? 0.5 : 1 }}>
+                    {saving === 'codex-memory' && <Loader2 size={15} className="spin" />} {codex.memoryEnabled ? 'Hafızayı Kapat' : 'Hafızayı Aç'}
+                  </button>
+                  <button type="button" onClick={() => { setEditingCodexMemory(true); setMessage('codex', null); }} disabled={codexBusy} style={{ ...SECONDARY_BUTTON_STYLE, cursor: codexBusy ? 'not-allowed' : 'pointer', opacity: codexBusy ? 0.5 : 1 }}><Link2 size={15} /> Klasörü Değiştir</button>
+                </div>
+              )}
             </div>
           </>
         )}

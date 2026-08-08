@@ -356,6 +356,62 @@ test('explicit no-approval mode reaches new, resumed and subsequent turns', asyn
   fixture.manager.stop();
 });
 
+test('private Drive memory is hidden from status and bootstraps new and resumed threads', async () => {
+  const fixture = createFixture({ installed: true });
+  const folderUrl = 'https://drive.google.com/drive/folders/testFolder123456789';
+  await fixture.manager.startLogin();
+  await fixture.manager.setAccessProfile('full-server', FULL_SERVER_CONFIRMATION);
+
+  await assert.rejects(
+    fixture.manager.configureMemory({ enabled: true }),
+    (error) => error.code === 'codex-memory-folder-required'
+  );
+  await assert.rejects(
+    fixture.manager.configureMemory({ enabled: true, folderUrl: 'https://example.com/not-drive' }),
+    (error) => error.code === 'codex-memory-folder-invalid'
+  );
+
+  const configured = await fixture.manager.configureMemory({
+    enabled: true,
+    folderUrl: folderUrl + '?usp=drive_link',
+    label: 'Test hafızası'
+  });
+  assert.equal(configured.memoryConfigured, true);
+  assert.equal(configured.memoryEnabled, true);
+  assert.equal(configured.memoryLabel, 'Test hafızası');
+  assert.equal(configured.memoryLocationIncluded, false);
+  assert.equal(JSON.stringify(configured).includes('testFolder123456789'), false);
+  assert.equal(Object.hasOwn(configured, 'folderUrl'), false);
+
+  const configFile = path.join(fixture.root, 'connections', 'codex', 'config.json');
+  const privateConfig = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+  assert.equal(privateConfig.memory.folderUrl, folderUrl);
+  assert.equal(fs.statSync(configFile).mode & 0o777, 0o600);
+
+  const started = await fixture.manager.startThread('gpt-5.6-sol', 'low');
+  const child = fixture.children[0];
+  const threadStart = child.received.find((message) => message.method === 'thread/start');
+  assert.match(threadStart.params.developerInstructions, /Read AGENTS\.md completely first/);
+  assert.match(threadStart.params.developerInstructions, /then read index\.md/);
+  assert.match(threadStart.params.developerInstructions, /foxos-46-server-operations\.md/);
+  assert.ok(threadStart.params.developerInstructions.includes(folderUrl));
+  assert.equal(started.memoryEnabled, true);
+
+  const resumed = await fixture.manager.resumeThread(started.thread.id);
+  const threadResume = child.received.find((message) => message.method === 'thread/resume');
+  assert.ok(threadResume.params.developerInstructions.includes(folderUrl));
+  assert.equal(resumed.memoryEnabled, true);
+
+  const disabled = await fixture.manager.configureMemory({ enabled: false });
+  assert.equal(disabled.memoryConfigured, true);
+  assert.equal(disabled.memoryEnabled, false);
+  await fixture.manager.startThread('gpt-5.6-sol', 'low');
+  const lastThreadStart = child.received.filter((message) => message.method === 'thread/start').at(-1);
+  assert.equal(Object.hasOwn(lastThreadStart.params, 'developerInstructions'), false);
+  assert.equal(JSON.parse(fs.readFileSync(configFile, 'utf8')).memory.folderUrl, folderUrl);
+  fixture.manager.stop();
+});
+
 test('Codex models are sanitized and a supported model and reasoning effort reach thread/start', async () => {
   const fixture = createFixture({ installed: true });
   await fixture.manager.startLogin();

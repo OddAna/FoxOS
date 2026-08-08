@@ -497,6 +497,9 @@ test('health is public while management APIs require a session', async () => {
   assert.equal((await fetch(baseUrl() + '/api/connections/codex/install', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
   })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/codex/memory', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
   assert.equal((await fetch(baseUrl() + '/api/codex/models')).status, 401);
   assert.equal((await fetch(baseUrl() + '/api/codex/events')).status, 401);
   const applicationOperationsId = 'res_' + '7'.repeat(32);

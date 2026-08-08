@@ -18,6 +18,10 @@ write to the host filesystem, and control the Docker daemon.
   separate explicit operator action.
 
 When an HTTPS reverse proxy is in place, set `FOXOS_SECURE_COOKIE=true`.
+FoxOS stores only SHA-256 digests of active owner-session bearer tokens in
+owner-only `.foxos-data/sessions.json`; raw cookie values are never persisted.
+Sessions expire after 12 hours, renew only during active use, survive agent
+recreation, and are removed from the persistent store on logout.
 
 FoxOS also ships an optional, independently managed Caddy gateway. It keeps the
 direct agent port on loopback, stores certificate state under
@@ -56,6 +60,13 @@ only the local socket client; the daemon and active server-side turn continue.
 Conversation history itself is persisted by Codex in that owner-only directory; FoxOS lists
 only root-working-directory app-server threads and bounds the history material
 returned to the UI. All related APIs still require the FoxOS owner session.
+An optional Drive memory folder reference is stored separately in the ignored
+FoxOS server-data tree with mode `600`. The API returns only whether memory is
+configured/enabled and its display label, never the folder location. When
+enabled, the private location is passed only to new and resumed Codex threads as
+developer instructions to load `AGENTS.md` followed by `index.md`; it must not
+appear in Git, normal logs or ordinary assistant responses. This reference is
+not a Google credential and does not make Drive a clean-install dependency.
 Returning the profile to read-only explicitly stops the host daemon and
 invalidates active Full Server work; disconnecting also logs the account out.
 Protect both the FoxOS account and the host Codex state directory as

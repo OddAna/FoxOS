@@ -246,7 +246,11 @@ Command and file-change approval requests are represented by short-lived opaque
 FoxOS IDs; only fixed Codex decisions can be returned.
 
 All connection, thread, event, interrupt and approval endpoints remain behind
-the existing FoxOS owner session. New threads are explicitly non-ephemeral and
+the existing FoxOS owner session. That owner session is durable control-plane
+state: FoxOS persists only a SHA-256 token digest in owner-only server data,
+renews the 12-hour expiry during active use and removes it on logout. Agent
+recreation therefore cannot invalidate the browser while its Codex turn keeps
+running. New threads are explicitly non-ephemeral and
 Codex remains the durable conversation store. FoxOS history requests explicitly
 select `appServer` source threads at host root `/`, return bounded redacted thread
 metadata, and resume a selected thread through `thread/resume`. Runtime events
@@ -255,6 +259,18 @@ its owner-only host directory. Recreating or stopping the FoxOS agent disconnect
 only the socket client: the host daemon and an already-running turn continue.
 The next agent reconnects to the same control socket and reloads durable thread
 history.
+
+An owner may also configure an optional private Google Drive memory folder in
+**Bağlantılar**. FoxOS stores the canonical folder reference only in its ignored
+server data under `connections/codex/config.json` with mode `600`; status APIs
+expose only configured/enabled state and a display label, never the folder
+location. When enabled, FoxOS adds private developer instructions to both
+`thread/start` and `thread/resume`: Codex must fetch `AGENTS.md` completely,
+then `index.md`, and retrieve only task-relevant memory before responding. A
+clean installation has no memory folder or Drive dependency, and disabling the
+feature preserves the private local reference without injecting it into later
+threads.
+
 Changing the profile back to read-only stops the current app-server runtime and
 blocks turns on earlier Full Server threads. Disconnect first revokes Full Server,
 logs the account out through Codex and keeps the CLI installed for a later user.

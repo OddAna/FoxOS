@@ -776,7 +776,15 @@ const CodexApp = () => {
                   <div>
                     <Bot size={34} style={{ marginBottom: '10px' }} />
                     <div style={{ fontSize: '14px', color: '#aaa' }}>{threadId ? 'Bu konuşmaya devam edebilirsiniz.' : 'Codex bütün Linux sunucusunda çalışmaya hazır.'}</div>
-                    <div style={{ fontSize: '12px', marginTop: '5px' }}>{threadId ? 'Geçmiş konuşma sunucudaki Codex kaydından açıldı.' : 'Dosyalar, Docker, systemd, servisler ve paketler dahil.'}</div>
+                    <div style={{ fontSize: '12px', marginTop: '5px' }}>
+                      {threadId
+                        ? connection.memoryEnabled
+                          ? 'Geçmiş konuşma açıldı; Drive hafızası bu oturum için yeniden yüklenecek.'
+                          : 'Geçmiş konuşma sunucudaki Codex kaydından açıldı.'
+                        : connection.memoryEnabled
+                          ? 'Drive hafızası ilk mesajdan önce otomatik yüklenir.'
+                          : 'Dosyalar, Docker, systemd, servisler ve paketler dahil.'}
+                    </div>
                   </div>
                 </div>
               ) : null}

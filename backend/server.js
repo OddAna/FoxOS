@@ -89,6 +89,7 @@ const { createHostServiceDiscovery } = require('./hostServiceDiscovery');
 const { HostServiceError, createHostServiceManager } = require('./hostServiceManager');
 const { createRouteManager } = require('./routeManager');
 const { createSecretManager } = require('./secretManager');
+const { createSessionStore } = require('./sessionStore');
 const {
   WorkloadEvidenceError,
   createWorkloadEvidenceManager
@@ -170,8 +171,10 @@ const HOST_ROOT = path.resolve(process.env.HOST_ROOT || path.parse(process.cwd()
 const HOST_EXECUTION = process.env.HOST_EXECUTION || 'local';
 const DOCKER_SOCKET = process.env.DOCKER_SOCKET || '/var/run/docker.sock';
 const AUTH_FILE = path.join(DATA_ROOT, 'auth.json');
+const SESSIONS_FILE = path.join(DATA_ROOT, 'sessions.json');
 const PUBLIC_DIR = path.resolve(process.env.PUBLIC_DIR || path.join(__dirname, 'public'));
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+const SESSION_RENEWAL_WINDOW_MS = Math.floor(SESSION_TTL_MS / 2);
 const COMMAND_TIMEOUT_MS = Number.parseInt(process.env.COMMAND_TIMEOUT_MS || '120000', 10);
 const COMMAND_MAX_BUFFER = 2 * 1024 * 1024;
 const CODEX_HOST_STATE_ROOT = process.env.FOXOS_CODEX_HOST_STATE_ROOT || '/var/lib/foxos/codex';
@@ -180,7 +183,6 @@ const CODEX_HOST_CONFIG_HOME = path.posix.join(CODEX_HOST_STATE_ROOT, '.codex');
 const CODEX_HOST_BINARY = path.posix.join(CODEX_HOST_STATE_ROOT, '.local', 'bin', 'codex');
 const CODEX_HOST_DAEMON_SOCKET = codexDaemonSocket(CODEX_HOST_CONFIG_HOME);
 
-const sessions = new Map();
 const loginAttempts = new Map();
 const appInstallOperations = new Set();
 const containerPortCache = new Map();
@@ -213,6 +215,13 @@ function initializeDataDirectory() {
 }
 
 initializeDataDirectory();
+
+const sessionStore = createSessionStore({
+  filePath: SESSIONS_FILE,
+  ttlMs: SESSION_TTL_MS,
+  renewalWindowMs: SESSION_RENEWAL_WINDOW_MS,
+  onError: (error) => console.error('Could not read authentication sessions:', error.message)
+});
 
 app.disable('x-powered-by');
 app.use(express.json({ limit: '1mb' }));
@@ -265,26 +274,13 @@ function parseCookies(header = '') {
   }, {});
 }
 
-function pruneSessions() {
-  const now = Date.now();
-  for (const [token, session] of sessions.entries()) {
-    if (session.expiresAt <= now) {
-      sessions.delete(token);
-    }
-  }
-}
-
 function getSession(req) {
-  pruneSessions();
   const token = parseCookies(req.headers.cookie).foxos_session;
   if (!token) {
     return null;
   }
-  const session = sessions.get(token);
-  if (!session || session.expiresAt <= Date.now()) {
-    sessions.delete(token);
-    return null;
-  }
+  const session = sessionStore.get(token);
+  if (!session) return null;
   return { token, ...session };
 }
 
@@ -298,15 +294,14 @@ function setSessionCookie(res, token) {
 }
 
 function createSession(res, username) {
-  const token = crypto.randomBytes(32).toString('base64url');
-  sessions.set(token, { username, expiresAt: Date.now() + SESSION_TTL_MS });
+  const token = sessionStore.create(username);
   setSessionCookie(res, token);
 }
 
 function clearSession(req, res) {
   const session = getSession(req);
   if (session) {
-    sessions.delete(session.token);
+    sessionStore.remove(session.token);
   }
   const secure = process.env.FOXOS_SECURE_COOKIE === 'true' ? '; Secure' : '';
   res.setHeader('Set-Cookie', 'foxos_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' + secure);
@@ -316,6 +311,9 @@ function requireAuth(req, res, next) {
   const session = getSession(req);
   if (!session) {
     return res.status(401).json({ error: 'Authentication required' });
+  }
+  if (session.renewed) {
+    setSessionCookie(res, session.token);
   }
   req.session = session;
   next();
@@ -1776,6 +1774,9 @@ app.get('/api/health', (req, res) => {
 app.get('/api/auth/status', (req, res) => {
   const authRecord = readAuthRecord();
   const session = getSession(req);
+  if (session && session.renewed) {
+    setSessionCookie(res, session.token);
+  }
   res.json({
     isSetup: Boolean(authRecord),
     authenticated: Boolean(session),
@@ -2924,6 +2925,15 @@ app.put('/api/connections/codex/access-profile', async (req, res) => {
     res.json({ connection });
   } catch (error) {
     sendConnectionError(res, error, 'Could not configure Codex access');
+  }
+});
+
+app.put('/api/connections/codex/memory', async (req, res) => {
+  try {
+    const connection = await codexConnectionManager.configureMemory(req.body || {});
+    res.json({ connection });
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not configure Codex memory');
   }
 });
 

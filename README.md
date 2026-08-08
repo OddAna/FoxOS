@@ -136,6 +136,9 @@ on the server.
 - Keep new threads non-ephemeral, list FoxOS app-server conversations in the
   left history panel and resume the selected stored thread after a window or
   browser restart.
+- Optionally connect a private Google Drive memory folder. Its address stays in
+  ignored owner-only server data and is never returned by the API; enabled new
+  and resumed conversations load `AGENTS.md` and `index.md` before answering.
 - Keep the Codex app-server as a managed host daemon independent of the FoxOS
   agent container. FoxOS talks to it directly through its owner-only Unix
   WebSocket control socket, so an agent rebuild/recreate does not kill the
@@ -331,7 +334,9 @@ records enough evidence to report or roll back the result.
 FoxOS control data is stored under `.foxos-data/` on the host and mounted as
 `/data` inside the agent. It contains authentication state, desktop layout,
 application identities, encrypted secrets, route state, migration evidence,
-operation receipts and gateway state.
+operation receipts and gateway state. Active owner sessions persist there as
+SHA-256 token digests rather than raw cookie values, so an agent rebuild does
+not sign the owner out while server-side work continues.
 
 Application data remains in the application's own Docker volumes or explicit
 host paths. Do not delete `.foxos-data/`, application volumes or gateway data
