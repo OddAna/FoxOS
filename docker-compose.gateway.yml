@@ -1,0 +1,78 @@
+services:
+  foxos:
+    environment:
+      FOXOS_SECURE_COOKIE: "true"
+      FOXOS_TRUST_PROXY: "1"
+      FOXOS_ROUTE_BASE_URL: "https://${FOXOS_DOMAIN}:${FOXOS_HTTPS_PORT:-8443}"
+      FOXOS_ROUTE_NETWORK: "${FOXOS_ROUTE_NETWORK:-foxos-routing}"
+      FOXOS_EGRESS_NETWORK: "${FOXOS_EGRESS_NETWORK:-foxos-egress}"
+      FOXOS_ROUTE_GATEWAY_HOST: "foxos-gateway"
+      FOXOS_INGRESS_HTTP_PORT: "${FOXOS_INGRESS_HTTP_PORT:-9080}"
+      FOXOS_INGRESS_HTTPS_PORT: "${FOXOS_INGRESS_HTTPS_PORT:-9443}"
+
+  foxos-gateway:
+    build:
+      context: ./gateway
+      args:
+        CADDY_VERSION: "2.11.4"
+    container_name: foxos-gateway
+    depends_on:
+      foxos:
+        condition: service_healthy
+    ports:
+      - "${FOXOS_HTTP_BIND_ADDRESS:-0.0.0.0}:${FOXOS_HTTP_PORT:-8082}:80/tcp"
+      - "${FOXOS_HTTPS_BIND_ADDRESS:-0.0.0.0}:${FOXOS_HTTPS_PORT:-8443}:443/tcp"
+    environment:
+      FOXOS_DOMAIN: "${FOXOS_DOMAIN:?Set FOXOS_DOMAIN in .env}"
+      FOXOS_ACME_EMAIL: "${FOXOS_ACME_EMAIL:?Set FOXOS_ACME_EMAIL in .env}"
+    networks:
+      - default
+      - foxos-routing
+      - foxos-egress
+    volumes:
+      - type: bind
+        source: ./.foxos-data/gateway/caddy-data
+        target: /data
+      - type: bind
+        source: ./.foxos-data/gateway/caddy-config
+        target: /config
+      - type: bind
+        source: ./.foxos-data/gateway/runtime
+        target: /etc/caddy/runtime
+        read_only: true
+    labels:
+      com.foxos.core: "true"
+      com.foxos.gateway: "true"
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          wget --quiet --spider --no-check-certificate
+          https://127.0.0.1/api/health
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+
+networks:
+  foxos-routing:
+    name: "${FOXOS_ROUTE_NETWORK:-foxos-routing}"
+    internal: true
+    labels:
+      com.foxos.core: "true"
+      com.foxos.routing: "true"
+  foxos-egress:
+    name: "${FOXOS_EGRESS_NETWORK:-foxos-egress}"
+    labels:
+      com.foxos.core: "true"
+      com.foxos.egress: "true"

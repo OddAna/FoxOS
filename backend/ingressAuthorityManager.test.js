@@ -1,0 +1,548 @@
+const assert = require('node:assert/strict');
+const { EventEmitter } = require('node:events');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const test = require('node:test');
+const { createIngressAuthorityManager, domainForBaseUrl } = require('./ingressAuthorityManager');
+
+function adminConnection(commands) {
+  const socket = new EventEmitter();
+  socket.setEncoding = () => {};
+  socket.setTimeout = () => {};
+  socket.destroy = (error) => {
+    if (error) socket.emit('error', error);
+  };
+  socket.end = (command) => {
+    commands.push(command.trim());
+    setImmediate(() => socket.emit('end'));
+  };
+  setImmediate(() => socket.emit('connect'));
+  return socket;
+}
+
+test('staged routes switch through owned ingress and remove host authority on rollback', async () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-ingress-authority-'));
+  const adminCommands = [];
+  const firewallRules = new Set();
+  const hostCalls = [];
+  const gatewayId = 'a'.repeat(64);
+  const ingressId = 'b'.repeat(64);
+  const candidateId = 'c'.repeat(64);
+  const replacementId = 'd'.repeat(64);
+  let replacementAttached = false;
+  const networkCalls = [];
+  const execContainerIds = [];
+  const execCommands = [];
+  const manager = createIngressAuthorityManager({
+    dataRoot,
+    dockerRequest: async (method, requestPath, body) => {
+      if (method === 'POST' && requestPath === '/networks/foxos-routing/connect') {
+        networkCalls.push({ method, requestPath, body });
+        assert.equal(body.Container, replacementId);
+        assert.deepEqual(body.EndpointConfig.Aliases, ['foxos-sm-candidate']);
+        replacementAttached = true;
+        return null;
+      }
+      assert.equal(method, 'GET');
+      if (requestPath === '/networks/foxos-routing') {
+        return {
+          Internal: true,
+          Labels: { 'com.foxos.routing': 'true', 'com.foxos.core': 'true' },
+          Containers: {
+            [candidateId]: {},
+            ...(replacementAttached ? { [replacementId]: {} } : {})
+          }
+        };
+      }
+      if (requestPath === '/containers/foxos-gateway/json') {
+        return { Id: gatewayId, State: { Running: true }, Config: { Labels: { 'com.foxos.gateway': 'true' } } };
+      }
+      if (requestPath === '/containers/foxos-ingress/json') {
+        return { Id: ingressId, State: { Running: true }, Config: { Labels: { 'com.foxos.ingress': 'true' } } };
+      }
+      if (requestPath === '/containers/' + candidateId + '/json') {
+        return {
+          Id: candidateId,
+          State: { Running: true },
+          NetworkSettings: {
+            Networks: { 'foxos-routing': { Aliases: ['foxos-sm-candidate'], IPAddress: '10.0.10.42' } }
+          }
+        };
+      }
+      if (requestPath === '/containers/' + replacementId + '/json') {
+        return {
+          Id: replacementId,
+          State: { Running: true },
+          NetworkSettings: {
+            Networks: replacementAttached
+              ? { 'foxos-routing': { Aliases: ['foxos-sm-candidate'], IPAddress: '10.0.10.84' } }
+              : {}
+          }
+        };
+      }
+      throw new Error('Unexpected Docker request: ' + requestPath);
+    },
+    dockerExec: async (containerId, command) => {
+      execContainerIds.push(containerId);
+      execCommands.push(command);
+      return { exitCode: 0, output: '' };
+    },
+    hostCommand: async (binary, args) => {
+      hostCalls.push([binary, ...args]);
+      const action = args.includes('-C') ? 'check' : args.includes('-I') ? 'insert' : args.includes('-D') ? 'delete' : 'other';
+      const key = binary + ':public';
+      if (action === 'check') return { success: firewallRules.has(key), output: '' };
+      if (action === 'insert') firewallRules.add(key);
+      if (action === 'delete') firewallRules.delete(key);
+      return { success: true, output: '' };
+    },
+    connectAdmin: () => adminConnection(adminCommands),
+    panelBaseUrl: 'https://foxos.example.com:8443',
+    clock: () => new Date('2026-08-06T12:00:00.000Z')
+  });
+
+  const route = {
+    routeId: 'smroute_' + 'a'.repeat(24),
+    operationId: 'smop_' + 'b'.repeat(32),
+    domain: 'app.example.com',
+    path: '/',
+    alias: 'foxos-sm-candidate',
+    privatePort: 3000
+  };
+  const secondaryRoute = {
+    ...route,
+    routeId: 'smroute_' + 'c'.repeat(24),
+    operationId: 'rtop_' + 'd'.repeat(32),
+    domain: 'alternate.example.com'
+  };
+  const staged = await manager.stageRoutes([route, secondaryRoute]);
+  assert.equal(staged[0].status, 'staged');
+  assert.match(fs.readFileSync(manager.paths.routeMapFile, 'utf8'), /^foxos\.example\.com foxos$/m);
+  const renderedRoutes = fs.readFileSync(manager.paths.caddyRoutesFile, 'utf8');
+  assert.match(renderedRoutes, /reverse_proxy 10\.0\.10\.42:3000/);
+  assert.match(renderedRoutes, new RegExp('X-FoxOS-Runtime "' + candidateId.slice(0, 12) + '"'));
+
+  await manager.switchDomain(route.domain, 'foxos');
+  assert.equal(manager.state().publicAuthorityActive, true);
+  assert.equal(manager.state().domains[route.domain], 'foxos');
+  assert.deepEqual([...firewallRules].sort(), ['ip6tables:public', 'iptables:public']);
+
+  firewallRules.clear();
+  const reconciliation = await manager.reconcilePublicAuthority();
+  assert.equal(reconciliation.active, true);
+  assert.equal(reconciliation.reconciled, true);
+  assert.deepEqual(reconciliation.backends, { ipv4: 'iptables', ipv6: 'ip6tables' });
+  assert.deepEqual([...firewallRules].sort(), ['ip6tables:public', 'iptables:public']);
+
+  const binding = manager.operationRuntimeBinding(candidateId);
+  assert.deepEqual(binding.operationIds, [route.operationId, secondaryRoute.operationId].sort());
+  const refreshed = await manager.rebindOperationRuntime(binding, replacementId, candidateId);
+  assert.equal(refreshed.runtimeContainerId, replacementId);
+  assert.equal(networkCalls.length, 1);
+  assert.match(fs.readFileSync(manager.paths.caddyRoutesFile, 'utf8'), /reverse_proxy 10\.0\.10\.84:3000/);
+
+  await manager.switchDomain(route.domain, 'legacy');
+  assert.equal(manager.state().publicAuthorityActive, false);
+  assert.equal(manager.state().domains[route.domain], 'legacy');
+  assert.deepEqual([...firewallRules], []);
+  assert.equal(adminCommands.includes('set map /runtime/routes.map app.example.com foxos'), true);
+  assert.equal(adminCommands.includes('set map /runtime/routes.map app.example.com legacy'), true);
+  assert.equal(adminCommands.includes('set map /runtime/routes.map foxos.example.com foxos'), true);
+  assert.equal(hostCalls.some((call) => call.includes('--to-ports') && call.includes('9443')), true);
+  assert.deepEqual(execContainerIds, [gatewayId, gatewayId, gatewayId, gatewayId, gatewayId, gatewayId]);
+  assert.deepEqual(execCommands[1].slice(-2), ['--address', '127.0.0.1:2019']);
+  assert.equal(execCommands[1].includes('http://127.0.0.1:2019'), false);
+  fs.rmSync(dataRoot, { recursive: true, force: true });
+});
+
+test('panel base URL contributes only a validated hostname to ingress authority', () => {
+  assert.equal(domainForBaseUrl('https://foxos.example.com:8443'), 'foxos.example.com');
+  assert.equal(domainForBaseUrl('https://user:secret@foxos.example.com'), null);
+  assert.equal(domainForBaseUrl('not-a-url'), null);
+});
+
+test('inactive server definitions receive trusted FoxOS 503 routes before ingress activation', async () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-ingress-inactive-domain-'));
+  const adminCommands = [];
+  const gatewayId = 'a'.repeat(64);
+  const ingressId = 'b'.repeat(64);
+  const execCommands = [];
+  const requests = [];
+  const manager = createIngressAuthorityManager({
+    dataRoot,
+    dockerRequest: async (method, requestPath) => {
+      assert.equal(method, 'GET');
+      if (requestPath === '/networks/foxos-routing') {
+        return { Internal: true, Labels: { 'com.foxos.routing': 'true', 'com.foxos.core': 'true' } };
+      }
+      if (requestPath === '/containers/foxos-gateway/json') {
+        return { Id: gatewayId, State: { Running: true }, Config: { Labels: { 'com.foxos.gateway': 'true' } } };
+      }
+      if (requestPath === '/containers/foxos-ingress/json') {
+        return { Id: ingressId, State: { Running: true }, Config: { Labels: { 'com.foxos.ingress': 'true' } } };
+      }
+      throw new Error('Unexpected Docker request: ' + requestPath);
+    },
+    dockerExec: async (containerId, command) => {
+      assert.equal(containerId, gatewayId);
+      execCommands.push(command);
+      return { exitCode: 0, output: '' };
+    },
+    hostCommand: async (binary, args) => ({ success: !args.includes('-C'), output: '' }),
+    connectAdmin: () => adminConnection(adminCommands),
+    httpsRequest: (options, callback) => {
+      requests.push(options);
+      const request = new EventEmitter();
+      request.setTimeout = () => {};
+      request.destroy = (error) => request.emit('error', error);
+      request.end = () => {
+        const response = new EventEmitter();
+        response.statusCode = 503;
+        response.headers = { 'x-foxos-inactive': 'true' };
+        response.socket = { authorized: true };
+        response.resume = () => setImmediate(() => response.emit('end'));
+        callback(response);
+      };
+      return request;
+    },
+    clock: () => new Date('2026-08-07T12:00:00.000Z')
+  });
+
+  try {
+    const resourceId = 'res_' + 'c'.repeat(32);
+    const result = await manager.reconcileInactiveDomains([{
+      domain: 'stopped.example.com',
+      resourceId
+    }]);
+    assert.equal(result.reconciled, true);
+    assert.deepEqual(result.addedDomains, ['stopped.example.com']);
+    assert.equal(manager.state().domains['stopped.example.com'], 'foxos');
+    assert.equal(manager.state().inactiveDomains['stopped.example.com'].resourceId, resourceId);
+    assert.match(fs.readFileSync(manager.paths.caddyRoutesFile, 'utf8'), /stopped\.example\.com \{/);
+    assert.match(fs.readFileSync(manager.paths.caddyRoutesFile, 'utf8'), /X-FoxOS-Inactive "true"/);
+    assert.match(fs.readFileSync(manager.paths.caddyRoutesFile, 'utf8'), /respond 503/);
+    assert.match(fs.readFileSync(manager.paths.routeMapFile, 'utf8'), /^stopped\.example\.com foxos$/m);
+    assert.equal(adminCommands.includes('set map /runtime/routes.map stopped.example.com foxos'), true);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].hostname, 'foxos-gateway');
+    assert.equal(requests[0].servername, 'stopped.example.com');
+    assert.equal(execCommands.length, 2);
+
+    const repeat = await manager.reconcileInactiveDomains([{
+      domain: 'stopped.example.com',
+      resourceId
+    }]);
+    assert.equal(repeat.reconciled, false);
+    assert.deepEqual(repeat.addedDomains, []);
+    assert.equal(requests.length, 1);
+
+    const removed = await manager.removeResourceAuthority(resourceId);
+    assert.equal(removed.routesRemoved, 0);
+    assert.equal(removed.inactiveDomainsRemoved, 1);
+    assert.deepEqual(removed.domains, ['stopped.example.com']);
+    assert.equal(manager.state().inactiveDomains['stopped.example.com'], undefined);
+    assert.equal(manager.state().domains['stopped.example.com'], 'legacy');
+    assert.equal(adminCommands.includes('set map /runtime/routes.map stopped.example.com legacy'), true);
+  } finally {
+    fs.rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('stopped application routes are atomically parked behind a trusted 503 response', async () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-ingress-parked-route-'));
+  const adminCommands = [];
+  const gatewayId = 'a'.repeat(64);
+  const ingressId = 'b'.repeat(64);
+  const routeId = 'smroute_' + 'c'.repeat(24);
+  const operationId = 'rtop_' + 'd'.repeat(32);
+  const resourceId = 'res_' + 'e'.repeat(32);
+  const manager = createIngressAuthorityManager({
+    dataRoot,
+    dockerRequest: async (method, requestPath) => {
+      assert.equal(method, 'GET');
+      if (requestPath === '/networks/foxos-routing') {
+        return { Internal: true, Labels: { 'com.foxos.routing': 'true', 'com.foxos.core': 'true' }, Containers: {} };
+      }
+      if (requestPath === '/containers/foxos-gateway/json') {
+        return { Id: gatewayId, State: { Running: true }, Config: { Labels: { 'com.foxos.gateway': 'true' } } };
+      }
+      if (requestPath === '/containers/foxos-ingress/json') {
+        return { Id: ingressId, State: { Running: true }, Config: { Labels: { 'com.foxos.ingress': 'true' } } };
+      }
+      throw new Error('Unexpected Docker request: ' + requestPath);
+    },
+    dockerExec: async () => ({ exitCode: 0, output: '' }),
+    hostCommand: async () => ({ success: true }),
+    connectAdmin: () => adminConnection(adminCommands),
+    httpsRequest: (options, callback) => {
+      const request = new EventEmitter();
+      request.setTimeout = () => {};
+      request.destroy = (error) => request.emit('error', error);
+      request.end = () => {
+        assert.equal(options.hostname, 'foxos-gateway');
+        assert.equal(options.servername, 'stopped.example.com');
+        const response = new EventEmitter();
+        response.statusCode = 503;
+        response.headers = { 'x-foxos-inactive': 'true' };
+        response.socket = { authorized: true };
+        response.resume = () => setImmediate(() => response.emit('end'));
+        callback(response);
+      };
+      return request;
+    },
+    clock: () => new Date('2026-08-07T13:00:00.000Z')
+  });
+
+  fs.writeFileSync(manager.paths.authorityFile, JSON.stringify({
+    schemaVersion: 1,
+    owner: 'foxos',
+    publicAuthorityActive: true,
+    legacyBridge: null,
+    domains: { 'stopped.example.com': 'foxos' },
+    routes: {
+      [routeId]: {
+        routeId,
+        operationId,
+        domain: 'stopped.example.com',
+        path: '/',
+        alias: 'app-stopped-example',
+        privatePort: 3000,
+        status: 'active',
+        runtimeContainerId: 'f'.repeat(64),
+        runtimeAddress: '10.0.10.90'
+      }
+    },
+    inactiveDomains: {}
+  }));
+
+  try {
+    const result = await manager.parkRoutes([{ routeId, domain: 'stopped.example.com', resourceId }]);
+    assert.deepEqual(result, { parked: true, routes: [routeId] });
+    assert.equal(manager.state().routes[routeId], undefined);
+    assert.equal(manager.state().inactiveDomains['stopped.example.com'].resourceId, resourceId);
+    assert.match(fs.readFileSync(manager.paths.caddyRoutesFile, 'utf8'), /respond 503/);
+    assert.equal(adminCommands.includes('set map /runtime/routes.map stopped.example.com foxos'), true);
+  } finally {
+    fs.rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('legacy readiness waits for a browser-trusted response before traffic authority', async () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-ingress-legacy-'));
+  let requests = 0;
+  const manager = createIngressAuthorityManager({
+    dataRoot,
+    dockerRequest: async () => ({}),
+    dockerExec: async () => ({ exitCode: 0 }),
+    hostCommand: async () => ({ success: false }),
+    delay: async () => {},
+    httpsRequest: (options, callback) => {
+      requests += 1;
+      const request = new EventEmitter();
+      request.setTimeout = () => {};
+      request.destroy = (error) => request.emit('error', error);
+      request.end = () => {
+        if (requests === 1) return setImmediate(() => request.emit('error', new Error('backend resolving')));
+        const response = new EventEmitter();
+        response.statusCode = 307;
+        response.headers = {};
+        response.socket = { authorized: true };
+        response.resume = () => setImmediate(() => response.emit('end'));
+        callback(response);
+      };
+      assert.equal(options.hostname, 'foxos-ingress');
+      assert.equal(options.servername, 'app.example.com');
+      return request;
+    }
+  });
+  const proof = await manager.verifyLegacyDomain({ hostname: 'app.example.com', attempts: 2 });
+  assert.equal(proof.legacyReady, true);
+  assert.equal(proof.attempts, 2);
+  assert.equal(requests, 2);
+  fs.rmSync(dataRoot, { recursive: true, force: true });
+});
+
+test('host ingress falls back to legacy firewall binaries when nftables is incompatible', async () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-ingress-firewall-fallback-'));
+  const hostCalls = [];
+  const manager = createIngressAuthorityManager({
+    dataRoot,
+    dockerRequest: async (method, requestPath) => {
+      if (requestPath === '/networks/foxos-routing') {
+        return { Internal: true, Labels: { 'com.foxos.routing': 'true', 'com.foxos.core': 'true' } };
+      }
+      if (requestPath === '/containers/foxos-gateway/json') {
+        return { Id: 'a'.repeat(64), State: { Running: true }, Config: { Labels: { 'com.foxos.gateway': 'true' } } };
+      }
+      if (requestPath === '/containers/foxos-ingress/json') {
+        return { Id: 'b'.repeat(64), State: { Running: true }, Config: { Labels: { 'com.foxos.ingress': 'true' } } };
+      }
+      throw new Error('Unexpected Docker request: ' + method + ' ' + requestPath);
+    },
+    dockerExec: async () => ({ exitCode: 0 }),
+    hostCommand: async (binary, args) => {
+      hostCalls.push([binary, ...args]);
+      if ((binary === 'iptables' || binary === 'ip6tables') && args.includes('-L')) {
+        return { success: false, exitCode: 2, output: 'Incompatible with this kernel' };
+      }
+      if (args.includes('-C')) return { success: false, exitCode: 1, output: '' };
+      return { success: true, exitCode: 0, output: '' };
+    }
+  });
+
+  await manager.activatePublicAuthority();
+  assert.equal(manager.state().publicAuthorityActive, true);
+  assert.equal(hostCalls.some((call) => call[0] === 'iptables-legacy' && call.includes('-I')), true);
+  assert.equal(hostCalls.some((call) => call[0] === 'ip6tables-legacy' && call.includes('-I')), true);
+  assert.equal(hostCalls.some((call) => call[0] === 'iptables-nft'), false);
+  assert.equal(hostCalls.some((call) => call[0] === 'ip6tables-nft'), false);
+  fs.rmSync(dataRoot, { recursive: true, force: true });
+});
+
+test('direct host ingress proof resolves the running FoxOS agent bridge gateway', async () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-ingress-host-address-'));
+  const manager = createIngressAuthorityManager({
+    dataRoot,
+    dockerRequest: async (method, requestPath) => {
+      assert.equal(method, 'GET');
+      assert.equal(requestPath, '/containers/foxos/json');
+      return {
+        State: { Running: true },
+        Config: { Labels: { 'com.foxos.core': 'true' } },
+        NetworkSettings: {
+          Networks: {
+            'foxos_default': { Gateway: '10.0.3.1' }
+          }
+        }
+      };
+    },
+    dockerExec: async () => ({ exitCode: 0 }),
+    hostCommand: async () => ({ success: true })
+  });
+  assert.equal(await manager.hostIngressAddress(), '10.0.3.1');
+  fs.rmSync(dataRoot, { recursive: true, force: true });
+});
+
+test('legacy bridge overrides the agent healthcheck with its own listening ports', async () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-ingress-bridge-health-'));
+  const proxyId = 'c'.repeat(64);
+  const agentId = 'd'.repeat(64);
+  const bridgeId = 'e'.repeat(64);
+  let createPayload = null;
+  const probeCommands = [];
+  const manager = createIngressAuthorityManager({
+    dataRoot,
+    dockerRequest: async (method, requestPath, payload) => {
+      if (method === 'GET' && requestPath === '/containers/' + proxyId + '/json') {
+        return {
+          Id: proxyId,
+          Name: '/legacy-proxy',
+          State: { Running: true },
+          NetworkSettings: { Networks: { legacy: {} } }
+        };
+      }
+      if (method === 'GET' && requestPath === '/containers/foxos/json') return { Id: agentId, Image: 'sha256:' + 'f'.repeat(64) };
+      if (method === 'GET' && requestPath === '/containers/foxos-legacy-ingress-bridge/json') {
+        throw new Error('No such container');
+      }
+      if (method === 'POST' && requestPath.startsWith('/containers/create?name=')) {
+        createPayload = payload;
+        return { Id: bridgeId };
+      }
+      if (method === 'GET' && requestPath === '/containers/' + bridgeId + '/json') {
+        return {
+          Id: bridgeId,
+          State: { Running: true },
+          Config: {
+            Labels: {
+              'com.foxos.migration.bridge': 'true',
+              'com.foxos.legacy.proxy': proxyId,
+              'com.foxos.legacy.network': 'legacy'
+            }
+          },
+          NetworkSettings: { Networks: { legacy: {}, 'foxos-routing': {} } }
+        };
+      }
+      if (method === 'POST' && requestPath === '/networks/foxos-routing/connect') return {};
+      if (method === 'POST' && requestPath === '/containers/' + bridgeId + '/start') return {};
+      throw new Error('Unexpected Docker request: ' + method + ' ' + requestPath);
+    },
+    dockerExec: async (containerId, command) => {
+      probeCommands.push({ containerId, command });
+      return { exitCode: 0, output: JSON.stringify({ statusCode: 200, tlsValid: true }) };
+    },
+    hostCommand: async () => ({ success: true })
+  });
+  const bridge = await manager.ensureLegacyBridge({ proxyContainerId: proxyId, legacyNetwork: 'legacy' });
+  assert.equal(bridge.containerId, bridgeId);
+  assert.deepEqual(createPayload.Healthcheck.Test.slice(0, 3), ['CMD', 'node', '-e']);
+  assert.match(createPayload.Healthcheck.Test[3], /Promise\.all\(\[80,443\]/);
+  assert.equal(createPayload.Healthcheck.Timeout, 3000000000);
+  const legacyProof = await manager.verifyLegacyBackend({
+    hostname: 'app.example.com',
+    requestPath: '/healthz'
+  });
+  assert.equal(legacyProof.legacyReady, true);
+  assert.equal(legacyProof.attempts, 1);
+  assert.equal(probeCommands.at(-1).containerId, bridgeId);
+  assert.deepEqual(probeCommands.at(-1).command.slice(0, 2), ['node', '-e']);
+  assert.deepEqual(probeCommands.at(-1).command.slice(-2), ['app.example.com', '/healthz']);
+  fs.rmSync(dataRoot, { recursive: true, force: true });
+});
+
+test('legacy bridge reuses its verified proxy network across application-specific source networks', async () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-ingress-shared-legacy-bridge-'));
+  const proxyId = '1'.repeat(64);
+  const agentId = '2'.repeat(64);
+  const bridgeId = '3'.repeat(64);
+  const requests = [];
+  const manager = createIngressAuthorityManager({
+    dataRoot,
+    dockerRequest: async (method, requestPath) => {
+      requests.push([method, requestPath]);
+      if (method === 'GET' && requestPath === '/containers/' + proxyId + '/json') {
+        return {
+          Id: proxyId,
+          Name: '/legacy-proxy',
+          State: { Running: true },
+          NetworkSettings: { Networks: { 'app-network': {}, 'proxy-control': {} } }
+        };
+      }
+      if (method === 'GET' && requestPath === '/containers/foxos/json') {
+        return { Id: agentId, Image: 'sha256:' + 'f'.repeat(64) };
+      }
+      if (method === 'GET' && requestPath === '/containers/foxos-legacy-ingress-bridge/json') {
+        return {
+          Id: bridgeId,
+          State: { Running: true },
+          Config: {
+            Labels: {
+              'com.foxos.migration.bridge': 'true',
+              'com.foxos.legacy.proxy': proxyId,
+              'com.foxos.legacy.network': 'proxy-control'
+            }
+          },
+          NetworkSettings: { Networks: { 'proxy-control': {}, 'foxos-routing': {} } }
+        };
+      }
+      throw new Error('Unexpected Docker request: ' + method + ' ' + requestPath);
+    },
+    dockerExec: async () => ({ exitCode: 0, output: '' }),
+    hostCommand: async () => ({ success: true })
+  });
+
+  try {
+    const bridge = await manager.ensureLegacyBridge({
+      proxyContainerId: proxyId,
+      legacyNetwork: 'app-network'
+    });
+    assert.equal(bridge.containerId, bridgeId);
+    assert.equal(bridge.legacyNetwork, 'proxy-control');
+    assert.equal(requests.some(([method, requestPath]) => (
+      method === 'POST' && requestPath.startsWith('/containers/create?name=')
+    )), false);
+  } finally {
+    fs.rmSync(dataRoot, { recursive: true, force: true });
+  }
+});

@@ -1,0 +1,43 @@
+services:
+  foxos-ingress:
+    build:
+      context: ./ingress
+    container_name: foxos-ingress
+    depends_on:
+      foxos-gateway:
+        condition: service_healthy
+    ports:
+      - "${FOXOS_INGRESS_HTTP_BIND_ADDRESS:-0.0.0.0}:${FOXOS_INGRESS_HTTP_PORT:-9080}:80/tcp"
+      - "${FOXOS_INGRESS_HTTPS_BIND_ADDRESS:-0.0.0.0}:${FOXOS_INGRESS_HTTPS_PORT:-9443}:443/tcp"
+    networks:
+      - default
+      - foxos-routing
+    volumes:
+      - type: bind
+        source: ./.foxos-data/ingress
+        target: /runtime
+        read_only: true
+    labels:
+      com.foxos.core: "true"
+      com.foxos.ingress: "true"
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 5

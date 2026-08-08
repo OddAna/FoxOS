@@ -1,0 +1,29 @@
+name: foxos-adoption-lab
+
+services:
+  web:
+    image: nginxdemos/hello:0.4-plain-text
+    container_name: foxos-adoption-lab
+    labels:
+      com.foxos.adoption.disposable: "true"
+    environment:
+      FOXOS_PILOT_MODE: disposable
+      FOXOS_PILOT_TOKEN: "${FOXOS_PILOT_TOKEN:?set FOXOS_PILOT_TOKEN for the disposable lab}"
+    ports:
+      - "127.0.0.1:18088:80/tcp"
+    volumes:
+      - type: volume
+        source: data
+        target: /etc/nginx/conf.d
+        read_only: true
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --spider http://127.0.0.1/ || exit 1"]
+      interval: 2s
+      timeout: 1s
+      retries: 10
+      start_period: 3s
+    restart: unless-stopped
+
+volumes:
+  data:
+    name: foxos-adoption-lab-data

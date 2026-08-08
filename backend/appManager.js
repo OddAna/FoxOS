@@ -49,6 +49,17 @@ const DISCOVERED_APP_PROFILES = Object.freeze([
     description: 'WhatsApp bağlantıları ve otomasyonları için kendi sunucunuzda çalışan API.'
   }),
   Object.freeze({
+    id: 'firefox',
+    name: 'Firefox',
+    publisher: 'Mozilla',
+    category: 'Web Apps',
+    containerPort: 5800,
+    logoUrl: DASHBOARD_ICON_BASE + 'firefox.svg',
+    imageRepositories: Object.freeze(['jlesage/firefox']),
+    serviceNames: Object.freeze(['firefox']),
+    description: 'Sunucuda çalışan ve tarayıcıdan erişilebilen Firefox masaüstü uygulaması.'
+  }),
+  Object.freeze({
     id: 'n8n',
     name: 'n8n',
     publisher: 'n8n',
@@ -115,7 +126,7 @@ const DISCOVERY_EXCLUDED_NAMES = new Set([
 ]);
 
 function containerName(appId) {
-  return 'foxos-app-' + appId;
+  return appId;
 }
 
 function validateInstallOptions(catalogApp, input = {}) {
@@ -207,7 +218,10 @@ function catalogContainerForApp(containers, catalogApp) {
     ...(catalogApp.imageAliases || []).map(normalizedImageRepository)
   ]);
 
-  return containers.find((container) => repositories.has(normalizedImageRepository(container.Image))) || null;
+  return containers.find((container) => (
+    (!container.Labels || container.Labels['com.foxos.stateful-shadow'] !== 'true') &&
+    repositories.has(normalizedImageRepository(container.Image))
+  )) || null;
 }
 
 function externalUrlForContainer(container) {
@@ -267,10 +281,25 @@ function discoveredProfileForContainer(container) {
   )) || null;
 }
 
+function isManagedMigrationCandidate(container) {
+  const labels = container && container.Labels || {};
+  return labels[MANAGED_LABEL] === 'true' &&
+    /^res_[a-f0-9]{32}$/.test(String(labels['com.foxos.migration.source-resource-id'] || '')) &&
+    /^smop_[a-f0-9]{32}$/.test(String(labels['com.foxos.stateless-migration.id'] || ''));
+}
+
 function isDiscoverableApplication(container) {
   const labels = container.Labels || {};
   const name = containerDisplayName(container);
-  if (labels['com.foxos.core'] === 'true' || DISCOVERY_EXCLUDED_NAMES.has(name)) {
+  const runtimeName = dockerContainerName(container);
+  if (
+    labels['com.foxos.core'] === 'true' ||
+    labels['com.foxos.stateful-shadow'] === 'true' ||
+    labels['com.foxos.stateless-migration.disposable'] === 'true' ||
+    DISCOVERY_EXCLUDED_NAMES.has(name) ||
+    /^foxos-(?:deployment|compose|image-update)-lab(?:-|$)/.test(runtimeName) ||
+    /-foxos-rollback-[a-f0-9]{8,32}$/.test(runtimeName)
+  ) {
     return false;
   }
 
@@ -279,9 +308,14 @@ function isDiscoverableApplication(container) {
     labels['coolify.type'] === 'application' || labels['coolify.service.subType'] === 'application'
   );
   const hasUsableEndpoint = Boolean(externalUrlForContainer(container) || publishedPortForContainer(container));
+  const managedMigrationCandidate = isManagedMigrationCandidate(container);
+  const managedApplication = labels[MANAGED_LABEL] === 'true' &&
+    /^res_[a-f0-9]{32}$/.test(String(labels[APP_ID_LABEL] || ''));
 
   return Boolean(
     profile ||
+    managedMigrationCandidate ||
+    managedApplication ||
     (isCoolifyApplication && (hasUsableEndpoint || container.State !== 'running')) ||
     (hasUsableEndpoint && labels['coolify.managed'] !== 'true')
   );
@@ -346,9 +380,14 @@ function discoveredAppStates(containers, catalogApps) {
       const instanceName = hostnameForUrl(externalUrl) || humanizeName(stableName);
       const hasMultipleProfileInstances = profile && profileCounts.get(profile.id) > 1;
       const appId = 'discovered-' + (profile ? profile.id + '-' : '') + slugify(stableName);
+      const managedByFoxOS = labels[MANAGED_LABEL] === 'true';
+      const imageReference = managedByFoxOS && String(labels['com.foxos.image.reference'] || '').trim()
+        ? String(labels['com.foxos.image.reference']).trim()
+        : container.Image;
 
       return {
         id: appId,
+        profileId: profile ? profile.id : null,
         name: profile
           ? profile.name + (hasMultipleProfileInstances ? ' · ' + instanceName : '')
           : humanizeName(rawName),
@@ -356,8 +395,8 @@ function discoveredAppStates(containers, catalogApps) {
         publisher: profile ? profile.publisher : labels['coolify.projectName'] || 'Docker',
         category: profile ? profile.category : 'Web Apps',
         summary: profile ? profile.description : 'Bu sunucuda önceden kurulmuş uygulama.',
-        description: profile ? profile.description : 'FoxOS bu uygulamayı mevcut Docker kurulumundan otomatik olarak keşfetti.',
-        image: container.Image,
+        description: profile ? profile.description : 'Bu uygulama sunucunun mevcut Docker kurulumunda otomatik olarak keşfedildi.',
+        image: imageReference,
         logoUrl: profile && profile.logoUrl
           ? profile.logoUrl
           : externalUrl ? '/api/apps/' + encodeURIComponent(appId) + '/icon' : null,
@@ -370,9 +409,11 @@ function discoveredAppStates(containers, catalogApps) {
         notes: [],
         installed: true,
         installable: false,
-        managedByFoxOS: false,
+        managedByFoxOS,
         canManage: true,
-        installationSource: labels['coolify.managed'] === 'true' ? 'coolify' : 'docker',
+        installationSource: managedByFoxOS
+          ? 'foxos'
+          : labels['coolify.managed'] === 'true' ? 'coolify' : 'docker',
         state: container.State || 'unknown',
         status: container.Status || null,
         containerId: container.Id,
@@ -392,6 +433,7 @@ function stateForCatalogApp(catalogApp, containers) {
   if (!container) {
     return {
       ...catalogApp,
+      profileId: catalogApp.id,
       installed: false,
       installable: true,
       managedByFoxOS: false,
@@ -417,6 +459,7 @@ function stateForCatalogApp(catalogApp, containers) {
 
   return {
     ...catalogApp,
+    profileId: catalogApp.id,
     installed: true,
     installable: true,
     managedByFoxOS,
@@ -454,6 +497,7 @@ module.exports = {
   discoveredAppStates,
   externalUrlForContainer,
   imagePullPath,
+  isManagedMigrationCandidate,
   managedContainerForApp,
   normalizedImageRepository,
   stateForCatalogApp,

@@ -91,7 +91,7 @@ async function fetchRemote(url, maximumBytes) {
   const response = await fetch(url, {
     redirect: 'follow',
     signal: AbortSignal.timeout(ICON_FETCH_TIMEOUT_MS),
-    headers: { 'User-Agent': 'FoxOS/0.0.1 app-icon-discovery' }
+    headers: { 'User-Agent': 'FoxOS/0.0.2 app-icon-discovery' }
   });
   if (!safeHttpUrl(response.url)) {
     await response.body?.cancel();

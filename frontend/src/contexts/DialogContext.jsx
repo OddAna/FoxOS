@@ -12,12 +12,12 @@ export const DialogProvider = ({ children }) => {
   const [inputValues, setInputValues] = useState({});
 
   // type: 'warning' | 'info' | 'error' | 'success' | 'confirm' | 'prompt'
-  const showDialog = ({ title, message, type = 'info', defaultValue = '', confirmText = 'Tamam', cancelText = 'İptal', onConfirm = null }) => {
+  const showDialog = ({ title, message, type = 'info', defaultValue = '', confirmText = 'Tamam', cancelText = 'İptal', pendingText = 'İşleniyor…', onConfirm = null }) => {
     const id = Date.now().toString() + Math.random().toString();
     if (type === 'prompt') {
       setInputValues(prev => ({ ...prev, [id]: defaultValue }));
     }
-    setDialogs(prev => [...prev, { id, title, message, type, confirmText, cancelText, onConfirm }]);
+    setDialogs(prev => [...prev, { id, title, message, type, confirmText, cancelText, pendingText, onConfirm, pending: false }]);
     return id;
   };
 
@@ -43,6 +43,21 @@ export const DialogProvider = ({ children }) => {
         return <Edit3 size={32} color="#0ea5e9" />;
       default:
         return <Info size={32} color="#3b82f6" />;
+    }
+  };
+
+  const confirmDialog = async (dialog) => {
+    if (dialog.pending) return;
+    if (!dialog.onConfirm) {
+      closeDialog(dialog.id);
+      return;
+    }
+    setDialogs(prev => prev.map((entry) => entry.id === dialog.id ? { ...entry, pending: true } : entry));
+    try {
+      const value = dialog.type === 'prompt' ? inputValues[dialog.id] : undefined;
+      await dialog.onConfirm(value);
+    } finally {
+      closeDialog(dialog.id);
     }
   };
 
@@ -86,12 +101,12 @@ export const DialogProvider = ({ children }) => {
                 <input 
                   type="text" 
                   autoFocus
+                  disabled={dialog.pending}
                   value={inputValues[dialog.id] || ''}
                   onChange={(e) => setInputValues(prev => ({ ...prev, [dialog.id]: e.target.value }))}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
-                      if (dialog.onConfirm) dialog.onConfirm(inputValues[dialog.id]);
-                      closeDialog(dialog.id);
+                      confirmDialog(dialog);
                     }
                   }}
                   style={{
@@ -106,9 +121,11 @@ export const DialogProvider = ({ children }) => {
                 {(dialog.type === 'confirm' || dialog.type === 'warning' || dialog.type === 'prompt') && (
                   <button 
                     onClick={() => closeDialog(dialog.id)}
+                    disabled={dialog.pending}
                     style={{
                       padding: '8px 16px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.2)',
-                      background: 'transparent', color: '#fff', cursor: 'pointer', fontSize: '14px'
+                      background: 'transparent', color: '#fff', cursor: dialog.pending ? 'wait' : 'pointer', fontSize: '14px',
+                      opacity: dialog.pending ? 0.5 : 1
                     }}
                     onMouseOver={(e) => e.target.style.background = 'rgba(255,255,255,0.1)'}
                     onMouseOut={(e) => e.target.style.background = 'transparent'}
@@ -118,25 +135,18 @@ export const DialogProvider = ({ children }) => {
                 )}
                 
                 <button 
-                  onClick={() => {
-                    if (dialog.onConfirm) {
-                      if (dialog.type === 'prompt') {
-                        dialog.onConfirm(inputValues[dialog.id]);
-                      } else {
-                        dialog.onConfirm();
-                      }
-                    }
-                    closeDialog(dialog.id);
-                  }}
+                  onClick={() => confirmDialog(dialog)}
+                  disabled={dialog.pending}
+                  aria-busy={dialog.pending}
                   style={{
                     padding: '8px 16px', borderRadius: '6px', border: 'none',
                     background: dialog.type === 'error' || dialog.type === 'warning' ? '#ef4444' : '#3b82f6',
-                    color: '#fff', cursor: 'pointer', fontSize: '14px', fontWeight: 'bold'
+                    color: '#fff', cursor: dialog.pending ? 'wait' : 'pointer', fontSize: '14px', fontWeight: 'bold'
                   }}
                   onMouseOver={(e) => e.target.style.opacity = '0.9'}
                   onMouseOut={(e) => e.target.style.opacity = '1'}
                 >
-                  {dialog.confirmText}
+                  {dialog.pending ? dialog.pendingText : dialog.confirmText}
                 </button>
               </div>
             </div>

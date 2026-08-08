@@ -1,18 +1,152 @@
 const crypto = require('crypto');
 const fs = require('fs');
-const http = require('http');
 const os = require('os');
 const path = require('path');
 const { execFile } = require('child_process');
 const express = require('express');
+const { AdoptionError, createAdoptionManager } = require('./adoptionManager');
+const {
+  ApplicationManifestError,
+  createApplicationManifestManager
+} = require('./applicationManifestManager');
+const {
+  IndependenceAuditError,
+  createIndependenceAuditManager
+} = require('./independenceAuditManager');
+const {
+  MigrationOrchestratorError,
+  PLAN_SERVER_MIGRATION_CONFIRMATION,
+  createMigrationOrchestrator
+} = require('./migrationOrchestrator');
+const {
+  MigrationSelectionError,
+  createMigrationSelectionManager
+} = require('./migrationSelectionManager');
+const {
+  MigrationRunError,
+  createMigrationRunManager
+} = require('./migrationRunManager');
+const {
+  MaintenanceSessionError,
+  createMaintenanceSessionManager
+} = require('./maintenanceSessionManager');
+const {
+  StatelessMigrationError,
+  createStatelessMigrationManager
+} = require('./statelessMigrationManager');
+const {
+  createStatelessMigrationManifestCompiler
+} = require('./statelessMigrationManifestCompiler');
+const {
+  StatefulMigrationError,
+  PREPARE_STATEFUL_MIGRATION_CONFIRMATION,
+  createStatefulMigrationManager
+} = require('./statefulMigrationManager');
+const {
+  createStatefulMigrationManifestCompiler
+} = require('./statefulMigrationManifestCompiler');
+const {
+  SAVE_STATELESS_MIGRATION_REVIEW_CONFIRMATION,
+  StatelessMigrationReviewError,
+  createStatelessMigrationReviewManager
+} = require('./statelessMigrationReviewManager');
+const { createIngressAuthorityManager } = require('./ingressAuthorityManager');
+const { createProductionStatelessMigrationAdapter } = require('./productionStatelessMigrationAdapter');
+const {
+  MAX_DIRECT_STATEFUL_TRANSACTION_BYTES,
+  createProductionStatefulMigrationAdapter
+} = require('./productionStatefulMigrationAdapter');
+const {
+  PREPARE_RUNTIME_TRANSFER_CONFIRMATION,
+  RuntimeTransferError,
+  createRuntimeTransferManager
+} = require('./runtimeTransferManager');
+const { createTraefikCertificateImporter } = require('./traefikCertificateImporter');
+const { createInactiveDefinitionIngressReconciler } = require('./inactiveDefinitionIngressReconciler');
+const {
+  InactiveDefinitionRuntimeError,
+  createInactiveDefinitionRuntimeManager
+} = require('./inactiveDefinitionRuntimeManager');
+const { createUiApprovalManager } = require('./uiApprovalManager');
+const { createBackupManager } = require('./backupManager');
+const {
+  CloudflareConnectionError,
+  createCloudflareConnectionManager
+} = require('./cloudflareConnectionManager');
+const { createCoolifyMigrationReader } = require('./coolifyMigrationReader');
+const { createDockerClient } = require('./dockerClient');
+const { createEncryptionStore } = require('./encryptionStore');
+const { createHostServiceDiscovery } = require('./hostServiceDiscovery');
+const { HostServiceError, createHostServiceManager } = require('./hostServiceManager');
+const { createRouteManager } = require('./routeManager');
+const { createSecretManager } = require('./secretManager');
+const {
+  WorkloadEvidenceError,
+  createWorkloadEvidenceManager
+} = require('./workloadEvidenceManager');
+const {
+  StatefulRehearsalError,
+  createStatefulRehearsalManager
+} = require('./statefulRehearsalManager');
+const {
+  StatefulShadowError,
+  createStatefulShadowManager
+} = require('./statefulShadowManager');
+const {
+  SourceDeploymentError,
+  createSourceDeploymentManager
+} = require('./sourceDeploymentManager');
+const {
+  ComposeDeploymentError,
+  createComposeDeploymentManager
+} = require('./composeDeploymentManager');
+const {
+  ImageUpdateError,
+  createImageUpdateManager
+} = require('./imageUpdateManager');
 const { APP_CATALOG, getCatalogApp } = require('./appCatalog');
 const { resolveAppIcon } = require('./appIcon');
+const {
+  APPLICATION_INVENTORY_SCHEMA_VERSION,
+  buildApplicationInventory
+} = require('./applicationInventory');
+const {
+  ApplicationDomainError,
+  createApplicationDomainManager
+} = require('./applicationDomainManager');
+const {
+  ApplicationComposeError,
+  createApplicationComposeManager
+} = require('./applicationComposeManager');
+const {
+  ApplicationUpdateError,
+  createApplicationUpdateChecker
+} = require('./applicationUpdateChecker');
+const {
+  createApplicationUpdateManager,
+  createEncryptedVolumeSnapshotAdapter
+} = require('./applicationUpdateManager');
+const {
+  ApplicationRemovalError,
+  createApplicationRemovalManager
+} = require('./applicationRemovalManager');
+const {
+  DESKTOP_ROOT,
+  DesktopShortcutError,
+  createDesktopShortcutManager
+} = require('./desktopShortcutManager');
+const {
+  SCHEMA_VERSION: RESOURCE_SCHEMA_VERSION,
+  ResourceRegistryError,
+  createResourceRegistry
+} = require('./resourceRegistry');
 const {
   catalogContainerForApp,
   containerName,
   createContainerPayload,
   discoveredAppStates,
   imagePullPath,
+  isManagedMigrationCandidate,
   managedContainerForApp,
   stateForCatalogApp,
   validateInstallOptions
@@ -36,6 +170,10 @@ const sessions = new Map();
 const loginAttempts = new Map();
 const appInstallOperations = new Set();
 const containerPortCache = new Map();
+
+if (process.env.FOXOS_TRUST_PROXY === '1') {
+  app.set('trust proxy', 1);
+}
 
 function ensureDirectory(directory) {
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -169,6 +307,11 @@ function requireAuth(req, res, next) {
   next();
 }
 
+function isLoopbackRequest(req) {
+  const address = String(req.socket && req.socket.remoteAddress || '');
+  return ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(address);
+}
+
 function readAuthRecord() {
   if (!fs.existsSync(AUTH_FILE)) {
     return null;
@@ -202,7 +345,7 @@ function passwordMatches(password, authRecord) {
 }
 
 function loginKey(req) {
-  return req.socket.remoteAddress || 'unknown';
+  return req.ip || req.socket.remoteAddress || 'unknown';
 }
 
 function checkLoginRateLimit(req) {
@@ -354,59 +497,898 @@ function runHostCommand(command, cwd = '/') {
   });
 }
 
-function dockerRequest(method, requestPath, payload = null) {
-  return new Promise((resolve, reject) => {
-    if (!fs.existsSync(DOCKER_SOCKET)) {
-      return reject(new Error('Docker socket is not available'));
+function runExactHostFile(file, args) {
+  if (![
+    'iptables', 'iptables-legacy', 'iptables-nft',
+    'ip6tables', 'ip6tables-legacy', 'ip6tables-nft'
+  ].includes(file) || !Array.isArray(args) || args.some((entry) => (
+    typeof entry !== 'string' || entry.length > 128 || /[\r\n\0]/.test(entry)
+  ))) {
+    return Promise.resolve({ success: false, exitCode: 1, output: 'Host command is outside FoxOS ingress policy.\n' });
+  }
+  const hostExecutable = [
+    '/usr/sbin/' + file,
+    '/usr/bin/' + file,
+    '/sbin/' + file,
+    '/bin/' + file
+  ].find((candidate) => fs.existsSync(path.resolve(HOST_ROOT, '.' + candidate)));
+  if (HOST_EXECUTION === 'nsenter' && !hostExecutable) {
+    return Promise.resolve({ success: false, exitCode: 127, output: 'Host firewall command is unavailable.\n' });
+  }
+  return new Promise((resolve) => {
+    const executable = HOST_EXECUTION === 'nsenter' ? hostExecutable : file;
+    const invocation = HOST_EXECUTION === 'nsenter' ? {
+      executable: 'nsenter',
+      args: ['--target', '1', '--mount', '--uts', '--ipc', '--net', '--pid', '--', executable, ...args]
+    } : { executable, args };
+    execFile(invocation.executable, invocation.args, {
+      timeout: 15000,
+      maxBuffer: 256 * 1024,
+      windowsHide: true
+    }, (error, stdout, stderr) => {
+      resolve({
+        success: !error,
+        exitCode: error && Number.isInteger(error.code) ? error.code : error ? 1 : 0,
+        output: String(stdout || '') + String(stderr || '')
+      });
+    });
+  });
+}
+
+function runExactHostObservation(operation) {
+  const definitions = {
+    'systemd-unit-files': {
+      candidates: ['/usr/bin/systemctl', '/bin/systemctl'],
+      args: ['list-unit-files', '--type=service', '--all', '--no-legend', '--no-pager', '--plain']
+    },
+    'systemd-units': {
+      candidates: ['/usr/bin/systemctl', '/bin/systemctl'],
+      args: ['list-units', '--type=service', '--all', '--no-legend', '--no-pager', '--plain']
+    },
+    'wireguard-interfaces': {
+      candidates: ['/usr/bin/wg', '/bin/wg'],
+      args: ['show', 'interfaces']
+    },
+    'wireguard-version': {
+      candidates: ['/usr/bin/wg', '/bin/wg'],
+      args: ['--version']
     }
+  };
+  const definition = definitions[operation];
+  if (!definition) {
+    return Promise.resolve({ success: false, exitCode: 1, output: 'Host observation is outside the fixed read policy.\n' });
+  }
+  const hostExecutable = definition.candidates.find((candidate) => (
+    fs.existsSync(path.resolve(HOST_ROOT, '.' + candidate))
+  ));
+  if (!hostExecutable) {
+    return Promise.resolve({ success: false, exitCode: 127, output: '' });
+  }
+  const invocation = HOST_EXECUTION === 'nsenter' ? {
+    executable: 'nsenter',
+    args: [
+      '--target', '1', '--mount', '--uts', '--ipc', '--net', '--pid', '--',
+      hostExecutable, ...definition.args
+    ]
+  } : {
+    executable: hostExecutable,
+    args: definition.args
+  };
+  return new Promise((resolve) => {
+    execFile(invocation.executable, invocation.args, {
+      timeout: 15000,
+      maxBuffer: 2 * 1024 * 1024,
+      windowsHide: true
+    }, (error, stdout) => {
+      resolve({
+        success: !error,
+        exitCode: error && Number.isInteger(error.code) ? error.code : error ? 1 : 0,
+        output: String(stdout || '')
+      });
+    });
+  });
+}
 
-    const serializedPayload = payload === null ? null : JSON.stringify(payload);
-    const headers = { 'Content-Type': 'application/json' };
-    if (serializedPayload !== null) {
-      headers['Content-Length'] = Buffer.byteLength(serializedPayload);
+function runExactHostServiceCommand(action, unit) {
+  const allowedActions = new Set(['start', 'stop', 'restart', 'enable', 'disable']);
+  if (
+    !allowedActions.has(action) ||
+    !/^[A-Za-z0-9_.@-]+\.service$/.test(String(unit || ''))
+  ) {
+    return Promise.resolve({ success: false, exitCode: 1, output: '' });
+  }
+  const hostExecutable = ['/usr/bin/systemctl', '/bin/systemctl'].find((candidate) => (
+    fs.existsSync(path.resolve(HOST_ROOT, '.' + candidate))
+  ));
+  if (!hostExecutable) {
+    return Promise.resolve({ success: false, exitCode: 127, output: '' });
+  }
+  const invocation = HOST_EXECUTION === 'nsenter' ? {
+    executable: 'nsenter',
+    args: [
+      '--target', '1', '--mount', '--uts', '--ipc', '--net', '--pid', '--',
+      hostExecutable, action, unit, '--no-ask-password', '--no-pager'
+    ]
+  } : {
+    executable: hostExecutable,
+    args: [action, unit, '--no-ask-password', '--no-pager']
+  };
+  return new Promise((resolve) => {
+    execFile(invocation.executable, invocation.args, {
+      timeout: 120000,
+      maxBuffer: 256 * 1024,
+      windowsHide: true
+    }, (error, stdout, stderr) => {
+      resolve({
+        success: !error,
+        exitCode: error && Number.isInteger(error.code) ? error.code : error ? 1 : 0,
+        output: String(stdout || '') + String(stderr || '')
+      });
+    });
+  });
+}
+
+function runExactApplicationCompose({ operation, project, services, overrideFile = null }) {
+  const allowedOperations = new Set(['build', 'pull', 'stop', 'up', 'rollback']);
+  const namePattern = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/;
+  const invalid = (
+    !allowedOperations.has(operation) || !project ||
+    !namePattern.test(String(project.projectName || '')) ||
+    !Array.isArray(project.files) || !project.files.length || project.files.length > 8 ||
+    !Array.isArray(services) || !services.length || services.length > 16 ||
+    services.some((service) => !namePattern.test(String(service || '')))
+  );
+  if (invalid) {
+    return Promise.reject(new ApplicationUpdateError(
+      'Compose güncelleme komutu güvenli çalışma sınırının dışında.',
+      409,
+      'application-update-compose-command-blocked'
+    ));
+  }
+
+  const hostPaths = project.files.map((file) => String(file.hostPath || ''));
+  if (overrideFile) hostPaths.push(String(overrideFile));
+  const workingDirectory = path.posix.normalize(String(project.workingDirectory || ''));
+  if (
+    !workingDirectory.startsWith('/') || workingDirectory === '/opt/foxos' || workingDirectory.startsWith('/opt/foxos/') ||
+    hostPaths.some((hostPath) => (
+      !hostPath.startsWith('/') || !/\.ya?ml$/i.test(hostPath) ||
+      hostPath === '/opt/foxos' || hostPath.startsWith('/opt/foxos/') ||
+      /[\r\n\0]/.test(hostPath)
+    ))
+  ) {
+    return Promise.reject(new ApplicationUpdateError(
+      'Compose güncelleme yolu güvenli çalışma sınırının dışında.',
+      409,
+      'application-update-compose-path-blocked'
+    ));
+  }
+  for (const hostPath of hostPaths) {
+    const mounted = path.resolve(HOST_ROOT, '.' + path.posix.normalize(hostPath));
+    if (mounted !== path.resolve(HOST_ROOT) && !mounted.startsWith(path.resolve(HOST_ROOT) + path.sep)) {
+      return Promise.reject(new ApplicationUpdateError('Compose yolu doğrulanamadı.', 409, 'application-update-compose-path-blocked'));
     }
-
-    const request = http.request(
-      {
-        socketPath: DOCKER_SOCKET,
-        path: requestPath,
-        method,
-        headers
-      },
-      (response) => {
-        const chunks = [];
-        response.on('data', (chunk) => chunks.push(chunk));
-        response.on('end', () => {
-          const body = Buffer.concat(chunks).toString('utf8');
-          if ((response.statusCode >= 200 && response.statusCode < 300) || response.statusCode === 304) {
-            if (!body) {
-              return resolve(null);
-            }
-            try {
-              return resolve(JSON.parse(body));
-            } catch {
-              return resolve(body);
-            }
-          }
-
-          let message = 'Docker API returned HTTP ' + response.statusCode;
-          try {
-            message = JSON.parse(body).message || message;
-          } catch {
-            if (body) {
-              message = body;
-            }
-          }
-          reject(new Error(message));
-        });
-      }
+    let stats;
+    try { stats = fs.lstatSync(mounted); } catch {
+      return Promise.reject(new ApplicationUpdateError('Compose kaynağı bulunamadı.', 409, 'application-update-compose-path-blocked'));
+    }
+    if (!stats.isFile() || stats.isSymbolicLink()) {
+      return Promise.reject(new ApplicationUpdateError('Compose kaynağı normal bir dosya değil.', 409, 'application-update-compose-path-blocked'));
+    }
+  }
+  const mountedWorkingDirectory = path.resolve(HOST_ROOT, '.' + workingDirectory);
+  let workingDirectoryValid = false;
+  try {
+    workingDirectoryValid = (
+      mountedWorkingDirectory !== path.resolve(HOST_ROOT) &&
+      mountedWorkingDirectory.startsWith(path.resolve(HOST_ROOT) + path.sep) &&
+      fs.statSync(mountedWorkingDirectory).isDirectory()
     );
+  } catch {}
+  if (!workingDirectoryValid) {
+    return Promise.reject(new ApplicationUpdateError('Compose çalışma dizini doğrulanamadı.', 409, 'application-update-compose-path-blocked'));
+  }
 
-    request.on('error', reject);
-    if (serializedPayload !== null) {
-      request.write(serializedPayload);
+  const hostExecutable = ['/usr/bin/docker', '/usr/local/bin/docker', '/bin/docker'].find((candidate) => (
+    fs.existsSync(path.resolve(HOST_ROOT, '.' + candidate))
+  ));
+  if (!hostExecutable) {
+    return Promise.reject(new ApplicationUpdateError('Sunucuda Docker Compose bulunamadı.', 503, 'application-update-compose-unavailable'));
+  }
+  const args = ['compose', '--project-name', project.projectName, '--project-directory', workingDirectory];
+  for (const file of project.files) args.push('-f', file.hostPath);
+  if (overrideFile) args.push('-f', overrideFile);
+  if (operation === 'build') args.push('build', '--pull', ...services);
+  if (operation === 'pull') args.push('pull', ...services);
+  if (operation === 'stop') args.push('stop', '--timeout', '60', ...services);
+  if (operation === 'up') args.push('up', '-d', '--no-deps', '--wait', '--wait-timeout', '300', ...services);
+  if (operation === 'rollback') args.push('up', '-d', '--no-deps', '--no-build', '--wait', '--wait-timeout', '300', ...services);
+
+  const invocation = HOST_EXECUTION === 'nsenter' ? {
+    executable: 'nsenter',
+    args: ['--target', '1', '--mount', '--uts', '--ipc', '--net', '--pid', '--', hostExecutable, ...args]
+  } : { executable: hostExecutable, args };
+  return new Promise((resolve, reject) => {
+    execFile(invocation.executable, invocation.args, {
+      timeout: 15 * 60 * 1000,
+      maxBuffer: 8 * 1024 * 1024,
+      windowsHide: true
+    }, (error, stdout, stderr) => {
+      const output = String(stdout || '') + String(stderr || '');
+      if (error) {
+        return reject(new ApplicationUpdateError(
+          'Docker Compose ' + operation + ' işlemi başarısız oldu' + (output.trim() ? ': ' + output.trim().slice(-4000) : '.'),
+          409,
+          'application-update-compose-' + operation + '-failed'
+        ));
+      }
+      resolve({ success: true, output });
+    });
+  });
+}
+
+const dockerClient = createDockerClient(DOCKER_SOCKET);
+const dockerRequest = dockerClient.request;
+const encryptionStore = createEncryptionStore({ dataRoot: DATA_ROOT });
+const maintenanceSessionManager = createMaintenanceSessionManager({ dataRoot: DATA_ROOT });
+const desktopShortcutManager = createDesktopShortcutManager({ dataRoot: DATA_ROOT });
+
+function desktopShortcutPathForWorkspaceTarget(target) {
+  const desktopDirectory = path.join(DISK_ROOT, DESKTOP_ROOT.slice(1));
+  const relative = path.relative(desktopDirectory, target);
+  if (relative === '') return DESKTOP_ROOT;
+  if (relative.startsWith('..' + path.sep) || relative === '..' || path.isAbsolute(relative)) return null;
+  return DESKTOP_ROOT + '/' + relative.split(path.sep).join('/');
+}
+
+function validatedDesktopShortcutFolder(requestedPath) {
+  const shortcutPath = desktopShortcutManager.normalizeLocation(requestedPath);
+  const target = resolveWorkspacePath(shortcutPath);
+  if (!fs.existsSync(target) || !fs.statSync(target).isDirectory()) {
+    throw new DesktopShortcutError('Hedef masaüstü klasörü bulunamadı.', 404, 'shortcut-folder-not-found');
+  }
+  const desktopDirectory = path.join(DISK_ROOT, DESKTOP_ROOT.slice(1));
+  const realDesktop = fs.realpathSync(desktopDirectory);
+  const realTarget = fs.realpathSync(target);
+  const relative = path.relative(realDesktop, realTarget);
+  if (relative.startsWith('..' + path.sep) || relative === '..' || path.isAbsolute(relative)) {
+    throw new DesktopShortcutError(
+      'Uygulama kısayolu yalnız gerçek bir Masaüstü klasöründe tutulabilir.',
+      400,
+      'shortcut-folder-outside-desktop'
+    );
+  }
+  return shortcutPath;
+}
+
+function projectedDesktopShortcutLocation(applicationId) {
+  const configured = desktopShortcutManager.location(applicationId);
+  try {
+    return validatedDesktopShortcutFolder(configured);
+  } catch {
+    if (configured !== DESKTOP_ROOT) {
+      try {
+        desktopShortcutManager.setLocation(applicationId, DESKTOP_ROOT);
+      } catch {
+        // Keep inventory available even if stale shortcut state cannot be repaired.
+      }
     }
-    request.end();
+    return DESKTOP_ROOT;
+  }
+}
+const coolifyMigrationReader = createCoolifyMigrationReader({
+  dataRoot: DATA_ROOT,
+  encryptionStore
+});
+const statefulMigrationVolumeSnapshots = createEncryptedVolumeSnapshotAdapter({
+  dataRoot: DATA_ROOT,
+  hostRoot: HOST_ROOT,
+  dockerRequest,
+  encryptionStore,
+  snapshotsDirectory: path.join('stateful-migrations', 'snapshots'),
+  snapshotPurpose: 'stateful-final-volume'
+});
+
+const resourceRegistry = createResourceRegistry({
+  dataRoot: DATA_ROOT,
+  dockerRequest,
+  hostResourceReader: () => createHostServiceDiscovery({
+    hostRoot: HOST_ROOT,
+    hostRead: runExactHostObservation
+  }),
+  providerResourceReader: () => coolifyMigrationReader.scan(),
+  providerDefinitionMetadataReader: (artifact) => coolifyMigrationReader.recoveryMetadata(artifact),
+  volumeCapacityReader: ({ volumes }) => statefulMigrationVolumeSnapshots.inspectCapacity({
+    volumes,
+    maximumTransactionBytes: MAX_DIRECT_STATEFUL_TRANSACTION_BYTES
+  })
+});
+const hostServiceManager = createHostServiceManager({
+  resourceRegistry,
+  hostCommand: runExactHostServiceCommand
+});
+const routeManager = createRouteManager({
+  dataRoot: DATA_ROOT,
+  dockerRequest,
+  publicBaseUrl: process.env.FOXOS_ROUTE_BASE_URL,
+  networkName: process.env.FOXOS_ROUTE_NETWORK || 'foxos-routing',
+  gatewayHost: process.env.FOXOS_ROUTE_GATEWAY_HOST || 'foxos-gateway'
+});
+const secretManager = createSecretManager({
+  dataRoot: DATA_ROOT,
+  encryptionStore
+});
+const backupManager = createBackupManager({
+  dataRoot: DATA_ROOT,
+  encryptionStore
+});
+const cloudflareConnectionManager = createCloudflareConnectionManager({
+  dataRoot: DATA_ROOT,
+  encryptionStore
+});
+const adoptionManager = createAdoptionManager({
+  dataRoot: DATA_ROOT,
+  dockerRequest,
+  dockerArchiveRequest: dockerClient.requestBuffer,
+  resourceRegistry,
+  routeManager,
+  secretManager,
+  backupManager
+});
+const sourceDeploymentManager = createSourceDeploymentManager({
+  dataRoot: DATA_ROOT,
+  dockerRequest,
+  dockerBuildRequest: dockerClient.requestBuild
+});
+const workloadEvidenceManager = createWorkloadEvidenceManager({
+  dataRoot: DATA_ROOT,
+  dockerRequest,
+  resourceRegistry,
+  encryptionStore,
+  secretManager
+});
+const certificateImporter = createTraefikCertificateImporter({
+  dataRoot: DATA_ROOT,
+  dockerRequest,
+  hostRoot: HOST_ROOT
+});
+const ingressAuthorityManager = createIngressAuthorityManager({
+  dataRoot: DATA_ROOT,
+  dockerRequest,
+  dockerExec: dockerClient.exec,
+  hostCommand: runExactHostFile,
+  routingNetwork: process.env.FOXOS_ROUTE_NETWORK || 'foxos-routing',
+  gatewayContainer: process.env.FOXOS_ROUTE_GATEWAY_HOST || 'foxos-gateway',
+  ingressHttpPort: Number.parseInt(process.env.FOXOS_INGRESS_HTTP_PORT || '9080', 10),
+  ingressHttpsPort: Number.parseInt(process.env.FOXOS_INGRESS_HTTPS_PORT || '9443', 10),
+  panelBaseUrl: process.env.FOXOS_ROUTE_BASE_URL || null
+});
+const inactiveDefinitionIngressReconciler = createInactiveDefinitionIngressReconciler({
+  certificateImporter,
+  ingressAuthority: ingressAuthorityManager
+});
+const applicationDomainManager = createApplicationDomainManager({
+  dataRoot: DATA_ROOT,
+  ingressAuthority: ingressAuthorityManager,
+  resourceRegistry,
+  getApplicationInventory,
+  dockerRequest,
+  routingNetwork: process.env.FOXOS_ROUTE_NETWORK || 'foxos-routing',
+  panelBaseUrl: process.env.FOXOS_ROUTE_BASE_URL || null,
+  dnsAutomation: cloudflareConnectionManager
+});
+const applicationRemovalManager = createApplicationRemovalManager({
+  dataRoot: DATA_ROOT,
+  dockerRequest,
+  getApplicationInventory,
+  resourceRegistry,
+  ingressAuthority: ingressAuthorityManager,
+  desktopShortcutManager,
+  applicationDomainManager
+});
+const applicationComposeManager = createApplicationComposeManager({
+  dataRoot: DATA_ROOT,
+  hostRoot: HOST_ROOT,
+  dockerRequest,
+  encryptionStore,
+  getApplicationInventory
+});
+const applicationUpdateChecker = createApplicationUpdateChecker({
+  dataRoot: DATA_ROOT,
+  hostRoot: HOST_ROOT,
+  dockerRequest,
+  getApplicationInventory
+});
+const applicationUpdateVolumeSnapshots = createEncryptedVolumeSnapshotAdapter({
+  dataRoot: DATA_ROOT,
+  hostRoot: HOST_ROOT,
+  dockerRequest,
+  encryptionStore
+});
+const applicationUpdateManager = createApplicationUpdateManager({
+  dataRoot: DATA_ROOT,
+  hostRoot: HOST_ROOT,
+  dockerRequest,
+  getApplicationInventory,
+  checkApplicationUpdate: (applicationId) => applicationUpdateChecker.check(applicationId),
+  composeRunner: runExactApplicationCompose,
+  volumeSnapshots: applicationUpdateVolumeSnapshots,
+  routeRuntime: ingressAuthorityManager
+});
+const productionStatelessMigrationAdapter = createProductionStatelessMigrationAdapter({
+  dataRoot: DATA_ROOT,
+  dockerRequest,
+  dockerExec: dockerClient.exec,
+  resourceRegistry,
+  secretManager,
+  certificateImporter,
+  ingressAuthority: ingressAuthorityManager,
+  routingNetwork: process.env.FOXOS_ROUTE_NETWORK || 'foxos-routing',
+  egressNetwork: process.env.FOXOS_EGRESS_NETWORK || 'foxos-egress',
+  gatewayContainer: process.env.FOXOS_ROUTE_GATEWAY_HOST || 'foxos-gateway'
+});
+const productionStatefulMigrationAdapter = createProductionStatefulMigrationAdapter({
+  dataRoot: DATA_ROOT,
+  dockerRequest,
+  dockerExec: dockerClient.exec,
+  resourceRegistry,
+  secretManager,
+  volumeSnapshots: statefulMigrationVolumeSnapshots,
+  certificateImporter,
+  ingressAuthority: ingressAuthorityManager,
+  routingNetwork: process.env.FOXOS_ROUTE_NETWORK || 'foxos-routing',
+  egressNetwork: process.env.FOXOS_EGRESS_NETWORK || 'foxos-egress'
+});
+const statefulRehearsalManager = createStatefulRehearsalManager({
+  dataRoot: DATA_ROOT,
+  dockerRequest,
+  dockerArchiveRequest: dockerClient.requestBuffer,
+  resourceRegistry,
+  encryptionStore,
+  secretManager,
+  routeManager
+});
+const statefulShadowManager = createStatefulShadowManager({
+  dataRoot: DATA_ROOT,
+  dockerRequest,
+  dockerArchiveRequest: dockerClient.requestBuffer,
+  resourceRegistry,
+  encryptionStore,
+  secretManager,
+  statefulRehearsalStatus: () => statefulRehearsalManager.status()
+});
+const composeDeploymentManager = createComposeDeploymentManager({
+  dataRoot: DATA_ROOT,
+  dockerRequest,
+  dockerBuildRequest: dockerClient.requestBuild
+});
+const imageUpdateManager = createImageUpdateManager({
+  dataRoot: DATA_ROOT,
+  dockerRequest
+});
+const applicationManifestManager = createApplicationManifestManager({
+  dataRoot: DATA_ROOT,
+  resourceRegistry,
+  getEnvironmentRevision: (resourceId) => secretManager.getEnvironmentRevision(resourceId),
+  routeStatus: () => routeManager.status(),
+  backupStatus: () => backupManager.status(),
+  sourceDeploymentStatus: () => sourceDeploymentManager.status(),
+  composeDeploymentStatus: () => composeDeploymentManager.status(),
+  imageUpdateStatus: () => imageUpdateManager.status(),
+  workloadEvidenceStatus: () => workloadEvidenceManager.status(),
+  statefulRehearsalStatus: () => statefulRehearsalManager.status(),
+  statefulShadowStatus: () => statefulShadowManager.status()
+});
+const independenceAuditManager = createIndependenceAuditManager({
+  dataRoot: DATA_ROOT,
+  resourceRegistry,
+  compileApplicationManifest: (resourceId) => applicationManifestManager.compile(resourceId)
+});
+const migrationOrchestrator = createMigrationOrchestrator({
+  dataRoot: DATA_ROOT,
+  resourceRegistry,
+  compileApplicationManifest: (resourceId) => applicationManifestManager.compile(resourceId)
+});
+const migrationSelectionManager = createMigrationSelectionManager({
+  dataRoot: DATA_ROOT,
+  getServerMigrationPlan: (planId) => migrationOrchestrator.getPlan(planId),
+  getLatestRegistrySnapshot: () => resourceRegistry.getLatest()
+});
+const statelessMigrationManifestCompiler = createStatelessMigrationManifestCompiler({
+  resourceRegistry,
+  compileApplicationManifest: (resourceId) => applicationManifestManager.compile(resourceId)
+});
+const statefulMigrationManifestCompiler = createStatefulMigrationManifestCompiler({
+  resourceRegistry,
+  compileApplicationManifest: (resourceId) => applicationManifestManager.compile(resourceId)
+});
+const uiApprovalManager = createUiApprovalManager();
+const runtimeTransferManager = createRuntimeTransferManager({
+  dataRoot: DATA_ROOT,
+  dockerRequest,
+  dockerExec: dockerClient.exec,
+  resourceRegistry,
+  secretManager,
+  certificateImporter,
+  ingressAuthority: ingressAuthorityManager,
+  approvalVerifier: (input) => uiApprovalManager.verify(input),
+  readProviderRecoveryArtifact: (artifact) => coolifyMigrationReader.readRecoveryArtifact(artifact),
+  routingNetwork: process.env.FOXOS_ROUTE_NETWORK || 'foxos-routing'
+});
+const inactiveDefinitionRuntimeManager = createInactiveDefinitionRuntimeManager({
+  dataRoot: DATA_ROOT,
+  dockerRequest,
+  resourceRegistry,
+  readRecoveryArtifact: (artifact) => coolifyMigrationReader.readRecoveryArtifact(artifact),
+  certificateImporter,
+  ingressAuthority: ingressAuthorityManager,
+  internalHttpProbe: async ({ alias, privatePort, requestPath }) => {
+    const infrastructure = await ingressAuthorityManager.inspectOwnedInfrastructure();
+    const gatewayId = infrastructure && infrastructure.gateway && infrastructure.gateway.Id;
+    const result = await dockerClient.exec(gatewayId, [
+      'wget', '--server-response', '--output-document=/dev/null', '--timeout=2',
+      `http://${alias}:${privatePort}${requestPath}`
+    ], { timeoutMs: 5000, maxResponseBytes: 64 * 1024 });
+    const match = String(result.output || '').match(/HTTP\/1\.[01]\s+([0-9]{3})/i);
+    return { statusCode: match ? Number.parseInt(match[1], 10) : null };
+  },
+  routingNetwork: process.env.FOXOS_ROUTE_NETWORK || 'foxos-routing'
+});
+const statelessMigrationManager = createStatelessMigrationManager({
+  dataRoot: DATA_ROOT,
+  getServerMigrationPlan: (planId) => migrationOrchestrator.getPlan(planId),
+  compileExecutionContract: (input) => statelessMigrationManifestCompiler.compile(input),
+  executionAdapter: productionStatelessMigrationAdapter,
+  approvalVerifier: (input) => uiApprovalManager.verify(input)
+});
+const statelessMigrationReviewManager = createStatelessMigrationReviewManager({
+  dataRoot: DATA_ROOT,
+  getStatelessMigrationPlan: (planId) => statelessMigrationManager.getPlan(planId),
+  getLatestRegistrySnapshot: () => resourceRegistry.getLatest()
+});
+const statefulMigrationManager = createStatefulMigrationManager({
+  dataRoot: DATA_ROOT,
+  getServerMigrationPlan: (planId) => migrationOrchestrator.getPlan(planId),
+  compileExecutionContract: (input) => statefulMigrationManifestCompiler.compile(input),
+  executionAdapter: productionStatefulMigrationAdapter,
+  approvalVerifier: (input) => uiApprovalManager.verify(input)
+});
+const migrationRunManager = createMigrationRunManager({
+  dataRoot: DATA_ROOT,
+  getServerMigrationPlan: (planId) => migrationOrchestrator.getPlan(planId),
+  getLatestRegistrySnapshot: () => resourceRegistry.getLatest(),
+  getMigrationManagement: (resourceId) => resourceRegistry.getMigrationManagement(resourceId),
+  saveSelection: (input) => migrationSelectionManager.save(input),
+  prepareStatelessPlan: (input) => statelessMigrationManager.createPlan(input),
+  getStatelessReviewStatus: (planId) => statelessMigrationReviewManager.status(planId),
+  prepareResourceEvidence: async (resourceIds) => {
+    const snapshot = resourceRegistry.getLatest();
+    const captureIds = new Set();
+    for (const resourceId of resourceIds) {
+      const resource = snapshot && (snapshot.resources || []).find((entry) => entry.id === resourceId);
+      if (!resource) throw new MigrationRunError('Selected resource disappeared before evidence capture', 409, 'resource-not-found');
+      if (resource.kind !== 'container') continue;
+      captureIds.add(resource.id);
+      const labels = resource.provenance && resource.provenance.safeLabels || {};
+      const providerResourceName = String(labels['coolify.resourceName'] || '');
+      if (!providerResourceName) continue;
+      for (const member of snapshot.resources || []) {
+        const memberLabels = member.provenance && member.provenance.safeLabels || {};
+        if (
+          member.kind === 'container' &&
+          String(memberLabels['coolify.resourceName'] || '') === providerResourceName
+        ) captureIds.add(member.id);
+      }
+    }
+    for (const resourceId of [...captureIds].sort()) {
+      await workloadEvidenceManager.captureEnvironmentForMigration(resourceId);
+    }
+  },
+  refreshServerMigrationPlan: () => migrationOrchestrator.createPlan({
+    confirmation: PLAN_SERVER_MIGRATION_CONFIRMATION
+  }),
+  reconcileCompletedMigrations: async () => {
+    const snapshot = await resourceRegistry.scan();
+    const plan = migrationOrchestrator.createPlan({ confirmation: PLAN_SERVER_MIGRATION_CONFIRMATION });
+    return {
+      status: 'reconciled',
+      snapshotId: snapshot.snapshotId,
+      serverPlanId: plan.planId
+    };
+  },
+  prepareStatelessReview: (plan) => {
+    const routes = plan.executionContract.routes || [];
+    if (!routes.length) throw new MigrationRunError('No production route is available for review', 409, 'production-route-missing');
+    const healthPort = plan.executionContract.candidate && plan.executionContract.candidate.health &&
+      plan.executionContract.candidate.health.privatePort;
+    const healthRoute = routes.find((route) => route.upstreamPrivatePort === healthPort);
+    if (!healthRoute) throw new MigrationRunError('No production route exposes the reviewed health port', 409, 'production-health-route-missing');
+    return statelessMigrationReviewManager.save({
+      statelessPlanId: plan.planId,
+      serverPlanId: plan.serverPlanId,
+      resourceId: plan.resource.resourceId,
+      executionContractId: plan.executionContract.contractId,
+      healthRouteId: healthRoute.routeId,
+      runtimeConfirmed: true,
+      routes: routes.map((route) => ({
+        routeId: route.routeId,
+        confirmed: true,
+        certificateAdapter: 'imported-certificate'
+      })),
+      confirmation: SAVE_STATELESS_MIGRATION_REVIEW_CONFIRMATION
+    });
+  },
+  executeStatelessMigration: (planId, approval) => statelessMigrationManager.execute(planId, approval),
+  prepareStatefulPlan: (input) => statefulMigrationManager.createPlan(input),
+  prepareStatefulConfirmation: PREPARE_STATEFUL_MIGRATION_CONFIRMATION,
+  executeStatefulMigration: (planId, approval) => statefulMigrationManager.execute(planId, approval),
+  prepareRuntimeTransferPlan: ({ serverPlanId, resourceId, confirmation }) => (
+    runtimeTransferManager.createPlan({
+      serverPlan: migrationOrchestrator.getPlan(serverPlanId),
+      resourceId,
+      confirmation
+    })
+  ),
+  prepareRuntimeTransferConfirmation: PREPARE_RUNTIME_TRANSFER_CONFIRMATION,
+  executeRuntimeTransfer: (planId, approval) => runtimeTransferManager.execute(planId, approval),
+  issueApproval: (input) => uiApprovalManager.issue(input)
+});
+
+function sendAdoptionError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof AdoptionError) ? 'Adoption operation failed' : error.message,
+    code: error.code || 'adoption-error'
+  });
+}
+
+function sendApplicationDomainError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof ApplicationDomainError)
+      ? 'Alan adı işlemi tamamlanamadı'
+      : error.message,
+    code: error.code || 'application-domain-error'
+  });
+}
+
+function sendApplicationComposeError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof ApplicationComposeError)
+      ? 'Compose dosyası işlemi tamamlanamadı'
+      : error.message,
+    code: error.code || 'application-compose-error'
+  });
+}
+
+function sendApplicationUpdateError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof ApplicationUpdateError)
+      ? 'Güncelleme denetimi tamamlanamadı'
+      : error.message,
+    code: error.code || 'application-update-error'
+  });
+}
+
+function sendApplicationRemovalError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof ApplicationRemovalError)
+      ? 'Uygulama kaldırma işlemi tamamlanamadı'
+      : error.message,
+    code: error.code || 'application-removal-error'
+  });
+}
+
+function sendDesktopShortcutError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof DesktopShortcutError)
+      ? 'Masaüstü kısayolu kaydedilemedi'
+      : error.message,
+    code: error.code || 'desktop-shortcut-error'
+  });
+}
+
+function sendResourceRegistryError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof ResourceRegistryError)
+      ? 'Sunucu envanteri güncellenemedi.'
+      : error.message,
+    code: error.code || 'resource-registry-error'
+  });
+}
+
+function sendConnectionError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof CloudflareConnectionError)
+      ? 'Bağlantı işlemi tamamlanamadı'
+      : error.message,
+    code: error.code || 'connection-error'
+  });
+}
+
+function sendSourceDeploymentError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof SourceDeploymentError)
+      ? 'Source deployment operation failed'
+      : error.message,
+    code: error.code || 'source-deployment-error'
+  });
+}
+
+function sendWorkloadEvidenceError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof WorkloadEvidenceError)
+      ? 'Workload evidence operation failed'
+      : error.message,
+    code: error.code || 'workload-evidence-error'
+  });
+}
+
+function sendStatefulRehearsalError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof StatefulRehearsalError)
+      ? 'Stateful rehearsal operation failed'
+      : error.message,
+    code: error.code || 'stateful-rehearsal-error'
+  });
+}
+
+function sendStatefulShadowError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof StatefulShadowError)
+      ? 'Stateful shadow operation failed'
+      : error.message,
+    code: error.code || 'stateful-shadow-error'
+  });
+}
+
+function sendComposeDeploymentError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof ComposeDeploymentError) ? 'Compose deployment operation failed' : error.message,
+    code: error.code || 'compose-deployment-error'
+  });
+}
+
+function sendImageUpdateError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof ImageUpdateError) ? 'Image-update operation failed' : error.message,
+    code: error.code || 'image-update-error'
+  });
+}
+
+function sendApplicationManifestError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof ApplicationManifestError)
+      ? 'Application manifest operation failed'
+      : error.message,
+    code: error.code || 'application-manifest-error'
+  });
+}
+
+function sendIndependenceAuditError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof IndependenceAuditError)
+      ? 'Independence audit operation failed'
+      : error.message,
+    code: error.code || 'independence-audit-error'
+  });
+}
+
+function sendMigrationOrchestratorError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof MigrationOrchestratorError)
+      ? 'Server migration planning failed'
+      : error.message,
+    code: error.code || 'migration-orchestrator-error'
+  });
+}
+
+function sendMigrationSelectionError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof MigrationSelectionError)
+      ? 'Migration selection operation failed'
+      : error.message,
+    code: error.code || 'migration-selection-error'
+  });
+}
+
+function sendMigrationRunError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof MigrationRunError)
+      ? 'Server migration run failed'
+      : error.message,
+    code: error.code || 'migration-run-error'
+  });
+}
+
+function sendRuntimeTransferError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof RuntimeTransferError)
+      ? 'Runtime transfer operation failed'
+      : error.message,
+    code: error.code || 'runtime-transfer-error'
+  });
+}
+
+function sendInactiveDefinitionRuntimeError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof InactiveDefinitionRuntimeError)
+      ? 'Pasif uygulama etkinleştirilemedi'
+      : error.message,
+    code: error.code || 'inactive-definition-runtime-error'
+  });
+}
+
+function sendStatelessMigrationError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof StatelessMigrationError)
+      ? 'Stateless migration planning failed'
+      : error.message,
+    code: error.code || 'stateless-migration-error'
+  });
+}
+
+function sendStatefulMigrationError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof StatefulMigrationError)
+      ? 'Stateful migration operation failed'
+      : error.message,
+    code: error.code || 'stateful-migration-error'
+  });
+}
+
+function sendStatelessMigrationReviewError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof StatelessMigrationReviewError)
+      ? 'Stateless migration review failed'
+      : error.message,
+    code: error.code || 'stateless-migration-review-error'
   });
 }
 
@@ -489,13 +1471,76 @@ async function hostPortIsListening(port) {
   return result.success && result.output.trim() === 'used';
 }
 
-async function getCatalogState() {
+async function getCatalogContext() {
   const listedContainers = await dockerRequest('GET', '/containers/json?all=1');
   const containers = await containersWithConfiguredPorts(listedContainers);
-  return [
-    ...APP_CATALOG.map((catalogApp) => stateForCatalogApp(catalogApp, containers)),
-    ...discoveredAppStates(containers, APP_CATALOG)
-  ];
+  return {
+    containers,
+    apps: [
+      ...APP_CATALOG.map((catalogApp) => stateForCatalogApp(catalogApp, containers)),
+      ...discoveredAppStates(containers, APP_CATALOG)
+    ]
+  };
+}
+
+async function getCatalogState() {
+  return (await getCatalogContext()).apps;
+}
+
+async function getApplicationInventory() {
+  const context = await getCatalogContext();
+  let snapshot = resourceRegistry.getLatest();
+  const resourceContainerIds = new Set((snapshot && snapshot.resources || [])
+    .map((resource) => resource && resource.runtime && resource.runtime.containerId)
+    .filter(Boolean));
+  const installedContainerIds = context.apps
+    .filter((application) => application.installed && application.containerId)
+    .map((application) => application.containerId);
+  const managedCandidateIds = context.containers
+    .filter(isManagedMigrationCandidate)
+    .map((container) => container.Id);
+  const projectedManagedCandidateIds = new Set((snapshot && snapshot.resources || [])
+    .map((resource) => resource && resource.management && resource.management.candidateContainerId)
+    .filter(Boolean));
+  const managedProjectionMissing = managedCandidateIds
+    .some((containerId) => !projectedManagedCandidateIds.has(containerId));
+
+  if (
+    !snapshot ||
+    installedContainerIds.some((containerId) => !resourceContainerIds.has(containerId)) ||
+    managedProjectionMissing
+  ) {
+    snapshot = await resourceRegistry.scan();
+  }
+
+  return {
+    schemaVersion: APPLICATION_INVENTORY_SCHEMA_VERSION,
+    snapshotId: snapshot && snapshot.snapshotId || null,
+    generatedAt: snapshot && snapshot.generatedAt || null,
+    applications: buildApplicationInventory({
+      appStates: context.apps,
+      containers: context.containers,
+      resources: snapshot && snapshot.resources || [],
+      domainPreferences: applicationDomainManager.primaryDomains()
+    }).map((application) => {
+      const inactiveCapability = application.installation &&
+        application.installation.state === 'inactive-definition'
+        ? inactiveDefinitionRuntimeManager.capability(application.id)
+        : null;
+      return {
+        ...application,
+        capabilities: inactiveCapability && inactiveCapability.available === true
+          ? { ...application.capabilities, start: true }
+          : application.capabilities,
+        activation: inactiveCapability,
+        desktopShortcutVisible: desktopShortcutManager.isVisible(
+          application.id,
+          application.desktopShortcutDefaultVisible !== false
+        ),
+        desktopShortcutPath: projectedDesktopShortcutLocation(application.id)
+      };
+    })
+  };
 }
 
 app.get('/api/health', (req, res) => {
@@ -555,6 +1600,25 @@ app.post('/api/auth/login', (req, res) => {
   loginAttempts.delete(loginKey(req));
   createSession(res, authRecord.username);
   res.json({ success: true, username: authRecord.username });
+});
+
+app.post('/api/auth/maintenance-session', (req, res) => {
+  if (!isLoopbackRequest(req)) return res.status(404).json({ error: 'Not found' });
+  try {
+    const authRecord = readAuthRecord();
+    if (!authRecord) return res.status(409).json({ error: 'FoxOS has not been configured' });
+    maintenanceSessionManager.consume(req.body && req.body.token);
+    createSession(res, authRecord.username);
+    res.json({ success: true, username: authRecord.username, localOnly: true });
+  } catch (error) {
+    const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+    res.status(status).json({
+      error: status >= 500 && !(error instanceof MaintenanceSessionError)
+        ? 'Maintenance session failed'
+        : error.message,
+      code: error.code || 'maintenance-session-error'
+    });
+  }
 });
 
 app.post('/api/auth/logout', requireAuth, (req, res) => {
@@ -631,11 +1695,17 @@ app.post('/api/delete', (req, res) => {
       return res.status(400).json({ error: 'This FoxOS system entry cannot be deleted' });
     }
 
+    const releasedShortcutDirectory = fs.statSync(target).isDirectory()
+      ? desktopShortcutPathForWorkspaceTarget(target)
+      : null;
     if (target.startsWith(trashRoot + path.sep)) {
       fs.rmSync(target, { recursive: true, force: false });
     } else {
       const destination = path.join(trashRoot, Date.now() + '_' + path.basename(target));
       movePath(target, destination);
+    }
+    if (releasedShortcutDirectory && releasedShortcutDirectory !== DESKTOP_ROOT) {
+      desktopShortcutManager.releaseDirectory(releasedShortcutDirectory);
     }
     res.json({ success: true });
   } catch (error) {
@@ -653,11 +1723,23 @@ app.post('/api/rename', (req, res) => {
     if (isProtectedWorkspaceEntry(target)) {
       return res.status(400).json({ error: 'This FoxOS system entry cannot be renamed' });
     }
+    const targetIsDirectory = fs.statSync(target).isDirectory();
+    const sourceShortcutDirectory = targetIsDirectory
+      ? desktopShortcutPathForWorkspaceTarget(target)
+      : null;
     const destination = path.join(path.dirname(target), name);
     if (fs.existsSync(destination)) {
       return res.status(409).json({ error: 'A file with that name already exists' });
     }
     fs.renameSync(target, destination);
+    if (sourceShortcutDirectory && sourceShortcutDirectory !== DESKTOP_ROOT) {
+      const destinationShortcutDirectory = desktopShortcutPathForWorkspaceTarget(destination);
+      if (destinationShortcutDirectory) {
+        desktopShortcutManager.relocateDirectory(sourceShortcutDirectory, destinationShortcutDirectory);
+      } else {
+        desktopShortcutManager.releaseDirectory(sourceShortcutDirectory);
+      }
+    }
     res.json({ success: true });
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -675,6 +1757,10 @@ app.post('/api/move', (req, res) => {
       return res.status(400).json({ error: 'This FoxOS system entry cannot be moved' });
     }
 
+    const sourceIsDirectory = fs.statSync(source).isDirectory();
+    const sourceShortcutDirectory = sourceIsDirectory
+      ? desktopShortcutPathForWorkspaceTarget(source)
+      : null;
     const destination = fs.existsSync(target) && fs.statSync(target).isDirectory()
       ? path.join(target, path.basename(source))
       : target;
@@ -682,6 +1768,14 @@ app.post('/api/move', (req, res) => {
       return res.status(409).json({ error: 'Destination already exists' });
     }
     movePath(source, destination);
+    if (sourceShortcutDirectory && sourceShortcutDirectory !== DESKTOP_ROOT) {
+      const destinationShortcutDirectory = desktopShortcutPathForWorkspaceTarget(destination);
+      if (destinationShortcutDirectory) {
+        desktopShortcutManager.relocateDirectory(sourceShortcutDirectory, destinationShortcutDirectory);
+      } else {
+        desktopShortcutManager.releaseDirectory(sourceShortcutDirectory);
+      }
+    }
     res.json({ success: true });
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -788,6 +1882,806 @@ app.get('/api/containers', async (req, res) => {
   }
 });
 
+app.get('/api/resources', (req, res) => {
+  try {
+    const snapshot = resourceRegistry.getLatest();
+    res.json({
+      registry: {
+        schemaVersion: RESOURCE_SCHEMA_VERSION,
+        status: snapshot ? 'ready' : 'not-scanned'
+      },
+      snapshot
+    });
+  } catch (error) {
+    console.error('Could not read the resource registry:', error.message);
+    res.status(500).json({ error: 'Could not read the resource registry' });
+  }
+});
+
+app.post('/api/resources/scan', async (req, res) => {
+  try {
+    const snapshot = await resourceRegistry.scan();
+    res.status(201).json({ snapshot });
+  } catch (error) {
+    console.error('Could not scan server resources:', error.message);
+    res.status(503).json({ error: 'Could not scan server resources' });
+  }
+});
+
+app.delete('/api/inactive-definitions/:resourceId', async (req, res) => {
+  try {
+    const retired = resourceRegistry.retireProviderDefinition(
+      req.params.resourceId,
+      req.body && req.body.confirmation
+    );
+    desktopShortcutManager.forget(req.params.resourceId);
+    let snapshot = await resourceRegistry.scan();
+    if (snapshot.resources.some((resource) => resource.id === req.params.resourceId)) {
+      snapshot = await resourceRegistry.scan();
+    }
+    if (snapshot.resources.some((resource) => resource.id === req.params.resourceId)) {
+      throw new ResourceRegistryError(
+        'Inactive definition retirement could not be verified',
+        503,
+        'inactive-definition-removal-unverified'
+      );
+    }
+    res.json({ retired, snapshotId: snapshot.snapshotId });
+  } catch (error) {
+    sendResourceRegistryError(res, error, 'Could not remove inactive definition');
+  }
+});
+
+app.get('/api/resources/export', (req, res) => {
+  try {
+    const migrationPlan = resourceRegistry.exportLatest();
+    if (!migrationPlan) {
+      return res.status(404).json({ error: 'Run a resource scan before exporting a migration plan' });
+    }
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', `attachment; filename="foxos-resource-plan-${migrationPlan.snapshotId}.json"`);
+    res.send(JSON.stringify(migrationPlan, null, 2) + '\n');
+  } catch (error) {
+    console.error('Could not export the resource migration plan:', error.message);
+    res.status(500).json({ error: 'Could not export the resource migration plan' });
+  }
+});
+
+app.post('/api/resources/:resourceId/adoption-plan', async (req, res) => {
+  try {
+    const plan = await adoptionManager.createPlan(req.params.resourceId, req.body || {});
+    res.status(201).json({ plan });
+  } catch (error) {
+    sendAdoptionError(res, error, 'Could not create adoption plan');
+  }
+});
+
+app.get('/api/secrets', (req, res) => {
+  try {
+    res.json({ ...secretManager.status(), secrets: secretManager.listSecrets() });
+  } catch (error) {
+    sendAdoptionError(res, error, 'Could not read encrypted secret metadata');
+  }
+});
+
+app.post('/api/secrets', (req, res) => {
+  try {
+    const secret = secretManager.putSecret(req.body && req.body.name, req.body && req.body.value);
+    res.status(201).json({ secret });
+  } catch (error) {
+    sendAdoptionError(res, error, 'Could not store encrypted secret');
+  }
+});
+
+app.get('/api/resources/:resourceId/environment-revision', (req, res) => {
+  try {
+    const environment = secretManager.getEnvironmentRevision(req.params.resourceId);
+    if (!environment) return res.status(404).json({ error: 'Environment revision was not found' });
+    res.json({ environment });
+  } catch (error) {
+    sendAdoptionError(res, error, 'Could not read environment revision');
+  }
+});
+
+app.post('/api/resources/:resourceId/environment-revisions', (req, res) => {
+  try {
+    const environment = secretManager.createEnvironmentRevision(req.params.resourceId, req.body || {});
+    res.status(201).json({ environment });
+  } catch (error) {
+    sendAdoptionError(res, error, 'Could not store environment revision');
+  }
+});
+
+app.get('/api/workload-evidence', (req, res) => {
+  try {
+    res.json(workloadEvidenceManager.status());
+  } catch (error) {
+    sendWorkloadEvidenceError(res, error, 'Could not read workload evidence');
+  }
+});
+
+app.post('/api/workload-evidence/source-plans', async (req, res) => {
+  try {
+    const plan = await workloadEvidenceManager.planSource(req.body || {});
+    res.status(201).json({ plan });
+  } catch (error) {
+    sendWorkloadEvidenceError(res, error, 'Could not plan workload source evidence');
+  }
+});
+
+app.get('/api/workload-evidence/source-plans/:planId', (req, res) => {
+  try {
+    res.json({ plan: workloadEvidenceManager.getSourcePlan(req.params.planId) });
+  } catch (error) {
+    sendWorkloadEvidenceError(res, error, 'Could not read workload source plan');
+  }
+});
+
+app.post('/api/workload-evidence/source-plans/:planId/capture', async (req, res) => {
+  try {
+    const revision = await workloadEvidenceManager.captureSource(
+      req.params.planId,
+      req.body && req.body.confirmation
+    );
+    res.status(201).json({ revision });
+  } catch (error) {
+    sendWorkloadEvidenceError(res, error, 'Could not capture workload source evidence');
+  }
+});
+
+app.post('/api/workload-evidence/environment-plans', async (req, res) => {
+  try {
+    const plan = await workloadEvidenceManager.planEnvironment(req.body || {});
+    res.status(201).json({ plan });
+  } catch (error) {
+    sendWorkloadEvidenceError(res, error, 'Could not plan workload environment evidence');
+  }
+});
+
+app.get('/api/workload-evidence/environment-plans/:planId', (req, res) => {
+  try {
+    res.json({ plan: workloadEvidenceManager.getEnvironmentPlan(req.params.planId) });
+  } catch (error) {
+    sendWorkloadEvidenceError(res, error, 'Could not read workload environment plan');
+  }
+});
+
+app.post('/api/workload-evidence/environment-plans/:planId/capture', async (req, res) => {
+  try {
+    const capture = await workloadEvidenceManager.captureEnvironment(
+      req.params.planId,
+      req.body && req.body.confirmation
+    );
+    res.status(201).json({ capture });
+  } catch (error) {
+    sendWorkloadEvidenceError(res, error, 'Could not capture workload environment evidence');
+  }
+});
+
+app.get('/api/stateful-rehearsals', (req, res) => {
+  try {
+    res.json(statefulRehearsalManager.status());
+  } catch (error) {
+    sendStatefulRehearsalError(res, error, 'Could not read stateful rehearsals');
+  }
+});
+
+app.post('/api/stateful-rehearsals/plans', async (req, res) => {
+  try {
+    const plan = await statefulRehearsalManager.createPlan(req.body || {});
+    res.status(201).json({ plan });
+  } catch (error) {
+    sendStatefulRehearsalError(res, error, 'Could not plan stateful rehearsal');
+  }
+});
+
+app.post('/api/stateful-rehearsals/cutover-plans', async (req, res) => {
+  try {
+    const plan = await statefulRehearsalManager.createCutoverPlan(req.body || {});
+    res.status(201).json({ plan });
+  } catch (error) {
+    sendStatefulRehearsalError(res, error, 'Could not plan stateful cutover rehearsal');
+  }
+});
+
+app.get('/api/stateful-rehearsals/plans/:planId', (req, res) => {
+  try {
+    res.json({ plan: statefulRehearsalManager.getPlan(req.params.planId) });
+  } catch (error) {
+    sendStatefulRehearsalError(res, error, 'Could not read stateful rehearsal plan');
+  }
+});
+
+app.post('/api/stateful-rehearsals/plans/:planId/run', async (req, res) => {
+  try {
+    const operation = await statefulRehearsalManager.runPlan(
+      req.params.planId,
+      req.body && req.body.confirmation
+    );
+    res.status(201).json({ operation });
+  } catch (error) {
+    sendStatefulRehearsalError(res, error, 'Could not run stateful rehearsal');
+  }
+});
+
+app.post('/api/stateful-rehearsals/cutover-plans/:planId/run', async (req, res) => {
+  try {
+    const operation = await statefulRehearsalManager.runPlan(
+      req.params.planId,
+      req.body && req.body.confirmation
+    );
+    res.status(201).json({ operation });
+  } catch (error) {
+    sendStatefulRehearsalError(res, error, 'Could not run stateful cutover rehearsal');
+  }
+});
+
+app.get('/api/stateful-rehearsals/operations/:operationId', (req, res) => {
+  try {
+    res.json({ operation: statefulRehearsalManager.getOperation(req.params.operationId) });
+  } catch (error) {
+    sendStatefulRehearsalError(res, error, 'Could not read stateful rehearsal operation');
+  }
+});
+
+app.get('/api/stateful-shadows', (req, res) => {
+  try {
+    res.json(statefulShadowManager.status());
+  } catch (error) {
+    sendStatefulShadowError(res, error, 'Could not read stateful shadows');
+  }
+});
+
+app.post('/api/stateful-shadows/plans', async (req, res) => {
+  try {
+    const plan = await statefulShadowManager.createPlan(req.body || {});
+    res.status(201).json({ plan });
+  } catch (error) {
+    sendStatefulShadowError(res, error, 'Could not plan stateful shadow');
+  }
+});
+
+app.post('/api/stateful-shadows/refresh-plans', async (req, res) => {
+  try {
+    const plan = await statefulShadowManager.createRefreshPlan(req.body || {});
+    res.status(201).json({ plan });
+  } catch (error) {
+    sendStatefulShadowError(res, error, 'Could not plan stateful shadow refresh');
+  }
+});
+
+app.get('/api/stateful-shadows/plans/:planId', (req, res) => {
+  try {
+    res.json({ plan: statefulShadowManager.getPlan(req.params.planId) });
+  } catch (error) {
+    sendStatefulShadowError(res, error, 'Could not read stateful shadow plan');
+  }
+});
+
+app.post('/api/stateful-shadows/plans/:planId/run', async (req, res) => {
+  try {
+    const operation = await statefulShadowManager.runPlan(
+      req.params.planId,
+      req.body && req.body.confirmation
+    );
+    res.status(201).json({ operation });
+  } catch (error) {
+    sendStatefulShadowError(res, error, 'Could not run stateful shadow');
+  }
+});
+
+app.post('/api/stateful-shadows/refresh-plans/:planId/run', async (req, res) => {
+  try {
+    const operation = await statefulShadowManager.runRefreshPlan(
+      req.params.planId,
+      req.body && req.body.confirmation
+    );
+    res.status(201).json({ operation });
+  } catch (error) {
+    sendStatefulShadowError(res, error, 'Could not run stateful shadow refresh');
+  }
+});
+
+app.get('/api/stateful-shadows/operations/:operationId', (req, res) => {
+  try {
+    res.json({ operation: statefulShadowManager.getOperation(req.params.operationId) });
+  } catch (error) {
+    sendStatefulShadowError(res, error, 'Could not read stateful shadow operation');
+  }
+});
+
+app.get('/api/recovery/status', (req, res) => {
+  try {
+    res.json({ encryption: encryptionStore.status(), backup: backupManager.status() });
+  } catch (error) {
+    sendAdoptionError(res, error, 'Could not read recovery status');
+  }
+});
+
+app.get('/api/deployments', (req, res) => {
+  try {
+    res.json(sourceDeploymentManager.status());
+  } catch (error) {
+    sendSourceDeploymentError(res, error, 'Could not read source deployment state');
+  }
+});
+
+app.post('/api/deployments/plans', async (req, res) => {
+  try {
+    const plan = await sourceDeploymentManager.createPlan(req.body || {});
+    res.status(201).json({ plan });
+  } catch (error) {
+    sendSourceDeploymentError(res, error, 'Could not create source deployment plan');
+  }
+});
+
+app.get('/api/deployments/plans/:planId', (req, res) => {
+  try {
+    res.json({ plan: sourceDeploymentManager.getPlan(req.params.planId) });
+  } catch (error) {
+    sendSourceDeploymentError(res, error, 'Could not read source deployment plan');
+  }
+});
+
+app.post('/api/deployments/plans/:planId/apply', async (req, res) => {
+  try {
+    const operation = await sourceDeploymentManager.applyPlan(
+      req.params.planId,
+      req.body && req.body.confirmation
+    );
+    res.status(201).json({ operation });
+  } catch (error) {
+    sendSourceDeploymentError(res, error, 'Could not apply source deployment plan');
+  }
+});
+
+app.post('/api/deployments/:operationId/rollback', async (req, res) => {
+  try {
+    const operation = await sourceDeploymentManager.rollbackOperation(
+      req.params.operationId,
+      req.body && req.body.confirmation
+    );
+    res.json({ operation });
+  } catch (error) {
+    sendSourceDeploymentError(res, error, 'Could not roll back source deployment');
+  }
+});
+
+app.get('/api/compose-deployments', (req, res) => {
+  try {
+    res.json(composeDeploymentManager.status());
+  } catch (error) {
+    sendComposeDeploymentError(res, error, 'Could not read Compose deployment state');
+  }
+});
+
+app.post('/api/compose-deployments/plans', async (req, res) => {
+  try {
+    const plan = await composeDeploymentManager.createPlan(req.body || {});
+    res.status(201).json({ plan });
+  } catch (error) {
+    sendComposeDeploymentError(res, error, 'Could not create Compose deployment plan');
+  }
+});
+
+app.get('/api/compose-deployments/plans/:planId', (req, res) => {
+  try {
+    res.json({ plan: composeDeploymentManager.getPlan(req.params.planId) });
+  } catch (error) {
+    sendComposeDeploymentError(res, error, 'Could not read Compose deployment plan');
+  }
+});
+
+app.post('/api/compose-deployments/plans/:planId/enqueue', (req, res) => {
+  try {
+    const job = composeDeploymentManager.enqueuePlan(req.params.planId, req.body && req.body.confirmation);
+    res.status(202).json({ job });
+  } catch (error) {
+    sendComposeDeploymentError(res, error, 'Could not queue Compose deployment');
+  }
+});
+
+app.get('/api/compose-deployments/jobs/:jobId', (req, res) => {
+  try {
+    res.json({ job: composeDeploymentManager.getJob(req.params.jobId) });
+  } catch (error) {
+    sendComposeDeploymentError(res, error, 'Could not read Compose deployment job');
+  }
+});
+
+app.post('/api/compose-deployments/jobs/:jobId/cancel', (req, res) => {
+  try {
+    const job = composeDeploymentManager.cancelJob(req.params.jobId, req.body && req.body.confirmation);
+    res.json({ job });
+  } catch (error) {
+    sendComposeDeploymentError(res, error, 'Could not cancel Compose deployment job');
+  }
+});
+
+app.post('/api/compose-deployments/:operationId/rollback', async (req, res) => {
+  try {
+    const operation = await composeDeploymentManager.rollbackOperation(
+      req.params.operationId,
+      req.body && req.body.confirmation
+    );
+    res.json({ operation });
+  } catch (error) {
+    sendComposeDeploymentError(res, error, 'Could not roll back Compose deployment');
+  }
+});
+
+app.get('/api/image-updates', (req, res) => {
+  try {
+    res.json(imageUpdateManager.status());
+  } catch (error) {
+    sendImageUpdateError(res, error, 'Could not read image-update state');
+  }
+});
+
+app.post('/api/image-updates/plans', async (req, res) => {
+  try {
+    const plan = await imageUpdateManager.createPlan(req.body || {});
+    res.status(201).json({ plan });
+  } catch (error) {
+    sendImageUpdateError(res, error, 'Could not create image-update plan');
+  }
+});
+
+app.get('/api/image-updates/plans/:planId', (req, res) => {
+  try {
+    res.json({ plan: imageUpdateManager.getPlan(req.params.planId) });
+  } catch (error) {
+    sendImageUpdateError(res, error, 'Could not read image-update plan');
+  }
+});
+
+app.post('/api/image-updates/plans/:planId/apply', async (req, res) => {
+  try {
+    const operation = await imageUpdateManager.applyPlan(
+      req.params.planId,
+      req.body && req.body.confirmation
+    );
+    res.status(201).json({ operation });
+  } catch (error) {
+    sendImageUpdateError(res, error, 'Could not apply image update');
+  }
+});
+
+app.post('/api/image-updates/:operationId/rollback', async (req, res) => {
+  try {
+    const operation = await imageUpdateManager.rollbackOperation(
+      req.params.operationId,
+      req.body && req.body.confirmation
+    );
+    res.json({ operation });
+  } catch (error) {
+    sendImageUpdateError(res, error, 'Could not roll back image update');
+  }
+});
+
+app.get('/api/application-manifests', (req, res) => {
+  try {
+    res.json(applicationManifestManager.status());
+  } catch (error) {
+    sendApplicationManifestError(res, error, 'Could not read application manifests');
+  }
+});
+
+app.post('/api/application-manifests/drafts', (req, res) => {
+  try {
+    const draft = applicationManifestManager.createDraft(req.body || {});
+    res.status(201).json({ draft });
+  } catch (error) {
+    sendApplicationManifestError(res, error, 'Could not create application manifest draft');
+  }
+});
+
+app.get('/api/application-manifests/drafts/:draftId', (req, res) => {
+  try {
+    res.json({ draft: applicationManifestManager.getDraft(req.params.draftId) });
+  } catch (error) {
+    sendApplicationManifestError(res, error, 'Could not read application manifest draft');
+  }
+});
+
+app.post('/api/application-manifests/drafts/:draftId/finalize', (req, res) => {
+  try {
+    const manifest = applicationManifestManager.finalizeDraft(
+      req.params.draftId,
+      req.body && req.body.confirmation
+    );
+    res.status(201).json({ manifest });
+  } catch (error) {
+    sendApplicationManifestError(res, error, 'Could not finalize application manifest');
+  }
+});
+
+app.get('/api/application-manifests/resources/:resourceId/current', (req, res) => {
+  try {
+    const manifest = applicationManifestManager.getCurrent(req.params.resourceId);
+    if (!manifest) return res.status(404).json({ error: 'Application manifest was not found' });
+    res.json({ manifest });
+  } catch (error) {
+    sendApplicationManifestError(res, error, 'Could not read current application manifest');
+  }
+});
+
+app.get('/api/independence-audits', (req, res) => {
+  try {
+    res.json(independenceAuditManager.status());
+  } catch (error) {
+    sendIndependenceAuditError(res, error, 'Could not read independence audits');
+  }
+});
+
+app.post('/api/independence-audits', (req, res) => {
+  try {
+    const audit = independenceAuditManager.createAudit(req.body || {});
+    res.status(201).json({ audit });
+  } catch (error) {
+    sendIndependenceAuditError(res, error, 'Could not create independence audit');
+  }
+});
+
+app.get('/api/independence-audits/:auditId', (req, res) => {
+  try {
+    res.json({ audit: independenceAuditManager.getAudit(req.params.auditId) });
+  } catch (error) {
+    sendIndependenceAuditError(res, error, 'Could not read independence audit');
+  }
+});
+
+app.get('/api/migration-orchestrator', (req, res) => {
+  try {
+    res.json(migrationOrchestrator.status());
+  } catch (error) {
+    sendMigrationOrchestratorError(res, error, 'Could not read server migration plans');
+  }
+});
+
+app.post('/api/migration-orchestrator/plans', (req, res) => {
+  try {
+    const plan = migrationOrchestrator.createPlan(req.body || {});
+    res.status(201).json({ plan });
+  } catch (error) {
+    sendMigrationOrchestratorError(res, error, 'Could not create server migration plan');
+  }
+});
+
+app.get('/api/migration-orchestrator/plans/:planId', (req, res) => {
+  try {
+    res.json({ plan: migrationOrchestrator.getPlan(req.params.planId) });
+  } catch (error) {
+    sendMigrationOrchestratorError(res, error, 'Could not read server migration plan');
+  }
+});
+
+app.get('/api/migration-selections/current', (req, res) => {
+  try {
+    res.json(migrationSelectionManager.status());
+  } catch (error) {
+    sendMigrationSelectionError(res, error, 'Could not read the current migration selection');
+  }
+});
+
+app.put('/api/migration-selections/current', (req, res) => {
+  try {
+    const selection = migrationSelectionManager.save(req.body || {});
+    res.json({ selection, status: migrationSelectionManager.status() });
+  } catch (error) {
+    sendMigrationSelectionError(res, error, 'Could not save the migration selection');
+  }
+});
+
+app.get('/api/migration-runs', (req, res) => {
+  try {
+    res.json(migrationRunManager.status());
+  } catch (error) {
+    sendMigrationRunError(res, error, 'Could not read server migration runs');
+  }
+});
+
+app.post('/api/migration-runs', async (req, res) => {
+  try {
+    const run = await migrationRunManager.start(req.body || {}, {
+      type: 'foxos-session',
+      username: req.session.username,
+      sessionToken: req.session.token
+    });
+    res.status(202).json({ run });
+  } catch (error) {
+    sendMigrationRunError(res, error, 'Could not start server migration');
+  }
+});
+
+app.get('/api/migration-runs/:runId', (req, res) => {
+  try {
+    res.json({ run: migrationRunManager.getRun(req.params.runId) });
+  } catch (error) {
+    sendMigrationRunError(res, error, 'Could not read server migration run');
+  }
+});
+
+app.get('/api/runtime-transfers', (req, res) => {
+  try {
+    res.json(runtimeTransferManager.status());
+  } catch (error) {
+    sendRuntimeTransferError(res, error, 'Could not read runtime transfers');
+  }
+});
+
+app.get('/api/runtime-transfers/operations/:operationId', (req, res) => {
+  try {
+    res.json({ operation: runtimeTransferManager.getOperation(req.params.operationId) });
+  } catch (error) {
+    sendRuntimeTransferError(res, error, 'Could not read runtime transfer operation');
+  }
+});
+
+app.get('/api/stateless-migrations', (req, res) => {
+  try {
+    res.json(statelessMigrationManager.status());
+  } catch (error) {
+    sendStatelessMigrationError(res, error, 'Could not read stateless migration reviews');
+  }
+});
+
+app.post('/api/stateless-migrations/plans', (req, res) => {
+  try {
+    const plan = statelessMigrationManager.createPlan(req.body || {});
+    res.status(201).json({ plan });
+  } catch (error) {
+    sendStatelessMigrationError(res, error, 'Could not create stateless migration review');
+  }
+});
+
+app.get('/api/stateless-migrations/plans/:planId', (req, res) => {
+  try {
+    res.json({ plan: statelessMigrationManager.getPlan(req.params.planId) });
+  } catch (error) {
+    sendStatelessMigrationError(res, error, 'Could not read stateless migration review');
+  }
+});
+
+app.get('/api/stateless-migrations/plans/:planId/review', (req, res) => {
+  try {
+    res.json(statelessMigrationReviewManager.status(req.params.planId));
+  } catch (error) {
+    sendStatelessMigrationReviewError(res, error, 'Could not read stateless migration reviewed configuration');
+  }
+});
+
+app.put('/api/stateless-migrations/plans/:planId/review', (req, res) => {
+  try {
+    const review = statelessMigrationReviewManager.save({
+      ...(req.body || {}),
+      statelessPlanId: req.params.planId
+    });
+    res.json({
+      review,
+      status: statelessMigrationReviewManager.status(req.params.planId)
+    });
+  } catch (error) {
+    sendStatelessMigrationReviewError(res, error, 'Could not save stateless migration reviewed configuration');
+  }
+});
+
+app.get('/api/stateful-migrations', (req, res) => {
+  try {
+    res.json(statefulMigrationManager.status());
+  } catch (error) {
+    sendStatefulMigrationError(res, error, 'Could not read stateful migrations');
+  }
+});
+
+app.get('/api/stateful-migrations/operations/:operationId', (req, res) => {
+  try {
+    res.json({ operation: statefulMigrationManager.getOperation(req.params.operationId) });
+  } catch (error) {
+    sendStatefulMigrationError(res, error, 'Could not read stateful migration operation');
+  }
+});
+
+app.post('/api/stateful-migrations/operations/:operationId/rollback', async (req, res) => {
+  try {
+    if (!req.body || req.body.confirmation !== 'ROLLBACK STATEFUL MIGRATION') {
+      throw new StatefulMigrationError('Exact stateful rollback confirmation is required', 400, 'confirmation-required');
+    }
+    const operation = statefulMigrationManager.getOperation(req.params.operationId);
+    const plan = statefulMigrationManager.getPlan(operation.planId);
+    const approval = uiApprovalManager.issue({
+      kind: 'stateful-migration-rollback',
+      planId: plan.planId,
+      resourceId: plan.resource.resourceId,
+      evidenceFingerprint: plan.resource.evidenceFingerprint,
+      actor: { type: 'foxos-session', username: req.session.username, sessionToken: req.session.token }
+    });
+    const rolledBack = await statefulMigrationManager.rollback(req.params.operationId, approval);
+    res.json({ operation: rolledBack });
+  } catch (error) {
+    sendStatefulMigrationError(res, error, 'Could not roll back stateful migration');
+  }
+});
+
+app.get('/api/adoptions', (req, res) => {
+  try {
+    res.json(adoptionManager.status());
+  } catch (error) {
+    sendAdoptionError(res, error, 'Could not read adoption state');
+  }
+});
+
+app.get('/api/routes', (req, res) => {
+  try {
+    res.json(routeManager.status());
+  } catch (error) {
+    sendAdoptionError(res, error, 'Could not read FoxOS routes');
+  }
+});
+
+app.get('/api/adoptions/plans/:planId', (req, res) => {
+  try {
+    res.json({ plan: adoptionManager.getPlan(req.params.planId) });
+  } catch (error) {
+    sendAdoptionError(res, error, 'Could not read adoption plan');
+  }
+});
+
+app.post('/api/adoptions/plans/:planId/apply', async (req, res) => {
+  try {
+    const operation = await adoptionManager.applyPlan(req.params.planId, req.body && req.body.confirmation);
+    res.status(201).json({ operation });
+  } catch (error) {
+    sendAdoptionError(res, error, 'Could not apply adoption plan');
+  }
+});
+
+app.post('/api/adoptions/:operationId/rollback', async (req, res) => {
+  try {
+    const operation = await adoptionManager.rollbackOperation(
+      req.params.operationId,
+      req.body && req.body.confirmation
+    );
+    res.json({ operation });
+  } catch (error) {
+    sendAdoptionError(res, error, 'Could not roll back adoption operation');
+  }
+});
+
+app.get('/api/connections', (req, res) => {
+  try {
+    res.json({ connections: [cloudflareConnectionManager.status()] });
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not read provider connections');
+  }
+});
+
+app.put('/api/connections/cloudflare', async (req, res) => {
+  try {
+    const connection = await cloudflareConnectionManager.configure(req.body || {});
+    res.json({ connection });
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not configure Cloudflare connection');
+  }
+});
+
+app.post('/api/connections/cloudflare/verify', async (req, res) => {
+  try {
+    const connection = await cloudflareConnectionManager.verifyStored();
+    res.json({ connection });
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not verify Cloudflare connection');
+  }
+});
+
+app.delete('/api/connections/cloudflare', (req, res) => {
+  try {
+    res.json(cloudflareConnectionManager.disconnect(req.body && req.body.confirmation));
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not disconnect Cloudflare');
+  }
+});
+
 app.get('/api/apps', async (req, res) => {
   try {
     res.json({ apps: await getCatalogState() });
@@ -796,10 +2690,255 @@ app.get('/api/apps', async (req, res) => {
   }
 });
 
+app.get('/api/applications', async (req, res) => {
+  try {
+    res.json(await getApplicationInventory());
+  } catch (error) {
+    console.error('Could not build the server application inventory:', error.message);
+    res.status(503).json({ error: 'Sunucu uygulamaları okunamadı' });
+  }
+});
+
+app.post('/api/applications/:applicationId/removal-plans', async (req, res) => {
+  try {
+    res.status(201).json({
+      plan: await applicationRemovalManager.createPlan(req.params.applicationId)
+    });
+  } catch (error) {
+    sendApplicationRemovalError(res, error, 'Could not plan application removal');
+  }
+});
+
+app.post('/api/application-removal-plans/:planId/apply', async (req, res) => {
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  const retryAfter = checkLoginRateLimit(req);
+  if (retryAfter) {
+    res.setHeader('Retry-After', String(retryAfter));
+    return res.status(429).json({
+      error: 'Çok fazla hatalı şifre denemesi yapıldı. Daha sonra tekrar deneyin.',
+      code: 'application-removal-password-rate-limited'
+    });
+  }
+  const authRecord = readAuthRecord();
+  const password = typeof body.password === 'string' ? body.password : '';
+  if (!authRecord || !passwordMatches(password, authRecord)) {
+    recordFailedLogin(req);
+    return res.status(401).json({
+      error: 'Şifre hatalı. Uygulama kaldırılmadı.',
+      code: 'application-removal-password-invalid'
+    });
+  }
+  loginAttempts.delete(loginKey(req));
+  try {
+    res.json({
+      operation: await applicationRemovalManager.applyPlan(req.params.planId, {
+        includeLinkedServices: body.includeLinkedServices === true,
+        removeData: body.removeData === true
+      })
+    });
+  } catch (error) {
+    sendApplicationRemovalError(res, error, 'Could not remove application');
+  }
+});
+
+app.put('/api/applications/:applicationId/desktop-shortcut', async (req, res) => {
+  try {
+    const inventory = await getApplicationInventory();
+    const exists = inventory.applications.some((application) => application.id === req.params.applicationId);
+    if (!exists) {
+      throw new DesktopShortcutError('Uygulama artık sunucuda bulunamıyor.', 404, 'application-not-found');
+    }
+    res.json({ shortcut: desktopShortcutManager.setVisible(
+      req.params.applicationId,
+      req.body && req.body.visible
+    ) });
+  } catch (error) {
+    sendDesktopShortcutError(res, error, 'Could not update desktop shortcut visibility');
+  }
+});
+
+app.put('/api/applications/:applicationId/desktop-shortcut-location', (req, res) => {
+  try {
+    const shortcutPath = validatedDesktopShortcutFolder(req.body && req.body.path);
+    res.json({ shortcut: desktopShortcutManager.setLocation(req.params.applicationId, shortcutPath) });
+  } catch (error) {
+    sendDesktopShortcutError(res, error, 'Could not update desktop shortcut location');
+  }
+});
+
+app.post('/api/inactive-definitions/:resourceId/start', async (req, res) => {
+  try {
+    res.status(201).json({
+      operation: await inactiveDefinitionRuntimeManager.activate(req.params.resourceId)
+    });
+  } catch (error) {
+    sendInactiveDefinitionRuntimeError(res, error, 'Could not activate inactive application definition');
+  }
+});
+
+app.get('/api/host-services/:resourceId/settings', (req, res) => {
+  try {
+    res.json({ settings: hostServiceManager.settings(req.params.resourceId) });
+  } catch (error) {
+    const expected = error instanceof HostServiceError;
+    res.status(expected ? error.statusCode : 502).json({
+      error: expected ? error.message : 'Sunucu servisi ayarları okunamadı',
+      code: expected ? error.code : 'host-service-settings-failed'
+    });
+  }
+});
+
+app.patch('/api/host-services/:resourceId/settings', async (req, res) => {
+  try {
+    const result = await hostServiceManager.setBootState(
+      req.params.resourceId,
+      req.body && req.body.bootState
+    );
+    res.json(result);
+  } catch (error) {
+    const expected = error instanceof HostServiceError;
+    res.status(expected ? error.statusCode : 502).json({
+      error: expected ? error.message : 'Otomatik başlatma ayarı değiştirilemedi',
+      code: expected ? error.code : 'host-service-boot-state-failed'
+    });
+  }
+});
+
+app.post('/api/host-services/:resourceId/:action', async (req, res) => {
+  try {
+    res.json(await hostServiceManager.lifecycle(req.params.resourceId, req.params.action));
+  } catch (error) {
+    const expected = error instanceof HostServiceError;
+    res.status(expected ? error.statusCode : 502).json({
+      error: expected ? error.message : 'Sunucu servisi işlemi tamamlanamadı',
+      code: expected ? error.code : 'host-service-lifecycle-failed'
+    });
+  }
+});
+
+app.get('/api/applications/:applicationId/update-check', async (req, res) => {
+  try {
+    res.json({ update: await applicationUpdateChecker.check(req.params.applicationId) });
+  } catch (error) {
+    sendApplicationUpdateError(res, error, 'Could not check application image updates');
+  }
+});
+
+app.post('/api/applications/:applicationId/update-plans', async (req, res) => {
+  try {
+    res.json({ plan: await applicationUpdateManager.createPlan(req.params.applicationId) });
+  } catch (error) {
+    sendApplicationUpdateError(res, error, 'Could not create application update plan');
+  }
+});
+
+app.get('/api/applications/:applicationId/update-status', (req, res) => {
+  try {
+    res.json({ operation: applicationUpdateManager.current(req.params.applicationId) });
+  } catch (error) {
+    sendApplicationUpdateError(res, error, 'Could not read application update status');
+  }
+});
+
+app.post('/api/application-update-plans/:planId/apply', async (req, res) => {
+  try {
+    res.json({ operation: await applicationUpdateManager.applyPlan(req.params.planId, {
+      confirmation: req.body && req.body.confirmation
+    }) });
+  } catch (error) {
+    sendApplicationUpdateError(res, error, 'Could not apply application update');
+  }
+});
+
+app.get('/api/application-update-operations/:operationId', (req, res) => {
+  try {
+    res.json({ operation: applicationUpdateManager.getOperation(req.params.operationId) });
+  } catch (error) {
+    sendApplicationUpdateError(res, error, 'Could not read application update operation');
+  }
+});
+
+app.post('/api/application-update-operations/:operationId/rollback', async (req, res) => {
+  try {
+    res.json({ operation: await applicationUpdateManager.rollbackOperation(req.params.operationId, {
+      confirmation: req.body && req.body.confirmation
+    }) });
+  } catch (error) {
+    sendApplicationUpdateError(res, error, 'Could not roll back application update');
+  }
+});
+
+app.get('/api/applications/:applicationId/compose-files', async (req, res) => {
+  try {
+    res.json({ compose: await applicationComposeManager.describe(req.params.applicationId) });
+  } catch (error) {
+    sendApplicationComposeError(res, error, 'Could not read application Compose files');
+  }
+});
+
+app.put('/api/applications/:applicationId/compose-files/:fileId', async (req, res) => {
+  try {
+    res.json({ result: await applicationComposeManager.save(
+      req.params.applicationId,
+      req.params.fileId,
+      req.body || {}
+    ) });
+  } catch (error) {
+    sendApplicationComposeError(res, error, 'Could not save application Compose file');
+  }
+});
+
+app.get('/api/applications/:applicationId/domain', async (req, res) => {
+  try {
+    res.json(await applicationDomainManager.getStatus(req.params.applicationId));
+  } catch (error) {
+    sendApplicationDomainError(res, error, 'Could not read application domain status');
+  }
+});
+
+app.post('/api/applications/:applicationId/domain/plans', async (req, res) => {
+  try {
+    const plan = await applicationDomainManager.createPlan(req.params.applicationId, req.body || {});
+    res.status(201).json({ plan });
+  } catch (error) {
+    sendApplicationDomainError(res, error, 'Could not plan application domain change');
+  }
+});
+
+app.post('/api/application-domain-plans/:planId/apply', async (req, res) => {
+  try {
+    const operation = await applicationDomainManager.applyPlan(
+      req.params.planId,
+      req.body && req.body.confirmation
+    );
+    res.status(201).json({ operation });
+  } catch (error) {
+    sendApplicationDomainError(res, error, 'Could not apply application domain change');
+  }
+});
+
+app.post('/api/application-domain-operations/:operationId/rollback', async (req, res) => {
+  try {
+    const operation = await applicationDomainManager.rollbackOperation(
+      req.params.operationId,
+      req.body && req.body.confirmation
+    );
+    res.json({ operation });
+  } catch (error) {
+    sendApplicationDomainError(res, error, 'Could not roll back application domain change');
+  }
+});
+
 app.get('/api/apps/:appId/icon', async (req, res) => {
   try {
-    const appState = (await getCatalogState()).find((candidate) => candidate.id === req.params.appId);
-    if (!appState || !appState.installed || !appState.externalUrl) {
+    const inventoryState = (await getApplicationInventory()).applications
+      .find((candidate) => candidate.id === req.params.appId);
+    const appState = inventoryState || (await getCatalogState())
+      .find((candidate) => candidate.id === req.params.appId);
+    const runtimePresent = Boolean(
+      appState && (appState.installed === true || appState.runtime && appState.runtime.present === true)
+    );
+    if (!appState || !runtimePresent || !appState.externalUrl) {
       return res.status(404).json({ error: 'Application icon source is not available' });
     }
 
@@ -893,32 +3032,11 @@ app.post('/api/apps/:appId/:action', async (req, res) => {
   }
 });
 
-app.delete('/api/apps/:appId', async (req, res) => {
-  const catalogApp = getCatalogApp(req.params.appId);
-  if (!catalogApp) {
-    return res.status(404).json({ error: 'Application not found in the FoxOS catalog' });
-  }
-  if (appInstallOperations.has(catalogApp.id)) {
-    return res.status(409).json({ error: 'Wait for the current install operation to finish' });
-  }
-
-  try {
-    const containers = await dockerRequest('GET', '/containers/json?all=1');
-    const container = managedContainerForApp(containers, catalogApp.id);
-    if (!container) {
-      return res.status(404).json({ error: 'Application is not installed' });
-    }
-
-    await dockerRequest('DELETE', '/containers/' + container.Id + '?force=1&v=0');
-    if (req.query.removeData === 'true') {
-      for (const volume of catalogApp.volumes || []) {
-        await dockerRequest('DELETE', '/volumes/' + encodeURIComponent(volume.name));
-      }
-    }
-    res.json({ success: true, dataRemoved: req.query.removeData === 'true' });
-  } catch (error) {
-    res.status(502).json({ error: error.message });
-  }
+app.delete('/api/apps/:appId', (req, res) => {
+  res.status(409).json({
+    error: 'Uygulama kaldırma işlemi şifreli kaldırma planı üzerinden yapılmalıdır.',
+    code: 'password-protected-application-removal-required'
+  });
 });
 
 app.get('/api/containers/:id/settings', async (req, res) => {
@@ -974,9 +3092,15 @@ app.post('/api/containers/:id/:action', async (req, res) => {
     if (details.Config && details.Config.Labels && details.Config.Labels['com.foxos.core'] === 'true') {
       return res.status(409).json({ error: 'FoxOS cannot manage its own core container' });
     }
-    await dockerRequest('POST', '/containers/' + id + '/' + action + '?t=10');
+    const managed = await inactiveDefinitionRuntimeManager.manageContainer(id, action);
+    if (!managed.handled) {
+      await dockerRequest('POST', '/containers/' + id + '/' + action + '?t=10');
+    }
     res.json({ success: true });
   } catch (error) {
+    if (error instanceof InactiveDefinitionRuntimeError) {
+      return sendInactiveDefinitionRuntimeError(res, error, 'Could not change managed application runtime state');
+    }
     res.status(502).json({ error: error.message });
   }
 });
@@ -1009,11 +3133,79 @@ app.use((error, req, res, next) => {
 });
 
 if (require.main === module) {
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log('FoxOS is listening on port ' + PORT);
-    console.log('Host execution mode: ' + HOST_EXECUTION);
-    console.log('Host filesystem mount: ' + HOST_ROOT);
-  });
+  statefulMigrationManager.recoverInterruptedOperations({ clearStaleLock: true })
+    .then((recovery) => {
+      if (recovery.recovered.length) {
+        console.warn('Recovered interrupted stateful migrations:', recovery.recovered.length);
+      }
+    })
+    .catch((error) => {
+      console.error('Initial stateful migration recovery failed:', error.message);
+    })
+    .then(() => statefulRehearsalManager.recoverInterruptedOperations({ clearStaleLock: true }))
+    .then((recovery) => {
+      if (recovery.recovered.length) {
+        console.warn('Recovered interrupted stateful rehearsals:', recovery.recovered.length);
+      }
+    })
+    .catch((error) => {
+      console.error('Initial stateful rehearsal recovery failed:', error.message);
+    })
+    .then(() => statefulShadowManager.recoverInterruptedOperations({ clearStaleLock: true }))
+    .then((recovery) => {
+      if (recovery.recovered.length) {
+        console.warn('Recovered interrupted stateful shadows:', recovery.recovered.length);
+      }
+    })
+    .catch((error) => {
+      console.error('Initial stateful shadow recovery failed:', error.message);
+    })
+    .then(() => ingressAuthorityManager.reconcilePublicAuthority())
+    .then((result) => {
+      if (result.reconciled) {
+        console.log(
+          'Server ingress authority reconciled on ' +
+          result.backends.ipv4 + ' and ' + result.backends.ipv6
+        );
+      }
+    })
+    .catch((error) => {
+      console.error('Initial server ingress reconciliation failed:', error.message);
+    })
+    .finally(() => {
+      app.listen(PORT, '0.0.0.0', () => {
+        console.log('FoxOS is listening on port ' + PORT);
+        console.log('Host execution mode: ' + HOST_EXECUTION);
+        console.log('Host filesystem mount: ' + HOST_ROOT);
+
+        if (process.env.FOXOS_RESOURCE_SCAN_ON_STARTUP === 'false') return;
+        resourceRegistry.scan()
+          .then(async (snapshot) => {
+            console.log(
+              'Resource Registry snapshot ' + snapshot.snapshotId +
+              ' recorded ' + snapshot.summary.resources + ' resources using read-only Docker, host and optional provider observations'
+            );
+            try {
+              const inactiveIngress = await inactiveDefinitionIngressReconciler.reconcile(snapshot);
+              if (inactiveIngress.reconciled) {
+                console.log(
+                  'Server ingress retained trusted stopped responses for ' +
+                  inactiveIngress.addedDomains.length + ' inactive application domains'
+                );
+              }
+            } catch (error) {
+              console.error('Initial inactive application ingress reconciliation failed:', error.message);
+            }
+            if (snapshot.summary.foxosMigrated > 0) {
+              const plan = migrationOrchestrator.createPlan({ confirmation: PLAN_SERVER_MIGRATION_CONFIRMATION });
+              console.log('Server migration plan ' + plan.planId + ' reconciled from verified FoxOS migration state');
+            }
+          })
+          .catch((error) => {
+            console.error('Initial Resource Registry scan failed:', error.message);
+          });
+      });
+    });
 }
 
 module.exports = app;

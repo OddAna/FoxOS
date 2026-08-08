@@ -1,0 +1,562 @@
+name: FoxOS validation
+
+on:
+  push:
+    branches: [develop]
+  pull_request:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+
+      - name: Install backend dependencies
+        run: npm ci
+        working-directory: backend
+
+      - name: Test backend
+        run: npm test
+        working-directory: backend
+
+      - name: Check backend syntax
+        run: npm run check
+        working-directory: backend
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+
+      - name: Lint frontend
+        run: npm run lint
+        working-directory: frontend
+
+      - name: Build frontend
+        run: npm run build
+        working-directory: frontend
+
+      - name: Validate Compose and installer
+        run: |
+          docker compose config --quiet
+          docker compose -f pilot/compose-deployment-canary/v1/compose.yaml config --quiet
+          docker compose -f pilot/compose-deployment-canary/v2/compose.yaml config --quiet
+          if docker compose config | grep -Eiq 'cloudflare|s3-compatible|r2[._-]'; then
+            echo 'Base Compose unexpectedly contains an external provider dependency.' >&2
+            exit 1
+          fi
+          if grep -Eiq 'cloudflare|configure-s3|install-gateway' install.sh; then
+            echo 'Base installer unexpectedly invokes an external provider adapter.' >&2
+            exit 1
+          fi
+          FOXOS_PILOT_TOKEN=ci-disposable-placeholder \
+            docker compose -f pilot/docker-compose.adoption-lab.yml config --quiet
+          bash -n install.sh
+          bash -n install-gateway.sh
+          sh -n gateway/entrypoint.sh
+          mkdir -p .foxos-data/gateway/caddy-data .foxos-data/gateway/caddy-config .foxos-data/gateway/runtime .foxos-data/ingress
+          touch .foxos-data/gateway/runtime/00-empty.caddy .foxos-data/ingress/routes.map
+          FOXOS_DOMAIN=foxos.example.com \
+          FOXOS_ACME_EMAIL=admin@example.com \
+          docker compose -f docker-compose.yml -f docker-compose.gateway.yml config --quiet
+          FOXOS_DOMAIN=foxos.example.com \
+          FOXOS_ACME_EMAIL=admin@example.com \
+          docker compose -f docker-compose.yml -f docker-compose.gateway.yml -f docker-compose.ingress.yml config --quiet
+          docker build --tag foxos-gateway-ci gateway
+          docker build --tag foxos-ingress-ci ingress
+          ingress_check=$(docker run --detach --read-only \
+            --tmpfs /tmp:size=16m,mode=1777 \
+            --cap-drop ALL \
+            --cap-add NET_BIND_SERVICE \
+            --cap-add SETGID \
+            --cap-add SETUID \
+            --volume "$PWD/.foxos-data/ingress:/runtime:ro" \
+            foxos-ingress-ci)
+          sleep 1
+          if [[ "$(docker inspect --format '{{.State.Running}}' "$ingress_check")" != "true" ]]; then
+            docker logs "$ingress_check"
+            docker rm --force "$ingress_check"
+            exit 1
+          fi
+          docker rm --force "$ingress_check"
+          docker run --rm --entrypoint caddy \
+            -e FOXOS_DOMAIN=foxos.example.com \
+            -e FOXOS_ACME_EMAIL=admin@example.com \
+            foxos-gateway-ci validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
+      - name: Verify clean base install without external providers
+        run: |
+          cleanup() {
+            for cleanup_attempt in 1 2; do
+              container_ids=$(docker ps -aq --filter label=com.foxos.deployment.disposable=true)
+              if [ -n "$container_ids" ]; then docker rm -f $container_ids || true; fi
+              sleep 1
+            done
+            image_ids=$(docker images -q --filter label=com.foxos.deployment.disposable=true)
+            if [ -n "$image_ids" ]; then docker image rm -f $image_ids || true; fi
+            for cleanup_attempt in 1 2; do
+              compose_container_ids=$(docker ps -aq --filter label=com.foxos.compose-deployment.disposable=true)
+              if [ -n "$compose_container_ids" ]; then docker rm -f $compose_container_ids || true; fi
+              compose_network_ids=$(docker network ls -q --filter label=com.foxos.compose-deployment.disposable=true)
+              if [ -n "$compose_network_ids" ]; then docker network rm $compose_network_ids || true; fi
+              sleep 1
+            done
+            compose_image_ids=$(docker images -q --filter label=com.foxos.compose-deployment.disposable=true)
+            if [ -n "$compose_image_ids" ]; then docker image rm -f $compose_image_ids || true; fi
+            for cleanup_attempt in 1 2; do
+              docker ps -aq --filter label=com.foxos.image-update.disposable=true | while IFS= read -r image_container_id; do
+                if [ -n "$image_container_id" ]; then docker rm -f "$image_container_id" || true; fi
+              done
+              docker network ls -q --filter label=com.foxos.image-update.disposable=true | while IFS= read -r image_network_id; do
+                if [ -n "$image_network_id" ]; then docker network rm "$image_network_id" || true; fi
+              done
+              sleep 1
+            done
+            docker ps -aq --filter label=com.foxos.temporary=stateful-rehearsal | while IFS= read -r rehearsal_container_id; do
+              if [ -n "$rehearsal_container_id" ]; then docker rm -f "$rehearsal_container_id" || true; fi
+            done
+            docker volume ls -q --filter label=com.foxos.temporary=stateful-rehearsal | while IFS= read -r rehearsal_volume_id; do
+              if [ -n "$rehearsal_volume_id" ]; then docker volume rm "$rehearsal_volume_id" || true; fi
+            done
+            docker network ls -q --filter label=com.foxos.temporary=stateful-rehearsal | while IFS= read -r rehearsal_network_id; do
+              if [ -n "$rehearsal_network_id" ]; then docker network rm "$rehearsal_network_id" || true; fi
+            done
+            docker ps -aq --filter label=com.foxos.stateful-shadow=true | while IFS= read -r shadow_container_id; do
+              if [ -n "$shadow_container_id" ]; then docker rm -f "$shadow_container_id" || true; fi
+            done
+            docker volume ls -q --filter label=com.foxos.stateful-shadow=true | while IFS= read -r shadow_volume_id; do
+              if [ -n "$shadow_volume_id" ]; then docker volume rm "$shadow_volume_id" || true; fi
+            done
+            docker network ls -q --filter label=com.foxos.stateful-shadow=true | while IFS= read -r shadow_network_id; do
+              if [ -n "$shadow_network_id" ]; then docker network rm "$shadow_network_id" || true; fi
+            done
+            docker ps -aq --filter label=com.foxos.stateless-migration.disposable=true | while IFS= read -r stateless_lab_container_id; do
+              if [ -n "$stateless_lab_container_id" ]; then docker rm -f "$stateless_lab_container_id" || true; fi
+            done
+            docker network ls -q --filter label=com.foxos.stateless-migration.disposable=true | while IFS= read -r stateless_lab_network_id; do
+              if [ -n "$stateless_lab_network_id" ]; then docker network rm "$stateless_lab_network_id" || true; fi
+            done
+            docker compose down || true
+          }
+          trap cleanup EXIT
+          test ! -e .env
+          ./install.sh
+          for attempt in $(seq 1 30); do
+            state=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' foxos)
+            if [ "$state" = healthy ]; then
+              break
+            fi
+            sleep 2
+          done
+          test "$state" = healthy
+          curl --fail --silent --show-error http://127.0.0.1:8080/api/health >/dev/null
+          docker compose exec -T foxos node /app/recoveryCli.js status | node -e '
+            let input = "";
+            process.stdin.on("data", chunk => input += chunk);
+            process.stdin.on("end", () => {
+              const status = JSON.parse(input);
+              if (status.backup.configured || status.backup.ready || status.backup.adapter) process.exit(1);
+            });
+          '
+          docker compose exec -T foxos node /app/workloadEvidenceCli.js status | node -e '
+            let input = "";
+            process.stdin.on("data", chunk => input += chunk);
+            process.stdin.on("end", () => {
+              const status = JSON.parse(input);
+              const guarantees = status.guarantees || {};
+              if (status.summary.sourceRevisions !== 0 || status.summary.environmentRevisions !== 0) process.exit(1);
+              if (guarantees.cleanInstallRequiresGitCredential) process.exit(1);
+              if (guarantees.runtimeMutated || guarantees.providerMutated || guarantees.providerDetached) process.exit(1);
+              if (guarantees.secretValuesIncluded || guarantees.ordinaryValuesIncluded) process.exit(1);
+              if (guarantees.externalGitRequiredToReconstructCapturedRevision) process.exit(1);
+            });
+          '
+          docker compose exec -T foxos node /app/statefulRehearsalCli.js status | node -e '
+            let input = "";
+            process.stdin.on("data", chunk => input += chunk);
+            process.stdin.on("end", () => {
+              const status = JSON.parse(input);
+              const guarantees = status.guarantees || {};
+              if (status.summary.plans || status.summary.operations || status.summary.verified || status.summary.running) process.exit(1);
+              if (guarantees.sourceStopIncluded || guarantees.sourceRecreationIncluded) process.exit(1);
+              if (guarantees.routeMutationIncluded || guarantees.trafficCutoverIncluded) process.exit(1);
+              if (guarantees.providerMutationIncluded || guarantees.providerDetachIncluded) process.exit(1);
+              if (guarantees.offHostRecoveryProven) process.exit(1);
+              if (guarantees.environmentValuesIncluded || guarantees.secretValuesIncluded) process.exit(1);
+              if (guarantees.interruptedOperationsReplayed) process.exit(1);
+            });
+          '
+          docker compose exec -T foxos node /app/statefulShadowCli.js status | node -e '
+            let input = "";
+            process.stdin.on("data", chunk => input += chunk);
+            process.stdin.on("end", () => {
+              const status = JSON.parse(input);
+              const guarantees = status.guarantees || {};
+              if (status.summary.plans || status.summary.operations || status.summary.active || status.summary.stale || status.summary.running) process.exit(1);
+              if (status.summary.refreshPlans || status.summary.refreshOperations) process.exit(1);
+              if (guarantees.sourceMutationIncluded || guarantees.sourcePauseIncluded) process.exit(1);
+              if (guarantees.sourceStopIncluded || guarantees.sourceRecreationIncluded) process.exit(1);
+              if (guarantees.sourceIdentityClaimed || !guarantees.separateFoxOSIdentity) process.exit(1);
+              if (!guarantees.internalNetworkOnly || guarantees.hostPortPublished || guarantees.externalNetworkIncluded) process.exit(1);
+              if (guarantees.routeCreated || guarantees.trafficCutover) process.exit(1);
+              if (guarantees.providerMutationIncluded || guarantees.providerDetachIncluded) process.exit(1);
+              if (guarantees.offHostRecoveryProven || guarantees.environmentValuesIncluded || guarantees.secretValuesIncluded) process.exit(1);
+              if (!guarantees.controlledRefreshSupported || guarantees.inPlaceVolumeMutation) process.exit(1);
+              if (guarantees.finalSynchronizationProven || !guarantees.sourceWritesMayContinueAfterSnapshot) process.exit(1);
+            });
+          '
+
+          plan_v1=$(docker compose exec -T foxos node /app/deploymentCli.js plan \
+            --repository https://github.com/OddAna/FoxOS.git \
+            --ref develop \
+            --context pilot/source-deployment-canary/v1 \
+            --dockerfile Dockerfile \
+            --private-port 8080 \
+            --health-path / \
+            --expected-body "FoxOS source deployment canary v1" \
+            --confirm "PLAN DISPOSABLE SOURCE")
+          plan_v1_id=$(printf '%s' "$plan_v1" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).planId))')
+          plan_v1_revision=$(printf '%s' "$plan_v1" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).revisionId))')
+          operation_v1=$(docker compose exec -T foxos node /app/deploymentCli.js apply "$plan_v1_id" \
+            --confirm "DEPLOY DISPOSABLE $plan_v1_id")
+          printf '%s' "$operation_v1" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>{if(JSON.parse(s).status!=="applied")process.exit(1)})'
+
+          plan_v2=$(docker compose exec -T foxos node /app/deploymentCli.js plan \
+            --repository https://github.com/OddAna/FoxOS.git \
+            --ref develop \
+            --context pilot/source-deployment-canary/v2 \
+            --dockerfile Dockerfile \
+            --private-port 8080 \
+            --health-path / \
+            --expected-body "FoxOS source deployment canary v2" \
+            --confirm "PLAN DISPOSABLE SOURCE")
+          plan_v2_id=$(printf '%s' "$plan_v2" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).planId))')
+          operation_v2=$(docker compose exec -T foxos node /app/deploymentCli.js apply "$plan_v2_id" \
+            --confirm "DEPLOY DISPOSABLE $plan_v2_id")
+          operation_v2_id=$(printf '%s' "$operation_v2" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).operationId))')
+          docker compose exec -T foxos node /app/deploymentCli.js rollback "$operation_v2_id" \
+            --confirm "ROLLBACK DEPLOYMENT $operation_v2_id" >/dev/null
+          deployment_status=$(docker compose exec -T foxos node /app/deploymentCli.js status)
+          deployment_revision=$(printf '%s' "$deployment_status" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).current.revisionId))')
+          test "$deployment_revision" = "$plan_v1_revision"
+          deployment_port=$(printf '%s' "$deployment_status" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(String(JSON.parse(s).current.hostPort)))')
+          curl --fail --silent --show-error "http://127.0.0.1:$deployment_port/" | grep -F "FoxOS source deployment canary v1" >/dev/null
+
+          source_ref="${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}"
+          compose_plan_v1=$(docker compose exec -T foxos node /app/composeDeploymentCli.js plan \
+            --repository https://github.com/OddAna/FoxOS.git \
+            --ref "$source_ref" \
+            --manifest pilot/compose-deployment-canary/v1/compose.yaml \
+            --ingress-service web \
+            --health-path / \
+            --expected-body "FoxOS compose deployment canary v1 + api-v1" \
+            --confirm "PLAN DISPOSABLE COMPOSE")
+          compose_plan_v1_id=$(printf '%s' "$compose_plan_v1" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).planId))')
+          compose_plan_v1_revision=$(printf '%s' "$compose_plan_v1" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).revisionId))')
+          compose_job_v1=$(docker compose exec -T foxos node /app/composeDeploymentCli.js enqueue "$compose_plan_v1_id" \
+            --confirm "DEPLOY COMPOSE $compose_plan_v1_id")
+          compose_job_v1_id=$(printf '%s' "$compose_job_v1" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).jobId))')
+          compose_job_v1_done=$(docker compose exec -T foxos node /app/composeDeploymentCli.js wait "$compose_job_v1_id" --timeout-seconds 900)
+          printf '%s' "$compose_job_v1_done" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>{if(JSON.parse(s).status!=="succeeded")process.exit(1)})'
+
+          compose_plan_v2=$(docker compose exec -T foxos node /app/composeDeploymentCli.js plan \
+            --repository https://github.com/OddAna/FoxOS.git \
+            --ref "$source_ref" \
+            --manifest pilot/compose-deployment-canary/v2/compose.yaml \
+            --ingress-service web \
+            --health-path / \
+            --expected-body "FoxOS compose deployment canary v2 + api-v2" \
+            --confirm "PLAN DISPOSABLE COMPOSE")
+          compose_plan_v2_id=$(printf '%s' "$compose_plan_v2" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).planId))')
+          compose_job_v2=$(docker compose exec -T foxos node /app/composeDeploymentCli.js enqueue "$compose_plan_v2_id" \
+            --confirm "DEPLOY COMPOSE $compose_plan_v2_id")
+          compose_job_v2_id=$(printf '%s' "$compose_job_v2" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).jobId))')
+          compose_job_v2_done=$(docker compose exec -T foxos node /app/composeDeploymentCli.js wait "$compose_job_v2_id" --timeout-seconds 900)
+          compose_operation_v2_id=$(printf '%s' "$compose_job_v2_done" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).operationId))')
+          docker compose exec -T foxos node /app/composeDeploymentCli.js rollback "$compose_operation_v2_id" \
+            --confirm "ROLLBACK COMPOSE $compose_operation_v2_id" >/dev/null
+          compose_status=$(docker compose exec -T foxos node /app/composeDeploymentCli.js status)
+          compose_revision=$(printf '%s' "$compose_status" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).current.revisionId))')
+          test "$compose_revision" = "$compose_plan_v1_revision"
+          compose_port=$(printf '%s' "$compose_status" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(String(JSON.parse(s).current.hostPort)))')
+          curl --fail --silent --show-error "http://127.0.0.1:$compose_port/" | grep -F "FoxOS compose deployment canary v1 + api-v1" >/dev/null
+          test "$(docker ps -q --filter label=com.foxos.compose-deployment.disposable=true | wc -l)" -eq 2
+          test "$(docker ps -aq --filter label=com.foxos.compose-deployment.disposable=true | wc -l)" -eq 4
+          test "$(docker network ls -q --filter label=com.foxos.compose-deployment.disposable=true | wc -l)" -eq 2
+
+          image_plan_v1=$(docker compose exec -T foxos node /app/imageUpdateCli.js plan \
+            --image traefik/whoami:v1.10.3 \
+            --health-path / \
+            --expected-body "Hostname:" \
+            --confirm "PLAN DISPOSABLE IMAGE UPDATE")
+          image_plan_v1_id=$(printf '%s' "$image_plan_v1" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).planId))')
+          image_plan_v1_revision=$(printf '%s' "$image_plan_v1" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).revisionId))')
+          docker compose exec -T foxos node /app/imageUpdateCli.js apply "$image_plan_v1_id" \
+            --confirm "APPLY IMAGE UPDATE $image_plan_v1_id" >/dev/null
+
+          image_plan_v2=$(docker compose exec -T foxos node /app/imageUpdateCli.js plan \
+            --image traefik/whoami:v1.11.0 \
+            --health-path / \
+            --expected-body "Hostname:" \
+            --confirm "PLAN DISPOSABLE IMAGE UPDATE")
+          image_plan_v2_id=$(printf '%s' "$image_plan_v2" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).planId))')
+          image_operation_v2=$(docker compose exec -T foxos node /app/imageUpdateCli.js apply "$image_plan_v2_id" \
+            --confirm "APPLY IMAGE UPDATE $image_plan_v2_id")
+          image_operation_v2_id=$(printf '%s' "$image_operation_v2" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).operationId))')
+          docker compose exec -T foxos node /app/imageUpdateCli.js rollback "$image_operation_v2_id" \
+            --confirm "ROLLBACK IMAGE UPDATE $image_operation_v2_id" >/dev/null
+
+          image_status=$(docker compose exec -T foxos node /app/imageUpdateCli.js status)
+          image_revision=$(printf '%s' "$image_status" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).current.revisionId))')
+          image_digest=$(printf '%s' "$image_status" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).current.image.digest))')
+          image_port=$(printf '%s' "$image_status" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(String(JSON.parse(s).current.hostPort)))')
+          test "$image_revision" = "$image_plan_v1_revision"
+          test "$image_digest" = "sha256:43a68d10b9dfcfc3ffbfe4dd42100dc9aeaf29b3a5636c856337a5940f1b4f1c"
+          curl --fail --silent --show-error "http://127.0.0.1:$image_port/" | grep -F "Hostname:" >/dev/null
+          test "$(docker ps -q --filter label=com.foxos.image-update.disposable=true | wc -l)" -eq 1
+          test "$(docker ps -aq --filter label=com.foxos.image-update.disposable=true | wc -l)" -eq 2
+          test "$(docker network ls -q --filter label=com.foxos.image-update.disposable=true | wc -l)" -eq 2
+          image_active_id=$(docker ps -q --filter label=com.foxos.image-update.disposable=true)
+          test "$(docker inspect --format '{{.Config.User}}' "$image_active_id")" = "65532:65532"
+          test "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$image_active_id")" = "true"
+          test "$(docker inspect --format '{{.HostConfig.Privileged}}' "$image_active_id")" = "false"
+          test "$(docker inspect --format '{{len .Mounts}}' "$image_active_id")" -eq 0
+
+          docker compose exec -T foxos node -e '
+            const { createDockerClient } = require("/app/dockerClient");
+            const { createResourceRegistry } = require("/app/resourceRegistry");
+            const docker = createDockerClient(process.env.DOCKER_SOCKET);
+            createResourceRegistry({ dataRoot: process.env.DATA_ROOT, dockerRequest: docker.request })
+              .scan().catch((error) => { console.error(error.message); process.exit(1); });
+          '
+          image_resource_id=$(printf '%s' "$image_status" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).resourceId))')
+          manifest_draft=$(docker compose exec -T foxos node /app/applicationManifestCli.js draft "$image_resource_id" \
+            --confirm "PLAN APPLICATION MANIFEST")
+          manifest_draft_id=$(printf '%s' "$manifest_draft" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).draftId))')
+          manifest_draft_status=$(printf '%s' "$manifest_draft" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).gates.status))')
+          test "$manifest_draft_status" = "ready"
+          application_manifest=$(docker compose exec -T foxos node /app/applicationManifestCli.js finalize "$manifest_draft_id" \
+            --confirm "FINALIZE APPLICATION MANIFEST $manifest_draft_id")
+          printf '%s' "$application_manifest" | node -e '
+            let s="";
+            process.stdin.on("data",c=>s+=c);
+            process.stdin.on("end",()=>{
+              const manifest=JSON.parse(s);
+              if(manifest.lifecycle!=="foxos-managed" || manifest.gates.status!=="ready") process.exit(1);
+              if(manifest.gates.runtimeMutationIncluded || manifest.gates.providerDetachApproved) process.exit(1);
+              if(manifest.desired.environment.valuesIncluded) process.exit(1);
+            });
+          '
+          manifest_current=$(docker compose exec -T foxos node /app/applicationManifestCli.js current "$image_resource_id")
+          test "$(printf '%s' "$manifest_current" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).revisionId))')" = \
+            "$(printf '%s' "$application_manifest" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).revisionId))')"
+
+          finalize_manifest() {
+            manifest_resource_id="$1"
+            expected_source_type="$2"
+            source_draft=$(docker compose exec -T foxos node /app/applicationManifestCli.js draft "$manifest_resource_id" \
+              --confirm "PLAN APPLICATION MANIFEST")
+            source_draft_id=$(printf '%s' "$source_draft" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).draftId))')
+            printf '%s' "$source_draft" | MANIFEST_RESOURCE_ID="$manifest_resource_id" node -e '
+              let s="";
+              process.stdin.on("data",c=>s+=c);
+              process.stdin.on("end",()=>{
+                const draft=JSON.parse(s);
+                if(draft.gates.status!=="ready") {
+                  const codes=(draft.gates.blockers || []).map(blocker=>blocker.code).join(",");
+                  console.error(`manifest draft ${process.env.MANIFEST_RESOURCE_ID} blocked: ${codes}`);
+                  process.exit(1);
+                }
+              });
+            '
+            source_manifest=$(docker compose exec -T foxos node /app/applicationManifestCli.js finalize "$source_draft_id" \
+              --confirm "FINALIZE APPLICATION MANIFEST $source_draft_id")
+            printf '%s' "$source_manifest" | EXPECTED_SOURCE_TYPE="$expected_source_type" node -e '
+              let s="";
+              process.stdin.on("data",c=>s+=c);
+              process.stdin.on("end",()=>{
+                const manifest=JSON.parse(s);
+                const failures=[];
+                if(manifest.lifecycle!=="foxos-managed" || manifest.gates.status!=="ready") failures.push("not-ready");
+                if(manifest.desired.source.type!==process.env.EXPECTED_SOURCE_TYPE) failures.push(`source:${manifest.desired.source.type}`);
+                if(manifest.desired.environment.valuesIncluded || manifest.desired.environment.managedVariableCount!==0) failures.push("environment-not-redacted");
+                if(!manifest.evidence.healthProof?.verified || !manifest.evidence.updateRollbackProof?.verified) failures.push("proof-missing");
+                if(failures.length) {
+                  console.error(`finalized manifest ${manifest.resourceId} invalid: ${failures.join(",")}`);
+                  process.exit(1);
+                }
+              });
+            '
+          }
+
+          source_resource_id=$(printf '%s' "$deployment_status" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).current.resourceId))')
+          finalize_manifest "$source_resource_id" "foxos-source-build-revision"
+
+          compose_start_order=$(printf '%s' "$compose_status" | node -e '
+            let s="";
+            process.stdin.on("data",c=>s+=c);
+            process.stdin.on("end",()=>{
+              const current=JSON.parse(s).current;
+              const services=new Set(current.services.map(service=>service.name));
+              if(current.startOrder.length!==services.size || current.startOrder.some(name=>!services.has(name))) process.exit(1);
+              process.stdout.write(current.startOrder.join(" "));
+            });
+          ')
+          for compose_service_name in $compose_start_order; do
+            compose_container_id=$(printf '%s' "$compose_status" | COMPOSE_SERVICE_NAME="$compose_service_name" node -e '
+              let s="";
+              process.stdin.on("data",c=>s+=c);
+              process.stdin.on("end",()=>{
+                const current=JSON.parse(s).current;
+                const service=current.services.find(candidate=>candidate.name===process.env.COMPOSE_SERVICE_NAME);
+                if(!service || !service.containerId) process.exit(1);
+                process.stdout.write(service.containerId);
+              });
+            ')
+            test -n "$compose_container_id"
+            compose_resource_id=$(docker inspect --format '{{ index .Config.Labels "com.foxos.resource.id" }}' "$compose_container_id")
+            finalize_manifest "$compose_resource_id" "foxos-compose-deployment-revision"
+          done
+
+          manifest_status=$(docker compose exec -T foxos node /app/applicationManifestCli.js status)
+          printf '%s' "$manifest_status" | node -e '
+            let s="";
+            process.stdin.on("data",c=>s+=c);
+            process.stdin.on("end",()=>{
+              const status=JSON.parse(s);
+              const sources=status.current.map(manifest=>manifest.desired.source.type).sort();
+              const compose=status.current.filter(manifest=>manifest.desired.source.type==="foxos-compose-deployment-revision");
+              const failures=[];
+              if(status.summary.finalized!==4 || status.summary.blockedDrafts!==0) failures.push(`summary:${JSON.stringify(status.summary)}`);
+              if(sources.filter(type=>type==="foxos-compose-deployment-revision").length!==2) failures.push(`compose-count:${sources.join(",")}`);
+              if(!sources.includes("foxos-source-build-revision") || !sources.includes("oci-image")) failures.push(`source-types:${sources.join(",")}`);
+              if(!compose.some(manifest=>manifest.desired.dependencies.some(dependency=>dependency.type==="compose-depends-on" && dependency.required))) failures.push("directed-dependency-missing");
+              if(compose.some(manifest=>manifest.desired.dependencies.some(dependency=>dependency.type==="shared-network" && dependency.required))) failures.push("shared-network-required");
+              if(status.current.some(manifest=>manifest.schemaVersion!==2)) failures.push("manifest-schema");
+              if(status.current.some(manifest=>manifest.desired.identity.classification?.stateClass!=="stateless")) failures.push("state-classification");
+              if(status.current.some(manifest=>manifest.desired.identity.classification?.authorityClass!=="foxos-owned")) failures.push("authority-classification");
+              const roles=status.current.map(manifest=>manifest.desired.identity.classification?.workloadRole).sort();
+              if(roles.filter(role=>role==="application").length!==3 || roles.filter(role=>role==="internal-service").length!==1) failures.push(`workload-roles:${roles.join(",")}`);
+              if(failures.length) {
+                console.error(`application manifest integration failed: ${failures.join(";")}`);
+                process.exit(1);
+              }
+            });
+          '
+
+          independence_status=$(docker compose exec -T foxos node /app/independenceAuditCli.js status)
+          printf '%s' "$independence_status" | node -e '
+            let s="";
+            process.stdin.on("data",c=>s+=c);
+            process.stdin.on("end",()=>{
+              const status=JSON.parse(s);
+              if(status.candidates.length!==0 || status.audits.length!==0) process.exit(1);
+              if(status.guarantees.runtimeMutated || status.guarantees.providerDetached || status.guarantees.applyApproved) process.exit(1);
+            });
+          '
+          independence_audit=$(docker compose exec -T foxos node /app/independenceAuditCli.js audit "$image_resource_id" \
+            --confirm "AUDIT WORKLOAD INDEPENDENCE")
+          printf '%s' "$independence_audit" | node -e '
+            let s="";
+            process.stdin.on("data",c=>s+=c);
+            process.stdin.on("end",()=>{
+              const audit=JSON.parse(s);
+              if(audit.result!=="not-a-stateless-application-candidate") process.exit(1);
+              if(audit.guarantees.dockerRequestsMade!==0 || audit.guarantees.runtimeMutated || audit.guarantees.providerDetached || audit.guarantees.applyApproved) process.exit(1);
+              if(audit.evidence.secretValuesIncluded) process.exit(1);
+            });
+          '
+
+          migration_status=$(docker compose exec -T foxos node /app/migrationOrchestratorCli.js status)
+          printf '%s' "$migration_status" | node -e '
+            let s="";
+            process.stdin.on("data",c=>s+=c);
+            process.stdin.on("end",()=>{
+              const status=JSON.parse(s);
+              if(status.summary.plans!==0 || status.latest!==null) process.exit(1);
+              const guarantees=status.guarantees || {};
+              if(guarantees.runtimeMutated || guarantees.routesMutated || guarantees.providerStateMutated) process.exit(1);
+              if(guarantees.providerDetached || guarantees.applyImplemented || guarantees.applyApproved) process.exit(1);
+              if(guarantees.secretValuesIncluded || !guarantees.zeroDowntimeStatefulPostRoadmap) process.exit(1);
+            });
+          '
+          migration_plan=$(docker compose exec -T foxos node /app/migrationOrchestratorCli.js plan \
+            --confirm "PLAN SERVER MIGRATION")
+          printf '%s' "$migration_plan" | node -e '
+            let s="";
+            process.stdin.on("data",c=>s+=c);
+            process.stdin.on("end",()=>{
+              const plan=JSON.parse(s);
+              if(!/^mplan_[a-f0-9]{32}$/.test(plan.planId)) process.exit(1);
+              if(plan.mode!=="read-only-server-migration-plan" || plan.summary.resources<1) process.exit(1);
+              if(plan.guarantees.dockerRequestsMade!==0 || plan.guarantees.runtimeMutated) process.exit(1);
+              if(plan.guarantees.routesMutated || plan.guarantees.providerStateMutated || plan.guarantees.providerDetached) process.exit(1);
+              if(plan.guarantees.applyImplemented || plan.guarantees.applyApproved || plan.guarantees.secretValuesIncluded) process.exit(1);
+              if(!plan.guarantees.zeroDowntimeStatefulPostRoadmap) process.exit(1);
+            });
+          '
+          server_migration_plan_id=$(printf '%s' "$migration_plan" | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).planId))')
+          stateless_status=$(docker compose exec -T foxos node /app/statelessMigrationCli.js status)
+          printf '%s' "$stateless_status" | node -e '
+            let s="";
+            process.stdin.on("data",c=>s+=c);
+            process.stdin.on("end",()=>{
+              const status=JSON.parse(s);
+              if(status.summary.plans || status.summary.operations || status.summary.active || status.summary.recoveryRequired) process.exit(1);
+              if(status.executionGate.status!=="sealed" || !status.executionGate.uiApprovalRequired) process.exit(1);
+              if(status.executionGate.uiApprovalConfigured || status.executionGate.runtimeAdapterConfigured) process.exit(1);
+              if(status.executionGate.runEndpointExposed || status.executionGate.approveEndpointExposed) process.exit(1);
+              if(status.guarantees.sourceStopAllowed || status.guarantees.sourceRecreationAllowed) process.exit(1);
+              if(status.guarantees.providerDetachIncluded || status.guarantees.destructiveCleanupIncluded) process.exit(1);
+              if(status.guarantees.startupOperationReplay || status.guarantees.secretValuesIncluded || status.guarantees.ordinaryEnvironmentValuesIncluded) process.exit(1);
+            });
+          '
+          if docker compose exec -T foxos node /app/statelessMigrationCli.js plan \
+            --server-plan "$server_migration_plan_id" --resource "$image_resource_id" \
+            --confirm "PREPARE STATELESS MIGRATION" >/dev/null 2>&1; then
+            echo 'FoxOS-owned disposable resource unexpectedly entered provider migration planning.' >&2
+            exit 1
+          fi
+          if docker compose exec -T foxos node /app/statelessMigrationCli.js run >/dev/null 2>&1; then
+            echo 'Sealed stateless migration CLI unexpectedly exposed a run command.' >&2
+            exit 1
+          fi
+          stateless_lab_proof=$(docker compose exec -T foxos node /app/statelessMigrationLabCli.js proof \
+            --confirm "RUN DISPOSABLE STATELESS LAB")
+          printf '%s' "$stateless_lab_proof" | node -e '
+            let s="";
+            process.stdin.on("data",c=>s+=c);
+            process.stdin.on("end",()=>{
+              const proof=JSON.parse(s);
+              if(proof.mode!=="real-docker-stateless-migration-disposable-proof") process.exit(1);
+              if(proof.sourceStopped || proof.providerDetached || proof.productionGateChanged) process.exit(1);
+              if(!proof.success.zeroDowntimeProven || proof.success.unavailableSamples!==0) process.exit(1);
+              if(proof.success.status!=="rolled-back" || !proof.success.sourcePreserved) process.exit(1);
+              if(proof.fault.detectedFailure!=="downtime-observed" || proof.fault.unavailableSamples!==1) process.exit(1);
+              if(!proof.fault.automaticRollback || proof.fault.status!=="rolled-back-after-failure") process.exit(1);
+              if(proof.cleanup.containers || proof.cleanup.networks || proof.cleanup.volumes) process.exit(1);
+            });
+          '
+          test "$(docker ps -aq --filter label=com.foxos.stateless-migration.disposable=true | wc -l)" -eq 0
+          test "$(docker network ls -q --filter label=com.foxos.stateless-migration.disposable=true | wc -l)" -eq 0
+          docker compose exec -T foxos node /app/statelessMigrationCli.js status | node -e '
+            let s="";
+            process.stdin.on("data",c=>s+=c);
+            process.stdin.on("end",()=>{
+              const status=JSON.parse(s);
+              if(status.executionGate.status!=="sealed") process.exit(1);
+              if(status.summary.plans || status.summary.operations) process.exit(1);
+              if(status.executionGate.uiApprovalConfigured || status.executionGate.runtimeAdapterConfigured) process.exit(1);
+            });
+          '

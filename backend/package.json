@@ -1,14 +1,21 @@
 {
   "name": "foxos-backend",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "FoxOS privileged Linux host management agent",
   "main": "server.js",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "start": "node server.js",
-    "check": "node --check server.js && node --check appCatalog.js && node --check appManager.js",
-    "test": "node --test server.test.js"
+    "precheck": "node --check applicationDomainManager.js && node --check applicationRemovalManager.js",
+    "check": "node --check server.js && node --check appCatalog.js && node --check appManager.js && node --check applicationInventory.js && node --check applicationDomainManager.js && node --check applicationComposeManager.js && node --check applicationUpdateChecker.js && node --check applicationUpdateManager.js && node --check composeSource.js && node --check desktopShortcutManager.js && node --check cloudflareConnectionManager.js && node --check dockerClient.js && node --check resourceClassification.js && node --check resourceRegistry.js && node --check hostServiceManager.js && node --check routeManager.js && node --check ingressAuthorityManager.js && node --check traefikCertificateImporter.js && node --check inactiveDefinitionIngressReconciler.js && node --check inactiveDefinitionRuntimeManager.js && node --check productionStatelessMigrationAdapter.js && node --check productionStatefulMigrationAdapter.js && node --check runtimeTransferManager.js && node --check runtimeIdentityManager.js && node --check runtimeIdentityCli.js && node --check tcpBridge.js && node --check legacyProxyBridge.js && node --check encryptionStore.js && node --check secretManager.js && node --check backupManager.js && node --check adoptionManager.js && node --check sourceDeploymentManager.js && node --check composeDeploymentManager.js && node --check imageUpdateManager.js && node --check workloadEvidenceManager.js && node --check statefulRehearsalManager.js && node --check statefulShadowManager.js && node --check applicationManifestManager.js && node --check independenceAuditManager.js && node --check migrationOrchestrator.js && node --check migrationSelectionManager.js && node --check migrationRunManager.js && node --check migrationPlanningContext.js && node --check statelessMigrationManager.js && node --check statelessMigrationManifestCompiler.js && node --check statelessMigrationReviewManager.js && node --check statefulMigrationManager.js && node --check statefulMigrationManifestCompiler.js && node --check uiApprovalManager.js && node --check statelessMigrationLabAdapter.js && node --check statelessMigrationLabGateway.js && node --check adoptionCli.js && node --check deploymentCli.js && node --check composeDeploymentCli.js && node --check imageUpdateCli.js && node --check workloadEvidenceCli.js && node --check statefulRehearsalCli.js && node --check statefulShadowCli.js && node --check applicationManifestCli.js && node --check independenceAuditCli.js && node --check migrationOrchestratorCli.js && node --check statelessMigrationCli.js && node --check statelessMigrationLabCli.js && node --check secretCli.js && node --check recoveryCli.js",
+    "test": "node --test *.test.js",
+    "stateless-lab-proof": "node statelessMigrationLabCli.js proof --confirm \"RUN DISPOSABLE STATELESS LAB\""
   },
   "dependencies": {
-    "express": "^4.19.2"
+    "@aws-sdk/client-s3": "^3.1102.0",
+    "express": "^4.19.2",
+    "yaml": "2.9.0"
   }
 }
