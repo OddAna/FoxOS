@@ -101,7 +101,7 @@ function fakeAppServer({ getAccount, setAccount }) {
         ephemeral: message.params.ephemeral === true,
         modelProvider: 'openai',
         preview: '',
-        source: 'appServer',
+        source: 'vscode',
         status: { type: 'idle' },
         turns: [],
         path: '/private/codex/session.jsonl'
@@ -315,7 +315,7 @@ test('Codex history explicitly lists app-server threads and resumes their persis
 
   const child = fixture.children[0];
   const threadList = child.received.find((message) => message.method === 'thread/list');
-  assert.deepEqual(threadList.params.sourceKinds, ['appServer']);
+  assert.deepEqual(threadList.params.sourceKinds, ['appServer', 'vscode']);
   assert.equal(threadList.params.cwd, '/');
   assert.equal(threadList.params.sortKey, 'updated_at');
   assert.equal(threadList.params.sortDirection, 'desc');

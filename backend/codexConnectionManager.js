@@ -19,6 +19,9 @@ const MODEL_LIST_PAGE_LIMIT = 100;
 const MODEL_LIST_MAX_PAGES = 5;
 const THREAD_LIST_PAGE_LIMIT = 50;
 const MAX_THREAD_CURSOR_LENGTH = 2048;
+// The daemon currently reports direct App Server sessions as `vscode`; keep
+// the documented `appServer` source compatible without admitting CLI/exec work.
+const FOXOS_THREAD_SOURCES = new Set(['appServer', 'vscode']);
 const MAX_THREAD_ID_LENGTH = 256;
 const MAX_HISTORY_TURNS = 200;
 const MAX_HISTORY_ITEMS = 2000;
@@ -106,7 +109,7 @@ function isFoxosThread(thread) {
   return Boolean(
     thread && typeof thread === 'object' &&
     typeof thread.id === 'string' && thread.id &&
-    thread.cwd === '/' && thread.source === 'appServer'
+    thread.cwd === '/' && FOXOS_THREAD_SOURCES.has(thread.source)
   );
 }
 
@@ -862,7 +865,7 @@ function createCodexConnectionManager({
       limit: THREAD_LIST_PAGE_LIMIT,
       sortKey: 'updated_at',
       sortDirection: 'desc',
-      sourceKinds: ['appServer'],
+      sourceKinds: [...FOXOS_THREAD_SOURCES],
       cwd: '/',
       ...(normalizedCursor ? { cursor: normalizedCursor } : {})
     });
