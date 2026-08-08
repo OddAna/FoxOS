@@ -510,7 +510,10 @@ function exactHostExecutableInvocation(hostExecutable, args) {
       executable: 'nsenter',
       args: [
         '--target', '1', '--mount', '--uts', '--ipc', '--net', '--pid',
-        '--root=/proc/1/root', '--wd=/', '--', hostExecutable, ...args
+        // nsenter opens --wd before applying --root. Point both at the host
+        // root so getcwd() remains valid after chroot; --wd=/ leaves the
+        // process in the agent container's now-unreachable root directory.
+        '--root=/proc/1/root', '--wd=/proc/1/root', '--', hostExecutable, ...args
       ],
       cwd: '/'
     };
@@ -528,7 +531,7 @@ function hostRootShellInvocation(command) {
       executable: 'nsenter',
       args: [
         '--target', '1', '--mount', '--uts', '--ipc', '--net', '--pid',
-        '--root=/proc/1/root', '--wd=/', '--', '/bin/sh', '-lc', command
+        '--root=/proc/1/root', '--wd=/proc/1/root', '--', '/bin/sh', '-lc', command
       ],
       cwd: '/'
     };
