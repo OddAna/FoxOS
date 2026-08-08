@@ -17,6 +17,17 @@ const MAX_PROMPT_LENGTH = 32768;
 const REQUEST_TIMEOUT_MS = 30000;
 const MODEL_LIST_PAGE_LIMIT = 100;
 const MODEL_LIST_MAX_PAGES = 5;
+const THREAD_LIST_PAGE_LIMIT = 50;
+const MAX_THREAD_CURSOR_LENGTH = 2048;
+const MAX_THREAD_ID_LENGTH = 256;
+const MAX_HISTORY_TURNS = 200;
+const MAX_HISTORY_ITEMS = 2000;
+const DEFAULT_APPROVAL_POLICY = 'untrusted';
+const NO_APPROVAL_POLICY = 'never';
+const APPROVAL_POLICIES = new Set([
+  DEFAULT_APPROVAL_POLICY,
+  NO_APPROVAL_POLICY
+]);
 const SUPPORTED_APPROVAL_METHODS = new Set([
   'item/commandExecution/requestApproval',
   'item/fileChange/requestApproval'
@@ -55,11 +66,159 @@ function boundedText(value, maximum = 500) {
   return String(value || '').replace(/[\r\0]/g, '').slice(0, maximum);
 }
 
+function normalizeThreadId(value) {
+  const threadId = typeof value === 'string' ? value.trim() : '';
+  if (!threadId || threadId.length > MAX_THREAD_ID_LENGTH || /[\r\n\0]/.test(threadId)) {
+    throw new CodexConnectionError('Codex konuşma kimliği geçersiz.', 400, 'codex-thread-id-invalid');
+  }
+  return threadId;
+}
+
+function normalizeApprovalPolicy(value) {
+  const approvalPolicy = value === undefined || value === null || value === ''
+    ? DEFAULT_APPROVAL_POLICY
+    : typeof value === 'string' ? value.trim() : '';
+  if (!APPROVAL_POLICIES.has(approvalPolicy)) {
+    throw new CodexConnectionError('Codex izin politikası geçersiz.', 400, 'codex-approval-policy-invalid');
+  }
+  return approvalPolicy;
+}
+
+function normalizeThreadCursor(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const cursor = typeof value === 'string' ? value.trim() : '';
+  if (!cursor || cursor.length > MAX_THREAD_CURSOR_LENGTH || /[\r\n\0]/.test(cursor)) {
+    throw new CodexConnectionError('Codex konuşma sayfası geçersiz.', 400, 'codex-thread-cursor-invalid');
+  }
+  return cursor;
+}
+
+function normalizedTimestamp(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function normalizedThreadStatus(value) {
+  const status = value && typeof value.type === 'string' ? value.type : '';
+  return ['notLoaded', 'idle', 'systemError', 'active'].includes(status) ? status : 'notLoaded';
+}
+
+function isFoxosThread(thread) {
+  return Boolean(
+    thread && typeof thread === 'object' &&
+    typeof thread.id === 'string' && thread.id &&
+    thread.cwd === '/' && thread.source === 'appServer'
+  );
+}
+
+function sanitizeThreadSummary(thread) {
+  if (!isFoxosThread(thread)) return null;
+  return {
+    id: boundedText(thread.id, MAX_THREAD_ID_LENGTH),
+    name: typeof thread.name === 'string' && thread.name.trim()
+      ? boundedText(thread.name.trim(), 200)
+      : null,
+    preview: typeof thread.preview === 'string'
+      ? boundedText(thread.preview.trim().replace(/\s+/g, ' '), 500)
+      : '',
+    createdAt: normalizedTimestamp(thread.createdAt),
+    updatedAt: normalizedTimestamp(thread.updatedAt),
+    recencyAt: normalizedTimestamp(thread.recencyAt),
+    status: normalizedThreadStatus(thread.status),
+    ephemeral: thread.ephemeral === true
+  };
+}
+
+function sanitizeHistoryItem(item) {
+  if (!item || typeof item !== 'object' || typeof item.id !== 'string') return null;
+  const id = boundedText(item.id, 256);
+  if (item.type === 'userMessage') {
+    const content = (Array.isArray(item.content) ? item.content : [])
+      .filter((entry) => entry && entry.type === 'text' && typeof entry.text === 'string')
+      .slice(0, 32)
+      .map((entry) => ({ type: 'text', text: boundedText(entry.text, MAX_PROMPT_LENGTH) }));
+    return content.length ? { id, type: 'userMessage', content } : null;
+  }
+  if (item.type === 'agentMessage') {
+    return { id, type: 'agentMessage', text: boundedText(item.text, 128 * 1024) };
+  }
+  if (item.type === 'commandExecution') {
+    return {
+      id,
+      type: 'commandExecution',
+      command: boundedText(item.command, 8000),
+      cwd: boundedText(item.cwd || '/', 2048),
+      aggregatedOutput: boundedText(item.aggregatedOutput, 128 * 1024),
+      status: boundedText(item.status, 40),
+      exitCode: Number.isInteger(item.exitCode) ? item.exitCode : null
+    };
+  }
+  if (item.type === 'fileChange') {
+    const changes = (Array.isArray(item.changes) ? item.changes : []).slice(0, 200).map((change) => ({
+      path: boundedText(change && change.path, 2048),
+      kind: boundedText(
+        typeof (change && change.kind) === 'string'
+          ? change.kind
+          : change && change.kind && change.kind.type,
+        40
+      ) || 'changed'
+    }));
+    return {
+      id,
+      type: 'fileChange',
+      changes,
+      status: boundedText(item.status, 40)
+    };
+  }
+  return null;
+}
+
+function sanitizeThreadWithHistory(thread) {
+  const summary = sanitizeThreadSummary(thread);
+  if (!summary) return null;
+  const sourceTurns = Array.isArray(thread.turns) ? thread.turns : [];
+  const selectedTurns = sourceTurns.slice(-MAX_HISTORY_TURNS);
+  let itemCount = 0;
+  let historyTruncated = selectedTurns.length !== sourceTurns.length;
+  const turns = [];
+  for (const turn of selectedTurns) {
+    if (!turn || typeof turn !== 'object' || typeof turn.id !== 'string') continue;
+    const items = [];
+    for (const item of Array.isArray(turn.items) ? turn.items : []) {
+      if (itemCount >= MAX_HISTORY_ITEMS) {
+        historyTruncated = true;
+        break;
+      }
+      const sanitized = sanitizeHistoryItem(item);
+      if (!sanitized) continue;
+      items.push(sanitized);
+      itemCount += 1;
+    }
+    turns.push({
+      id: boundedText(turn.id, 256),
+      status: boundedText(turn.status, 40),
+      error: turn.error && typeof turn.error.message === 'string'
+        ? { message: boundedText(turn.error.message, 2000) }
+        : null,
+      items
+    });
+  }
+  return { ...summary, turns, historyTruncated };
+}
+
 function normalizeCliInspection(value) {
   return {
     installed: value && value.installed === true,
     version: value && typeof value.version === 'string'
       ? boundedText(value.version.trim(), 120)
+      : null
+  };
+}
+
+function normalizeAccountInspection(value) {
+  return {
+    connected: value && value.connected === true,
+    authMode: value && typeof value.authMode === 'string'
+      ? boundedText(value.authMode.trim(), 40) || null
       : null
   };
 }
@@ -152,7 +311,8 @@ function threadIdForEvent(event) {
 }
 
 class CodexAppServerClient {
-  constructor({ spawnAppServer, clock = () => new Date() }) {
+  constructor({ prepareAppServer, spawnAppServer, clock = () => new Date() }) {
+    this.prepareAppServer = prepareAppServer;
     this.spawnAppServer = spawnAppServer;
     this.clock = clock;
     this.child = null;
@@ -325,6 +485,7 @@ class CodexAppServerClient {
     this.starting = (async () => {
       let child;
       try {
+        await this.prepareAppServer();
         child = this.spawnAppServer();
       } catch {
         throw new CodexConnectionError('Codex app-server başlatılamadı.', 503, 'codex-app-server-unavailable');
@@ -402,18 +563,35 @@ class CodexAppServerClient {
 
 function createCodexConnectionManager({
   dataRoot,
+  inspectAccount,
   inspectCli,
   installCli,
+  prepareAppServer,
   spawnAppServer,
+  stopAppServer,
   clock = () => new Date()
 }) {
-  if (!dataRoot || typeof inspectCli !== 'function' || typeof installCli !== 'function' || typeof spawnAppServer !== 'function') {
-    throw new Error('Codex connection manager requires data and host CLI adapters');
+  if (
+    !dataRoot || typeof inspectAccount !== 'function' || typeof inspectCli !== 'function' ||
+    typeof installCli !== 'function' || typeof prepareAppServer !== 'function' ||
+    typeof spawnAppServer !== 'function' ||
+    typeof stopAppServer !== 'function'
+  ) {
+    throw new Error('Codex connection manager requires data and host runtime adapters');
   }
 
   const root = path.join(dataRoot, 'connections', PROVIDER);
   const configFile = path.join(root, 'config.json');
-  const client = new CodexAppServerClient({ spawnAppServer, clock });
+  let hostRuntimeKnownStopped = false;
+  let loginInProgress = false;
+  const client = new CodexAppServerClient({
+    prepareAppServer,
+    spawnAppServer: () => {
+      hostRuntimeKnownStopped = false;
+      return spawnAppServer();
+    },
+    clock
+  });
   let runtimeMutationTail = Promise.resolve();
 
   function serializeRuntimeMutation(operation) {
@@ -475,6 +653,13 @@ function createCodexConnectionManager({
     return result.account || null;
   }
 
+  async function stopHostRuntime() {
+    client.stop();
+    if (hostRuntimeKnownStopped) return;
+    await stopAppServer();
+    hostRuntimeKnownStopped = true;
+  }
+
   async function loadModelCatalog() {
     const entries = [];
     let cursor = null;
@@ -512,38 +697,73 @@ function createCodexConnectionManager({
     return loadModelCatalog();
   }
 
+  async function requireFullServer() {
+    await requireInstalled();
+    const config = loadConfig();
+    if (config.accessProfile !== FULL_SERVER_ACCESS_PROFILE) {
+      throw new CodexConnectionError(
+        'Codex çalıştırmadan önce Full Server erişimini etkinleştirin.',
+        409,
+        'codex-full-server-required'
+      );
+    }
+    if (!(await readAccount())) {
+      throw new CodexConnectionError('Önce Codex hesabınızı bağlayın.', 409, 'codex-account-required');
+    }
+    return config;
+  }
+
   async function status() {
     const inspection = normalizeCliInspection(await inspectCli());
     const config = loadConfig();
+    const fullServer = config.accessProfile === FULL_SERVER_ACCESS_PROFILE;
     let account = null;
+    let accountConnected = false;
+    let authMode = null;
     let runtimeReady = false;
     let runtimeError = null;
     if (inspection.installed) {
       try {
-        account = await readAccount();
-        runtimeReady = true;
+        if (fullServer) {
+          account = await readAccount();
+          accountConnected = Boolean(account);
+          authMode = account && account.type || null;
+          runtimeReady = true;
+        } else {
+          const accountInspection = normalizeAccountInspection(await inspectAccount());
+          accountConnected = accountInspection.connected;
+          authMode = accountInspection.authMode;
+          if (!loginInProgress || accountConnected) {
+            loginInProgress = false;
+            await stopHostRuntime();
+          }
+          runtimeReady = true;
+        }
       } catch (error) {
         runtimeError = error.code || 'codex-app-server-unavailable';
       }
     }
-    const fullServer = config.accessProfile === FULL_SERVER_ACCESS_PROFILE;
     return {
       id: PROVIDER,
       name: 'Codex',
       installed: inspection.installed,
       version: inspection.version,
-      connected: Boolean(account),
-      ready: Boolean(inspection.installed && account && runtimeReady),
+      connected: accountConnected,
+      ready: Boolean(inspection.installed && accountConnected && runtimeReady),
       runtimeReady,
       runtimeError,
-      authMode: account && account.type || null,
+      authMode,
       email: account && typeof account.email === 'string' ? account.email : null,
       planType: account && typeof account.planType === 'string' ? account.planType : null,
+      runtimeOwner: 'server',
+      runtimeTransport: 'unix-websocket',
+      survivesAgentRestart: inspection.installed,
       accessProfile: config.accessProfile,
       fullServer,
       rootEquivalent: fullServer,
       workingDirectory: '/',
-      approvalPolicy: 'untrusted',
+      approvalPolicy: DEFAULT_APPROVAL_POLICY,
+      supportedApprovalPolicies: [DEFAULT_APPROVAL_POLICY, NO_APPROVAL_POLICY],
       credentialsManagedByCodex: true,
       credentialIncluded: false,
       optional: true,
@@ -558,8 +778,11 @@ function createCodexConnectionManager({
     if (confirmation !== INSTALL_CONFIRMATION) {
       throw new CodexConnectionError('Codex kurulumu için tam onay gerekli.', 400, 'codex-install-confirmation-required');
     }
-    client.stop();
+    const existing = normalizeCliInspection(await inspectCli());
+    if (existing.installed) await stopHostRuntime();
     await installCli();
+    hostRuntimeKnownStopped = false;
+    loginInProgress = false;
     const inspection = await requireInstalled();
     if (!loadConfig().configuredAt) saveConfig(DEFAULT_ACCESS_PROFILE);
     return { installed: true, version: inspection.version, connection: await status() };
@@ -574,6 +797,7 @@ function createCodexConnectionManager({
     ) {
       throw new CodexConnectionError('Codex giriş akışı başlatılamadı.', 502, 'codex-login-response-invalid');
     }
+    loginInProgress = true;
     return {
       loginId: result.loginId,
       verificationUrl: result.verificationUrl,
@@ -586,6 +810,8 @@ function createCodexConnectionManager({
       throw new CodexConnectionError('Codex giriş kimliği geçersiz.', 400, 'codex-login-id-invalid');
     }
     await client.request('account/login/cancel', { loginId: loginId.trim() });
+    loginInProgress = false;
+    if (loadConfig().accessProfile === DEFAULT_ACCESS_PROFILE) await stopHostRuntime();
     return { cancelled: true };
   }
 
@@ -602,7 +828,8 @@ function createCodexConnectionManager({
     }
     saveConfig(accessProfile);
     if (accessProfile === DEFAULT_ACCESS_PROFILE) {
-      client.stop();
+      loginInProgress = false;
+      await stopHostRuntime();
     }
     return status();
   }
@@ -622,25 +849,41 @@ function createCodexConnectionManager({
         }
       }
     } finally {
-      client.stop();
+      loginInProgress = false;
+      await stopHostRuntime();
     }
     return { disconnected: true, connection: await status() };
   }
 
-  async function startThread(model, reasoningEffort) {
-    await requireInstalled();
-    const account = await readAccount();
-    if (!account) {
-      throw new CodexConnectionError('Önce Codex hesabınızı bağlayın.', 409, 'codex-account-required');
-    }
-    const config = loadConfig();
-    if (config.accessProfile !== FULL_SERVER_ACCESS_PROFILE) {
+  async function listThreads(cursor = null) {
+    await requireFullServer();
+    const normalizedCursor = normalizeThreadCursor(cursor);
+    const result = await client.request('thread/list', {
+      limit: THREAD_LIST_PAGE_LIMIT,
+      sortKey: 'updated_at',
+      sortDirection: 'desc',
+      sourceKinds: ['appServer'],
+      cwd: '/',
+      ...(normalizedCursor ? { cursor: normalizedCursor } : {})
+    });
+    if (!result || !Array.isArray(result.data)) {
       throw new CodexConnectionError(
-        'Codex çalıştırmadan önce Full Server erişimini etkinleştirin.',
-        409,
-        'codex-full-server-required'
+        'Codex konuşma geçmişi okunamadı.',
+        502,
+        'codex-thread-list-invalid'
       );
     }
+    return {
+      threads: result.data.map(sanitizeThreadSummary).filter(Boolean),
+      nextCursor: typeof result.nextCursor === 'string' && result.nextCursor.length <= MAX_THREAD_CURSOR_LENGTH
+        ? result.nextCursor
+        : null
+    };
+  }
+
+  async function startThread(model, reasoningEffort, requestedApprovalPolicy) {
+    const config = await requireFullServer();
+    const approvalPolicy = normalizeApprovalPolicy(requestedApprovalPolicy);
     if (model !== undefined && (typeof model !== 'string' || !model.trim())) {
       throw new CodexConnectionError('Codex modeli geçersiz.', 400, 'codex-model-invalid');
     }
@@ -673,51 +916,68 @@ function createCodexConnectionManager({
     const result = await client.request('thread/start', {
       model: selectedModel.model,
       cwd: '/',
-      approvalPolicy: 'untrusted',
+      approvalPolicy,
       sandbox: 'danger-full-access',
       serviceName: 'foxos',
+      ephemeral: false,
       config: { model_reasoning_effort: selectedEffort }
     });
-    if (!result.thread || typeof result.thread.id !== 'string') {
+    const thread = sanitizeThreadSummary(result.thread);
+    if (!thread) {
       throw new CodexConnectionError('Codex konuşması başlatılamadı.', 502, 'codex-thread-response-invalid');
     }
     return {
-      thread: result.thread,
+      thread,
       model: typeof result.model === 'string' ? result.model : selectedModel.model,
       reasoningEffort: typeof result.reasoningEffort === 'string'
         ? result.reasoningEffort
         : selectedEffort,
+      approvalPolicy,
       accessProfile: config.accessProfile,
       workingDirectory: '/'
     };
   }
 
-  async function startTurn(threadId, text) {
-    await requireInstalled();
-    if (loadConfig().accessProfile !== FULL_SERVER_ACCESS_PROFILE) {
-      throw new CodexConnectionError(
-        'Codex çalıştırmadan önce Full Server erişimini etkinleştirin.',
-        409,
-        'codex-full-server-required'
-      );
+  async function resumeThread(threadId, requestedApprovalPolicy) {
+    await requireFullServer();
+    const normalizedThreadId = normalizeThreadId(threadId);
+    const approvalPolicy = normalizeApprovalPolicy(requestedApprovalPolicy);
+    const result = await client.request('thread/resume', {
+      threadId: normalizedThreadId,
+      cwd: '/',
+      approvalPolicy,
+      sandbox: 'danger-full-access'
+    });
+    const thread = sanitizeThreadWithHistory(result.thread);
+    if (!thread || thread.id !== normalizedThreadId) {
+      throw new CodexConnectionError('Codex konuşması açılamadı.', 404, 'codex-thread-not-found');
     }
-    const account = await readAccount();
-    if (!account) {
-      throw new CodexConnectionError('Önce Codex hesabınızı bağlayın.', 409, 'codex-account-required');
-    }
-    const normalizedThreadId = typeof threadId === 'string' ? threadId.trim() : '';
+    return {
+      thread,
+      model: typeof result.model === 'string' ? boundedText(result.model, 200) : null,
+      reasoningEffort: typeof result.reasoningEffort === 'string'
+        ? boundedText(result.reasoningEffort, 32)
+        : null,
+      approvalPolicy,
+      accessProfile: FULL_SERVER_ACCESS_PROFILE,
+      workingDirectory: '/'
+    };
+  }
+
+  async function startTurn(threadId, text, requestedApprovalPolicy) {
+    await requireFullServer();
+    const normalizedThreadId = normalizeThreadId(threadId);
+    const approvalPolicy = normalizeApprovalPolicy(requestedApprovalPolicy);
     const prompt = typeof text === 'string' ? text.trim() : '';
-    if (!normalizedThreadId || normalizedThreadId.length > 256 || /[\r\n\0]/.test(normalizedThreadId)) {
-      throw new CodexConnectionError('Codex konuşma kimliği geçersiz.', 400, 'codex-thread-id-invalid');
-    }
     if (!prompt || prompt.length > MAX_PROMPT_LENGTH) {
       throw new CodexConnectionError('Codex isteği boş veya çok uzun.', 400, 'codex-prompt-invalid');
     }
     const result = await client.request('turn/start', {
       threadId: normalizedThreadId,
-      input: [{ type: 'text', text: prompt }]
+      input: [{ type: 'text', text: prompt }],
+      approvalPolicy
     });
-    return { turn: result.turn || null };
+    return { turn: result.turn || null, approvalPolicy };
   }
 
   async function interruptTurn(threadId, turnId) {
@@ -735,15 +995,21 @@ function createCodexConnectionManager({
     install: (confirmation) => serializeRuntimeMutation(() => install(confirmation)),
     interruptTurn,
     listModels,
+    listThreads,
     resolveApproval: (requestId, decision) => client.resolveApproval(requestId, decision),
+    resumeThread: (threadId, approvalPolicy) => serializeRuntimeMutation(
+      () => resumeThread(threadId, approvalPolicy)
+    ),
     setAccessProfile: (accessProfile, confirmation) => serializeRuntimeMutation(
       () => setAccessProfile(accessProfile, confirmation)
     ),
     startLogin,
-    startThread: (model, reasoningEffort) => serializeRuntimeMutation(
-      () => startThread(model, reasoningEffort)
+    startThread: (model, reasoningEffort, approvalPolicy) => serializeRuntimeMutation(
+      () => startThread(model, reasoningEffort, approvalPolicy)
     ),
-    startTurn: (threadId, text) => serializeRuntimeMutation(() => startTurn(threadId, text)),
+    startTurn: (threadId, text, approvalPolicy) => serializeRuntimeMutation(
+      () => startTurn(threadId, text, approvalPolicy)
+    ),
     status,
     stop: () => client.stop()
   };

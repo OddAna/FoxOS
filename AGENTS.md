@@ -72,8 +72,13 @@
   dependency. Preserve the separate exact confirmations for host installation
   and **Full Server**, the default read-only profile, per-owner device-code
   authentication, real host-root `/` execution, `danger-full-access` plus
-  `untrusted` approval contract, private stdio transport, bounded in-memory
-  events and owner-authenticated endpoints. Never return or log Codex auth state.
+  default `untrusted` approvals, the explicit owner-selected per-thread `never`
+  option, persisted app-server thread history, a host-owned managed app-server
+  daemon, its owner-only Unix WebSocket control socket, bounded in-memory events
+  and owner-authenticated endpoints. Never spawn the
+  app-server as a FoxOS container child, expose its control socket publicly, or
+  return or log Codex auth state. Recreating the FoxOS agent must close only its
+  local socket client while the host daemon and active turn continue.
   Revoking Full Server must stop the runtime and block earlier threads;
   disconnect must revoke access and log out while leaving the CLI optional.
 - A clean public installation must require no external provider account, domain,

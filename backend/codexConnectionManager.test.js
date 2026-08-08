@@ -12,9 +12,10 @@ const {
   createCodexConnectionManager
 } = require('./codexConnectionManager');
 
-function fakeAppServer() {
-  let account = null;
+function fakeAppServer({ getAccount, setAccount }) {
   let nextThread = 1;
+  let now = 1770000000;
+  const threads = [];
   const received = [];
   const child = new EventEmitter();
   child.stdout = new PassThrough();
@@ -32,10 +33,10 @@ function fakeAppServer() {
       return respond({ id: message.id, result: { userAgent: 'codex-test' } });
     }
     if (message.method === 'account/read') {
-      return respond({ id: message.id, result: { account, requiresOpenaiAuth: true } });
+      return respond({ id: message.id, result: { account: getAccount(), requiresOpenaiAuth: true } });
     }
     if (message.method === 'account/login/start') {
-      account = { type: 'chatgpt', email: 'owner@example.com', planType: 'plus' };
+      setAccount({ type: 'chatgpt', email: 'owner@example.com', planType: 'plus' });
       return respond({
         id: message.id,
         result: {
@@ -47,7 +48,7 @@ function fakeAppServer() {
       });
     }
     if (message.method === 'account/logout') {
-      account = null;
+      setAccount(null);
       return respond({ id: message.id, result: {} });
     }
     if (message.method === 'model/list') {
@@ -88,16 +89,70 @@ function fakeAppServer() {
       });
     }
     if (message.method === 'thread/start') {
+      const id = 'thr_' + nextThread++;
+      const thread = {
+        id,
+        sessionId: id,
+        cliVersion: '0.147.0',
+        createdAt: now,
+        updatedAt: now++,
+        recencyAt: now,
+        cwd: '/',
+        ephemeral: message.params.ephemeral === true,
+        modelProvider: 'openai',
+        preview: '',
+        source: 'appServer',
+        status: { type: 'idle' },
+        turns: [],
+        path: '/private/codex/session.jsonl'
+      };
+      threads.unshift(thread);
       return respond({
         id: message.id,
         result: {
-          thread: { id: 'thr_' + nextThread++, sessionId: 'thr_1' },
+          thread,
           model: message.params.model,
-          reasoningEffort: message.params.config && message.params.config.model_reasoning_effort
+          reasoningEffort: message.params.config && message.params.config.model_reasoning_effort,
+          approvalPolicy: message.params.approvalPolicy
+        }
+      });
+    }
+    if (message.method === 'thread/list') {
+      return respond({
+        id: message.id,
+        result: { data: threads, nextCursor: null }
+      });
+    }
+    if (message.method === 'thread/resume') {
+      const thread = threads.find((entry) => entry.id === message.params.threadId);
+      if (!thread) {
+        return respond({ id: message.id, error: { message: 'thread not found' } });
+      }
+      return respond({
+        id: message.id,
+        result: {
+          thread,
+          model: 'gpt-5.6-sol',
+          reasoningEffort: 'low',
+          approvalPolicy: message.params.approvalPolicy
         }
       });
     }
     if (message.method === 'turn/start') {
+      const thread = threads.find((entry) => entry.id === message.params.threadId);
+      const text = message.params.input && message.params.input[0] && message.params.input[0].text || '';
+      if (thread) {
+        thread.preview = thread.preview || text;
+        thread.updatedAt = now++;
+        thread.turns.push({
+          id: 'turn_1',
+          status: 'completed',
+          items: [
+            { id: 'user_1', type: 'userMessage', content: [{ type: 'text', text }] },
+            { id: 'msg_1', type: 'agentMessage', text: 'Hazırım.' }
+          ]
+        });
+      }
       respond({ id: message.id, result: { turn: { id: 'turn_1', status: 'inProgress' } } });
       respond({
         method: 'item/agentMessage/delta',
@@ -137,19 +192,30 @@ function fakeAppServer() {
 function createFixture({ installed = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-codex-'));
   let cliInstalled = installed;
+  let account = null;
   const children = [];
+  const runtime = { stopCalls: 0 };
   const manager = createCodexConnectionManager({
     dataRoot: root,
+    inspectAccount: async () => ({
+      connected: Boolean(account),
+      authMode: account && account.type || null
+    }),
     inspectCli: async () => ({ installed: cliInstalled, version: cliInstalled ? 'codex-cli 1.2.3' : null }),
     installCli: async () => { cliInstalled = true; },
+    prepareAppServer: async () => {},
     spawnAppServer: () => {
-      const child = fakeAppServer();
+      const child = fakeAppServer({
+        getAccount: () => account,
+        setAccount: (value) => { account = value; }
+      });
       children.push(child);
       return child;
     },
+    stopAppServer: async () => { runtime.stopCalls += 1; },
     clock: () => new Date('2026-08-08T12:00:00.000Z')
   });
-  return { children, manager, root };
+  return { children, manager, root, runtime };
 }
 
 test('Codex connection is optional and reports an absent CLI without starting a runtime', async () => {
@@ -189,9 +255,12 @@ test('device login and Full Server access remain separate explicit operations', 
 
   const connected = await fixture.manager.status();
   assert.equal(connected.connected, true);
-  assert.equal(connected.email, 'owner@example.com');
+  assert.equal(connected.email, null);
   assert.equal(connected.authMode, 'chatgpt');
   assert.equal(connected.fullServer, false);
+  assert.equal(connected.runtimeOwner, 'server');
+  assert.equal(connected.runtimeTransport, 'unix-websocket');
+  assert.equal(connected.survivesAgentRestart, true);
 
   await assert.rejects(
     fixture.manager.setAccessProfile('full-server', 'yes'),
@@ -216,15 +285,74 @@ test('Full Server threads use host root with danger-full-access and stream bound
   assert.equal(threadStart.params.cwd, '/');
   assert.equal(threadStart.params.sandbox, 'danger-full-access');
   assert.equal(threadStart.params.approvalPolicy, 'untrusted');
+  assert.equal(threadStart.params.ephemeral, false);
   assert.equal(threadStart.params.model, 'gpt-5.6-sol');
   assert.deepEqual(threadStart.params.config, { model_reasoning_effort: 'low' });
   assert.equal(started.model, 'gpt-5.6-sol');
   assert.equal(started.reasoningEffort, 'low');
 
   await fixture.manager.startTurn(started.thread.id, 'Sunucunun durumunu incele.');
+  const turnStart = child.received.find((message) => message.method === 'turn/start');
+  assert.equal(turnStart.params.approvalPolicy, 'untrusted');
   const events = fixture.manager.events(0, started.thread.id);
   assert.ok(events.events.some((event) => event.method === 'item/agentMessage/delta'));
   assert.equal(events.events.some((event) => Object.hasOwn(event, 'bufferedBytes')), false);
+  fixture.manager.stop();
+});
+
+test('Codex history explicitly lists app-server threads and resumes their persisted turns', async () => {
+  const fixture = createFixture({ installed: true });
+  await fixture.manager.startLogin();
+  await fixture.manager.setAccessProfile('full-server', FULL_SERVER_CONFIRMATION);
+  const started = await fixture.manager.startThread('gpt-5.6-sol', 'high');
+  await fixture.manager.startTurn(started.thread.id, 'Geçmişte kalması gereken mesaj.');
+
+  const history = await fixture.manager.listThreads();
+  assert.equal(history.threads.length, 1);
+  assert.equal(history.threads[0].id, started.thread.id);
+  assert.equal(history.threads[0].preview, 'Geçmişte kalması gereken mesaj.');
+  assert.equal(Object.hasOwn(history.threads[0], 'path'), false);
+
+  const child = fixture.children[0];
+  const threadList = child.received.find((message) => message.method === 'thread/list');
+  assert.deepEqual(threadList.params.sourceKinds, ['appServer']);
+  assert.equal(threadList.params.cwd, '/');
+  assert.equal(threadList.params.sortKey, 'updated_at');
+  assert.equal(threadList.params.sortDirection, 'desc');
+
+  const resumed = await fixture.manager.resumeThread(started.thread.id, 'untrusted');
+  assert.equal(resumed.thread.id, started.thread.id);
+  assert.equal(resumed.thread.turns[0].items[0].type, 'userMessage');
+  assert.equal(resumed.thread.turns[0].items[0].content[0].text, 'Geçmişte kalması gereken mesaj.');
+  assert.equal(resumed.thread.turns[0].items[1].text, 'Hazırım.');
+  assert.equal(Object.hasOwn(resumed.thread, 'path'), false);
+  fixture.manager.stop();
+});
+
+test('explicit no-approval mode reaches new, resumed and subsequent turns', async () => {
+  const fixture = createFixture({ installed: true });
+  await fixture.manager.startLogin();
+  await fixture.manager.setAccessProfile('full-server', FULL_SERVER_CONFIRMATION);
+  const started = await fixture.manager.startThread('gpt-5.6-sol', 'low', 'never');
+  assert.equal(started.approvalPolicy, 'never');
+
+  const resumed = await fixture.manager.resumeThread(started.thread.id, 'never');
+  assert.equal(resumed.approvalPolicy, 'never');
+  await fixture.manager.startTurn(started.thread.id, 'İzin istemeden çalış.', 'never');
+
+  const child = fixture.children[0];
+  const threadStart = child.received.find((message) => message.method === 'thread/start');
+  const threadResume = child.received.find((message) => message.method === 'thread/resume');
+  const turnStart = child.received.find((message) => message.method === 'turn/start');
+  assert.equal(threadStart.params.approvalPolicy, 'never');
+  assert.equal(threadResume.params.approvalPolicy, 'never');
+  assert.equal(threadResume.params.sandbox, 'danger-full-access');
+  assert.equal(turnStart.params.approvalPolicy, 'never');
+
+  await assert.rejects(
+    fixture.manager.startThread('gpt-5.6-sol', 'low', 'always'),
+    (error) => error.code === 'codex-approval-policy-invalid'
+  );
   fixture.manager.stop();
 });
 
@@ -316,10 +444,29 @@ test('revoking Full Server stops the runtime and blocks turns on an existing thr
 
   await fixture.manager.setAccessProfile('read-only');
   assert.equal(firstChild.killed, true);
+  assert.equal(fixture.runtime.stopCalls, 1);
   await assert.rejects(
     fixture.manager.startTurn(started.thread.id, 'Bu işlem çalışmamalı.'),
     (error) => error.code === 'codex-full-server-required'
   );
+});
+
+test('FoxOS shutdown detaches its socket client without stopping the server-owned daemon', async () => {
+  const fixture = createFixture({ installed: true });
+  await fixture.manager.startLogin();
+  await fixture.manager.setAccessProfile('full-server', FULL_SERVER_CONFIRMATION);
+  const firstProxy = fixture.children[0];
+
+  fixture.manager.stop();
+  assert.equal(firstProxy.killed, true);
+  assert.equal(fixture.runtime.stopCalls, 0);
+
+  const reconnected = await fixture.manager.status();
+  assert.equal(reconnected.connected, true);
+  assert.equal(reconnected.runtimeOwner, 'server');
+  assert.equal(fixture.children.length, 2);
+  assert.equal(fixture.runtime.stopCalls, 0);
+  fixture.manager.stop();
 });
 
 test('disconnect logs out Codex and revokes Full Server access', async () => {

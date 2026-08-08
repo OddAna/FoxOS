@@ -39,18 +39,27 @@ FoxOS installs it only after an explicit warning, leaves the initial access
 profile read-only and requires another confirmation before **Full Server** can
 start. In Full Server mode the Codex app-server runs in the real host root with
 `danger-full-access`; `untrusted` asks for approval on untrusted command and
-file changes, but it is not a sandbox. Read the displayed command, working
-directory and reason before approving, especially before choosing a session-
-wide approval.
+file changes, but it is not a sandbox. It remains the default. The authenticated
+owner may explicitly choose **Tam Erişim — sorma**, which applies Codex's `never`
+approval policy to the thread and subsequent turns. In that mode Codex can run
+commands and change files without another FoxOS prompt. Read the displayed
+command, working directory and reason in the default mode, and select the
+no-prompt mode only when that delegation is intentional.
 
 Codex device authentication and session data stay in an owner-only host path
 under `/var/lib/foxos/codex` by default. FoxOS does not accept an OpenAI API key,
 does not return Codex credentials, keeps runtime events only in bounded memory
-and communicates with `app-server` through stdio rather than a public socket.
-All related APIs still require the FoxOS owner session. Returning the profile to
-read-only stops the current runtime and invalidates active Full Server work;
-disconnecting also logs the account out. Protect both the FoxOS account and the
-host Codex state directory as root-equivalent administration material.
+and communicates directly with Codex's owner-only Unix WebSocket control socket.
+The managed app-server daemon is a host process, not a child of
+the FoxOS container, and has no public TCP listener. Recreating the agent kills
+only the local socket client; the daemon and active server-side turn continue.
+Conversation history itself is persisted by Codex in that owner-only directory; FoxOS lists
+only root-working-directory app-server threads and bounds the history material
+returned to the UI. All related APIs still require the FoxOS owner session.
+Returning the profile to read-only explicitly stops the host daemon and
+invalidates active Full Server work; disconnecting also logs the account out.
+Protect both the FoxOS account and the host Codex state directory as
+root-equivalent administration material.
 
 ## App Store deployments
 

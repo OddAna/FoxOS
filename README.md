@@ -129,18 +129,27 @@ on the server.
 - Keep access read-only after installation and login. The owner must separately
   confirm **Full Server** before the Codex application can run.
 - Run Full Server threads from the real host root (`/`) with root-equivalent
-  filesystem, Docker, systemd, package and network access. Codex requests
-  untrusted command and file-change approvals through the authenticated FoxOS
-  interface.
+  filesystem, Docker, systemd, package and network access. The default mode
+  requests untrusted command and file-change approvals through the authenticated
+  FoxOS interface; the owner can explicitly choose **Tam Erişim — sorma** for a
+  thread to use Codex's `never` approval policy.
+- Keep new threads non-ephemeral, list FoxOS app-server conversations in the
+  left history panel and resume the selected stored thread after a window or
+  browser restart.
+- Keep the Codex app-server as a managed host daemon independent of the FoxOS
+  agent container. FoxOS talks to it directly through its owner-only Unix
+  WebSocket control socket, so an agent rebuild/recreate does not kill the
+  active server-side turn.
 - Reverting to read-only stops the active Codex runtime and blocks turns on old
   Full Server threads. Disconnecting also logs the ChatGPT account out while
   leaving the optional CLI installed.
 
 Codex authentication and session state are owned by Codex under
-`/var/lib/foxos/codex` by default. The app-server is connected over private
-stdio and is not exposed as a network service. Account eligibility and usage
-limits remain those of the connected ChatGPT account; FoxOS does not create a
-subscription or make Codex a base-install dependency.
+`/var/lib/foxos/codex` by default. The app-server daemon and its Unix control
+socket live in that owner-only host state; the FoxOS container holds only a
+disposable socket client. No app-server TCP listener is exposed. Account
+eligibility and usage limits remain those of the connected ChatGPT account;
+FoxOS does not create a subscription or make Codex a base-install dependency.
 
 ### Updates and Compose
 
@@ -409,8 +418,9 @@ authenticated FoxOS session should be treated as a server administrator.
 - Give optional provider tokens the smallest possible scope. For Cloudflare,
   use only zone read and DNS edit access for the required zones.
 - Treat Full Server Codex as an authenticated root shell: review approval
-  details, protect the FoxOS owner session and return Codex to read-only when
-  the task is finished.
+  details, use **Tam Erişim — sorma** only when you intend to delegate every
+  command and file change without another prompt, protect the FoxOS owner
+  session and return Codex to read-only when the task is finished.
 - Back up encryption and recovery material separately from the server.
 - Read [SECURITY.md](SECURITY.md) before internet exposure or production
   migration.

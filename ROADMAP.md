@@ -481,11 +481,17 @@ target blocks only adoption/migration operations that require restore proof.
   uses each server owner's device-code flow and keeps Codex credentials outside
   FoxOS API/state. Access defaults to read-only and requires a separate exact
   **Full Server** confirmation before the embedded Codex app can create a thread
-  at host `/` with `danger-full-access` and `untrusted` approvals. The
-  app-server is stdio-only, events are memory-bounded, every endpoint is owner-
-  authenticated, profile revocation stops the runtime and blocks old threads,
-  and disconnect logs out while returning the profile to read-only. Clean
-  install and ordinary FoxOS management remain Codex/account/subscription-free.
+  at host `/` with `danger-full-access` and default `untrusted` approvals. The
+  owner can explicitly select per-thread `never` approvals. Non-ephemeral
+  app-server threads are listed and resumed from the Codex-owned persistent
+  history. OpenAI's managed app-server daemon runs on the host behind an
+  owner-only Unix WebSocket control socket; FoxOS owns only a disposable socket
+  client, so agent recreation does not terminate the daemon or active turn.
+  There is no app-server TCP listener, events are memory-bounded, every endpoint is
+  owner-authenticated, profile revocation stops the host daemon and blocks old
+  threads, and disconnect logs out while returning the profile to read-only.
+  Clean install and ordinary FoxOS management remain Codex/account/subscription-
+  free.
 - [x] Persist per-application desktop shortcut visibility on the server. The
   desktop context menu removes the projection without deleting a file,
   container or application; the same application's Settings page can recreate
