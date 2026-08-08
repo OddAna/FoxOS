@@ -894,6 +894,7 @@ const applicationComposeManager = createApplicationComposeManager({
   getApplicationInventory
 });
 const applicationUpdateChecker = createApplicationUpdateChecker({
+  dataRoot: DATA_ROOT,
   hostRoot: HOST_ROOT,
   dockerRequest,
   getApplicationInventory

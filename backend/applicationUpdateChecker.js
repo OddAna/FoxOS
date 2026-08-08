@@ -1,8 +1,14 @@
+const fs = require('node:fs');
+const path = require('node:path');
 const { finalDockerfileBaseReference, resolveComposeProject } = require('./composeSource');
 
 const APPLICATION_UPDATE_SCHEMA_VERSION = 1;
 const APPLICATION_ID_PATTERN = /^(?:app|res)_[a-f0-9]{24,64}$/;
 const IMAGE_DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/;
+const CONTAINER_ID_PATTERN = /^[a-f0-9]{12,64}$/;
+const STATEFUL_OPERATION_ID_PATTERN = /^stmop_[a-f0-9]{32}$/;
+const STATEFUL_PLAN_ID_PATTERN = /^stmplan_[a-f0-9]{32}$/;
+const RESOURCE_ID_PATTERN = /^res_[a-f0-9]{32}$/;
 const MAX_REGISTRY_DOCUMENT_BYTES = 4 * 1024 * 1024;
 
 class ApplicationUpdateError extends Error {
@@ -78,6 +84,82 @@ function digestForRepository(repoDigests, parsed) {
     if (aliases.has(repository) && IMAGE_DIGEST_PATTERN.test(digest)) return digest;
   }
   return null;
+}
+
+function isServerLocalImage(parsed) {
+  if (!parsed || parsed.registry !== 'docker.io') return false;
+  return /^(?:local|server|server-recovery)\//.test(parsed.repository);
+}
+
+function provenTaggedRegistryReference(imageDetails) {
+  const candidates = new Map();
+  for (const value of imageDetails && imageDetails.RepoTags || []) {
+    const parsed = parseImageReference(value);
+    if (!parsed || parsed.immutable || isServerLocalImage(parsed)) continue;
+    if (!digestForRepository(imageDetails.RepoDigests, parsed)) continue;
+    candidates.set(parsed.reference, parsed);
+  }
+  if (candidates.size === 1) return [...candidates.values()][0];
+  const latest = [...candidates.values()].filter((candidate) => candidate.tag === 'latest');
+  return latest.length === 1 ? latest[0] : null;
+}
+
+function readJson(target) {
+  try {
+    return JSON.parse(fs.readFileSync(target, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+async function migrationSourceContainer({ dataRoot, details, dockerRequest }) {
+  const labels = details && details.Config && details.Config.Labels || {};
+  const directSourceId = String(labels['com.foxos.source.container'] || '').trim();
+  if (CONTAINER_ID_PATTERN.test(directSourceId)) {
+    try {
+      const source = await dockerRequest('GET', '/containers/' + directSourceId + '/json');
+      if (source && source.Id === directSourceId && source.Image === details.Image) return source;
+    } catch {
+      // A retained stateless source may have been removed after its rollback window.
+    }
+  }
+
+  const operationId = String(labels['com.foxos.stateful-migration.id'] || '').trim();
+  const sourceResourceId = String(labels['com.foxos.migration.source-resource-id'] || '').trim();
+  if (
+    !dataRoot || !STATEFUL_OPERATION_ID_PATTERN.test(operationId) ||
+    !RESOURCE_ID_PATTERN.test(sourceResourceId)
+  ) return null;
+  const operation = readJson(path.join(dataRoot, 'stateful-migrations', 'operations', operationId + '.json'));
+  if (
+    !operation || operation.operationId !== operationId || operation.resourceId !== sourceResourceId ||
+    !STATEFUL_PLAN_ID_PATTERN.test(String(operation.planId || '')) ||
+    !operation.candidate || operation.candidate.containerId !== details.Id
+  ) return null;
+  const plan = readJson(path.join(dataRoot, 'stateful-migrations', 'plans', operation.planId + '.json'));
+  const source = plan && plan.executionContract && plan.executionContract.source;
+  if (
+    !plan || plan.planId !== operation.planId || !plan.resource || plan.resource.resourceId !== sourceResourceId ||
+    !source || !CONTAINER_ID_PATTERN.test(String(source.containerId || '')) ||
+    !IMAGE_DIGEST_PATTERN.test(String(source.imageId || '')) || source.imageId !== details.Image
+  ) return null;
+  try {
+    const sourceDetails = await dockerRequest('GET', '/containers/' + source.containerId + '/json');
+    return sourceDetails && sourceDetails.Id === source.containerId && sourceDetails.Image === source.imageId
+      ? sourceDetails
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function composeImageSource(project, prefix = 'compose') {
+  if (!project || !project.service) return null;
+  if (typeof project.service.image === 'string') {
+    return { reference: project.service.image, type: prefix + '-image' };
+  }
+  const baseReference = finalDockerfileBaseReference(project.service, project);
+  return baseReference ? { reference: baseReference, type: prefix + '-build-base' } : null;
 }
 
 function labelVersion(imageDetails, parsed) {
@@ -181,6 +263,7 @@ function createDockerHubMetadataReader({ fetchImpl = fetch } = {}) {
 }
 
 function createApplicationUpdateChecker({
+  dataRoot = null,
   hostRoot,
   dockerRequest,
   getApplicationInventory,
@@ -206,29 +289,38 @@ function createApplicationUpdateChecker({
       throw new ApplicationUpdateError('FoxOS çekirdek imajı bu alandan denetlenemez.', 409, 'core-image-protected');
     }
 
-    let sourceReference = details && details.Config && details.Config.Image || null;
-    let sourceType = 'container-image';
+    const imageDetails = await dockerRequest('GET', '/images/' + encodeURIComponent(details.Image) + '/json');
+    let source = null;
     try {
       const project = resolveComposeProject(details, hostRoot);
-      if (project && project.service) {
-        if (typeof project.service.image === 'string') {
-          sourceReference = project.service.image;
-          sourceType = 'compose-image';
-        } else {
-          const baseReference = finalDockerfileBaseReference(project.service, project);
-          if (baseReference) {
-            sourceReference = baseReference;
-            sourceType = 'compose-build-base';
-          }
+      source = composeImageSource(project);
+    } catch {
+      // A migrated runtime can still have an independently verifiable retained source.
+    }
+    if (!source) {
+      const retainedSource = await migrationSourceContainer({ dataRoot, details, dockerRequest });
+      if (retainedSource) {
+        try {
+          source = composeImageSource(resolveComposeProject(retainedSource, hostRoot), 'migration-compose');
+        } catch {
+          // Missing retained Compose files must not turn a local alias into a public registry lookup.
         }
       }
-    } catch {
-      // Container metadata remains a safe fallback when a legacy Compose source is unavailable.
     }
 
-    const parsed = parseImageReference(sourceReference);
+    let sourceReference = source && source.reference || details && details.Config && details.Config.Image || null;
+    let sourceType = source && source.type || 'container-image';
+    let parsed = parseImageReference(sourceReference);
+    if (isServerLocalImage(parsed)) {
+      const proven = provenTaggedRegistryReference(imageDetails);
+      if (proven) {
+        parsed = proven;
+        sourceReference = proven.reference;
+        sourceType = 'image-metadata';
+      }
+    }
     const checkedAt = new Date(clock()).toISOString();
-    if (!parsed) {
+    if (!parsed || isServerLocalImage(parsed)) {
       return {
         schemaVersion: APPLICATION_UPDATE_SCHEMA_VERSION,
         applicationId,
@@ -238,7 +330,9 @@ function createApplicationUpdateChecker({
         source: { reference: sourceReference, type: sourceType },
         current: { imageId: details.Image || null, version: null, digest: null },
         latest: null,
-        message: 'Bu uygulamanın takip ettiği registry imajı güvenle belirlenemedi.'
+        message: isServerLocalImage(parsed)
+          ? 'Sunucuya ait çalışma imajının upstream registry kaynağı güvenle belirlenemedi.'
+          : 'Bu uygulamanın takip ettiği registry imajı güvenle belirlenemedi.'
       };
     }
     if (parsed.immutable) {
@@ -255,8 +349,8 @@ function createApplicationUpdateChecker({
       };
     }
 
-    const imageDetails = await dockerRequest('GET', '/images/' + encodeURIComponent(details.Image) + '/json');
-    const currentDigest = sourceType === 'compose-build-base'
+    const buildBaseSource = sourceType.endsWith('-build-base');
+    const currentDigest = buildBaseSource
       ? null
       : digestForRepository(imageDetails.RepoDigests, parsed);
     const currentVersion = labelVersion(imageDetails, parsed);
@@ -299,7 +393,7 @@ function createApplicationUpdateChecker({
       };
     }
 
-    if (sourceType === 'compose-build-base' && currentVersion && latestVersion) {
+    if (buildBaseSource && currentVersion && latestVersion) {
       const comparison = compareVersions(currentVersion, latestVersion);
       const updateAvailable = comparison === null ? currentVersion !== latestVersion : comparison < 0;
       const status = comparison !== null && comparison > 0
@@ -331,7 +425,7 @@ function createApplicationUpdateChecker({
       source: { reference: parsed.reference, type: sourceType },
       current: { imageId: details.Image || null, version: currentVersion, digest: null },
       latest: { digest: latestDigest, version: latestVersion },
-      message: sourceType === 'compose-build-base'
+      message: buildBaseSource
         ? 'Compose build tabanı bulundu fakat mevcut build’in taban digest’i kanıtlanamadı.'
         : 'Yerel imajın repository digest’i bulunamadığı için güncellik kesinleştirilemedi.'
     };
