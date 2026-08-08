@@ -54,10 +54,12 @@ export const WindowProvider = ({ children }) => {
 
   const closeWindow = (id) => {
     const win = windows.find(w => w.id === id);
-    if (win && win.type === 'terminal' && dialog) {
+    if (win && ['terminal', 'codex'].includes(win.type) && dialog) {
       dialog.showDialog({
-        title: 'Terminali Kapat',
-        message: 'Arka planda çalışan bir işlem olabilir. Terminali kapatmak istediğinize emin misiniz?',
+        title: win.type === 'codex' ? 'Codex’i Kapat' : 'Terminali Kapat',
+        message: win.type === 'codex'
+          ? 'Codex çalışması arka planda devam ediyor olabilir. Pencereyi kapatmak istediğinize emin misiniz?'
+          : 'Arka planda çalışan bir işlem olabilir. Terminali kapatmak istediğinize emin misiniz?',
         type: 'warning',
         confirmText: 'Evet, Kapat',
         cancelText: 'Vazgeç',

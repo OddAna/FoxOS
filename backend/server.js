@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execFile } = require('child_process');
+const { execFile, spawn } = require('child_process');
 const express = require('express');
 const { AdoptionError, createAdoptionManager } = require('./adoptionManager');
 const {
@@ -73,6 +73,10 @@ const {
   CloudflareConnectionError,
   createCloudflareConnectionManager
 } = require('./cloudflareConnectionManager');
+const {
+  CodexConnectionError,
+  createCodexConnectionManager
+} = require('./codexConnectionManager');
 const { createCoolifyMigrationReader } = require('./coolifyMigrationReader');
 const { createDockerClient } = require('./dockerClient');
 const { createEncryptionStore } = require('./encryptionStore');
@@ -165,6 +169,10 @@ const PUBLIC_DIR = path.resolve(process.env.PUBLIC_DIR || path.join(__dirname, '
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const COMMAND_TIMEOUT_MS = Number.parseInt(process.env.COMMAND_TIMEOUT_MS || '120000', 10);
 const COMMAND_MAX_BUFFER = 2 * 1024 * 1024;
+const CODEX_HOST_STATE_ROOT = process.env.FOXOS_CODEX_HOST_STATE_ROOT || '/var/lib/foxos/codex';
+const CODEX_HOST_HOME = CODEX_HOST_STATE_ROOT;
+const CODEX_HOST_CONFIG_HOME = path.posix.join(CODEX_HOST_STATE_ROOT, '.codex');
+const CODEX_HOST_BINARY = path.posix.join(CODEX_HOST_STATE_ROOT, '.local', 'bin', 'codex');
 
 const sessions = new Map();
 const loginAttempts = new Map();
@@ -458,6 +466,145 @@ function hostCommandArgs(command, cwd) {
     executable: '/bin/sh',
     args: ['-lc', command]
   };
+}
+
+function mountedHostPath(hostPath) {
+  const normalized = path.posix.resolve('/', String(hostPath || ''));
+  const mounted = path.resolve(HOST_ROOT, '.' + normalized);
+  if (mounted !== HOST_ROOT && !mounted.startsWith(HOST_ROOT + path.sep)) {
+    throw new Error('Host path escapes the mounted server root');
+  }
+  return mounted;
+}
+
+function codexHostEnvironment() {
+  return {
+    HOME: CODEX_HOST_HOME,
+    CODEX_HOME: CODEX_HOST_CONFIG_HOME,
+    CODEX_INSTALL_DIR: path.posix.dirname(CODEX_HOST_BINARY),
+    CODEX_NON_INTERACTIVE: '1',
+    PATH: path.posix.dirname(CODEX_HOST_BINARY) + ':/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+    LANG: 'C.UTF-8',
+    LC_ALL: 'C.UTF-8',
+    LOGNAME: 'root',
+    SHELL: '/bin/sh',
+    TERM: 'xterm-256color',
+    USER: 'root'
+  };
+}
+
+function validateCodexHostPaths() {
+  const paths = [CODEX_HOST_STATE_ROOT, CODEX_HOST_HOME, CODEX_HOST_CONFIG_HOME, CODEX_HOST_BINARY];
+  if (paths.some((entry) => (
+    !entry.startsWith('/') || entry === '/' || entry.length > 512 || /[\r\n\0]/.test(entry)
+  ))) {
+    throw new Error('FOXOS_CODEX_HOST_STATE_ROOT must be a safe absolute host path');
+  }
+}
+
+validateCodexHostPaths();
+
+function exactHostExecutableInvocation(hostExecutable, args) {
+  if (HOST_EXECUTION === 'nsenter') {
+    return {
+      executable: 'nsenter',
+      args: [
+        '--target', '1', '--mount', '--uts', '--ipc', '--net', '--pid',
+        '--root=/proc/1/root', '--wd=/', '--', hostExecutable, ...args
+      ],
+      cwd: '/'
+    };
+  }
+  return {
+    executable: mountedHostPath(hostExecutable),
+    args,
+    cwd: mountedHostPath('/')
+  };
+}
+
+function hostRootShellInvocation(command) {
+  if (HOST_EXECUTION === 'nsenter') {
+    return {
+      executable: 'nsenter',
+      args: [
+        '--target', '1', '--mount', '--uts', '--ipc', '--net', '--pid',
+        '--root=/proc/1/root', '--wd=/', '--', '/bin/sh', '-lc', command
+      ],
+      cwd: '/'
+    };
+  }
+  return {
+    executable: '/bin/sh',
+    args: ['-lc', command],
+    cwd: mountedHostPath('/')
+  };
+}
+
+async function inspectHostCodexCli() {
+  try {
+    fs.accessSync(mountedHostPath(CODEX_HOST_BINARY), fs.constants.X_OK);
+  } catch {
+    return { installed: false, version: null };
+  }
+  const invocation = exactHostExecutableInvocation(CODEX_HOST_BINARY, ['--version']);
+  return new Promise((resolve) => {
+    execFile(invocation.executable, invocation.args, {
+      cwd: invocation.cwd,
+      env: codexHostEnvironment(),
+      timeout: 15000,
+      maxBuffer: 64 * 1024,
+      windowsHide: true
+    }, (error, stdout) => {
+      resolve({
+        installed: !error,
+        version: !error ? String(stdout || '').trim().slice(0, 120) || null : null
+      });
+    });
+  });
+}
+
+function installHostCodexCli() {
+  const script = [
+    'set -eu',
+    'umask 077',
+    'install -d -m 700 "$HOME" "$CODEX_HOME" "$CODEX_INSTALL_DIR"',
+    'installer="$(mktemp)"',
+    'trap \'rm -f "$installer"\' EXIT HUP INT TERM',
+    'curl --proto "=https" --tlsv1.2 --fail --silent --show-error --location https://chatgpt.com/codex/install.sh -o "$installer"',
+    'sh "$installer"',
+    'test -x "$CODEX_INSTALL_DIR/codex"'
+  ].join('\n');
+  const invocation = hostRootShellInvocation(script);
+  return new Promise((resolve, reject) => {
+    execFile(invocation.executable, invocation.args, {
+      cwd: invocation.cwd,
+      env: codexHostEnvironment(),
+      timeout: 5 * 60 * 1000,
+      maxBuffer: 512 * 1024,
+      windowsHide: true
+    }, (error) => {
+      if (error) {
+        return reject(new CodexConnectionError(
+          'Codex CLI sunucuya kurulamadı. Sunucu ağını ve Linux araçlarını kontrol edin.',
+          503,
+          'codex-cli-install-failed'
+        ));
+      }
+      resolve();
+    });
+  });
+}
+
+function spawnHostCodexAppServer() {
+  const invocation = exactHostExecutableInvocation(CODEX_HOST_BINARY, [
+    'app-server', '--listen', 'stdio://'
+  ]);
+  return spawn(invocation.executable, invocation.args, {
+    cwd: invocation.cwd,
+    env: codexHostEnvironment(),
+    stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true
+  });
 }
 
 function runHostCommand(command, cwd = '/') {
@@ -825,6 +972,12 @@ const backupManager = createBackupManager({
 const cloudflareConnectionManager = createCloudflareConnectionManager({
   dataRoot: DATA_ROOT,
   encryptionStore
+});
+const codexConnectionManager = createCodexConnectionManager({
+  dataRoot: DATA_ROOT,
+  inspectCli: inspectHostCodexCli,
+  installCli: installHostCodexCli,
+  spawnAppServer: spawnHostCodexAppServer
 });
 const adoptionManager = createAdoptionManager({
   dataRoot: DATA_ROOT,
@@ -1213,7 +1366,7 @@ function sendConnectionError(res, error, action) {
   const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
   if (status >= 500) console.error(action + ':', error.message);
   res.status(status).json({
-    error: status >= 500 && !(error instanceof CloudflareConnectionError)
+    error: status >= 500 && !(error instanceof CloudflareConnectionError) && !(error instanceof CodexConnectionError)
       ? 'Bağlantı işlemi tamamlanamadı'
       : error.message,
     code: error.code || 'connection-error'
@@ -2648,11 +2801,110 @@ app.post('/api/adoptions/:operationId/rollback', async (req, res) => {
   }
 });
 
-app.get('/api/connections', (req, res) => {
+app.get('/api/connections', async (req, res) => {
   try {
-    res.json({ connections: [cloudflareConnectionManager.status()] });
+    const codex = await codexConnectionManager.status();
+    res.json({ connections: [codex, cloudflareConnectionManager.status()] });
   } catch (error) {
     sendConnectionError(res, error, 'Could not read provider connections');
+  }
+});
+
+app.get('/api/connections/codex', async (req, res) => {
+  try {
+    res.json({ connection: await codexConnectionManager.status() });
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not read Codex connection');
+  }
+});
+
+app.post('/api/connections/codex/install', async (req, res) => {
+  try {
+    res.status(201).json(await codexConnectionManager.install(req.body && req.body.confirmation));
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not install Codex CLI');
+  }
+});
+
+app.post('/api/connections/codex/login', async (req, res) => {
+  try {
+    res.status(201).json({ login: await codexConnectionManager.startLogin() });
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not start Codex login');
+  }
+});
+
+app.post('/api/connections/codex/login/cancel', async (req, res) => {
+  try {
+    res.json(await codexConnectionManager.cancelLogin(req.body && req.body.loginId));
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not cancel Codex login');
+  }
+});
+
+app.put('/api/connections/codex/access-profile', async (req, res) => {
+  try {
+    const connection = await codexConnectionManager.setAccessProfile(
+      req.body && req.body.accessProfile,
+      req.body && req.body.confirmation
+    );
+    res.json({ connection });
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not configure Codex access');
+  }
+});
+
+app.delete('/api/connections/codex', async (req, res) => {
+  try {
+    res.json(await codexConnectionManager.disconnect(req.body && req.body.confirmation));
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not disconnect Codex');
+  }
+});
+
+app.post('/api/codex/threads', async (req, res) => {
+  try {
+    res.status(201).json(await codexConnectionManager.startThread());
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not start Codex thread');
+  }
+});
+
+app.post('/api/codex/threads/:threadId/turns', async (req, res) => {
+  try {
+    res.status(201).json(await codexConnectionManager.startTurn(
+      req.params.threadId,
+      req.body && req.body.text
+    ));
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not start Codex turn');
+  }
+});
+
+app.post('/api/codex/threads/:threadId/turns/:turnId/interrupt', async (req, res) => {
+  try {
+    res.json(await codexConnectionManager.interruptTurn(req.params.threadId, req.params.turnId));
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not interrupt Codex turn');
+  }
+});
+
+app.get('/api/codex/events', (req, res) => {
+  try {
+    res.json(codexConnectionManager.events(Number(req.query.after || 0), req.query.threadId || null));
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not read Codex events');
+  }
+});
+
+app.post('/api/codex/approvals/:requestId', (req, res) => {
+  try {
+    res.json(codexConnectionManager.resolveApproval(
+      req.params.requestId,
+      req.body && req.body.decision
+    ));
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not resolve Codex approval');
   }
 });
 

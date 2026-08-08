@@ -120,6 +120,28 @@ Cloudflare is not part of the normal request path. If it is connected, it is
 used to manage DNS records; the applications, routes and desired state remain
 on the server.
 
+### Codex Full Server
+
+- Optionally install Codex CLI on the Linux host from **Settings → Connections**
+  using OpenAI's official installer.
+- Connect each server owner's own eligible ChatGPT account with the Codex
+  device-code flow. FoxOS does not ask for or return an OpenAI API key.
+- Keep access read-only after installation and login. The owner must separately
+  confirm **Full Server** before the Codex application can run.
+- Run Full Server threads from the real host root (`/`) with root-equivalent
+  filesystem, Docker, systemd, package and network access. Codex requests
+  untrusted command and file-change approvals through the authenticated FoxOS
+  interface.
+- Reverting to read-only stops the active Codex runtime and blocks turns on old
+  Full Server threads. Disconnecting also logs the ChatGPT account out while
+  leaving the optional CLI installed.
+
+Codex authentication and session state are owned by Codex under
+`/var/lib/foxos/codex` by default. The app-server is connected over private
+stdio and is not exposed as a network service. Account eligibility and usage
+limits remain those of the connected ChatGPT account; FoxOS does not create a
+subscription or make Codex a base-install dependency.
+
 ### Updates and Compose
 
 - Check direct tagged images against immutable registry digests without
@@ -386,6 +408,9 @@ authenticated FoxOS session should be treated as a server administrator.
   containers.
 - Give optional provider tokens the smallest possible scope. For Cloudflare,
   use only zone read and DNS edit access for the required zones.
+- Treat Full Server Codex as an authenticated root shell: review approval
+  details, protect the FoxOS owner session and return Codex to read-only when
+  the task is finished.
 - Back up encryption and recovery material separately from the server.
 - Read [SECURITY.md](SECURITY.md) before internet exposure or production
   migration.

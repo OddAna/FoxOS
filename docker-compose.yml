@@ -26,6 +26,7 @@ services:
       HOST_ROOT: /host
       HOST_EXECUTION: nsenter
       DOCKER_SOCKET: /var/run/docker.sock
+      FOXOS_CODEX_HOST_STATE_ROOT: "${FOXOS_CODEX_HOST_STATE_ROOT:-/var/lib/foxos/codex}"
       FOXOS_SECURE_COOKIE: "${FOXOS_SECURE_COOKIE:-false}"
       FOXOS_TRUST_PROXY: "${FOXOS_TRUST_PROXY:-0}"
     labels:

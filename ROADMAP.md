@@ -476,6 +476,16 @@ target blocks only adoption/migration operations that require restore proof.
   failure or explicit rollback. CNAME conflicts and ambiguous A records fail
   closed. The adapter requires neither Cloudflare proxying nor a paid plan and
   does not make Cloudflare the owner of application or route state.
+- [x] Add Codex as a second optional **Bağlantılar** adapter. Installation uses
+  OpenAI's official host installer only after exact confirmation; account login
+  uses each server owner's device-code flow and keeps Codex credentials outside
+  FoxOS API/state. Access defaults to read-only and requires a separate exact
+  **Full Server** confirmation before the embedded Codex app can create a thread
+  at host `/` with `danger-full-access` and `untrusted` approvals. The
+  app-server is stdio-only, events are memory-bounded, every endpoint is owner-
+  authenticated, profile revocation stops the runtime and blocks old threads,
+  and disconnect logs out while returning the profile to read-only. Clean
+  install and ordinary FoxOS management remain Codex/account/subscription-free.
 - [x] Persist per-application desktop shortcut visibility on the server. The
   desktop context menu removes the projection without deleting a file,
   container or application; the same application's Settings page can recreate

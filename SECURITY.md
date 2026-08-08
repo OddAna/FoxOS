@@ -34,6 +34,24 @@ the Caddyfile, command output or issue reports. Disconnecting removes the local
 token but deliberately preserves published records so running applications do
 not lose DNS unexpectedly.
 
+Codex is a separate optional connection and must be treated as a root shell.
+FoxOS installs it only after an explicit warning, leaves the initial access
+profile read-only and requires another confirmation before **Full Server** can
+start. In Full Server mode the Codex app-server runs in the real host root with
+`danger-full-access`; `untrusted` asks for approval on untrusted command and
+file changes, but it is not a sandbox. Read the displayed command, working
+directory and reason before approving, especially before choosing a session-
+wide approval.
+
+Codex device authentication and session data stay in an owner-only host path
+under `/var/lib/foxos/codex` by default. FoxOS does not accept an OpenAI API key,
+does not return Codex credentials, keeps runtime events only in bounded memory
+and communicates with `app-server` through stdio rather than a public socket.
+All related APIs still require the FoxOS owner session. Returning the profile to
+read-only stops the current runtime and invalidates active Full Server work;
+disconnecting also logs the account out. Protect both the FoxOS account and the
+host Codex state directory as root-equivalent administration material.
+
 ## App Store deployments
 
 App Store applications are separate Docker containers and have their own

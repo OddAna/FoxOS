@@ -218,6 +218,36 @@ encrypted token/configuration and preserves published DNS records. Clean install
 startup and ordinary host management still require no Cloudflare account, API
 token, network call or paid service.
 
+### Implemented boundary: Optional Codex Full Server connection
+
+Codex is an optional server-administration adapter configured only through the
+authenticated **Bağlantılar** page. A clean FoxOS installation neither installs
+Codex nor starts a login flow. After a separate installation confirmation,
+FoxOS uses OpenAI's official non-interactive installer to place the host CLI and
+its private state under `/var/lib/foxos/codex` by default. Each server owner then
+authenticates their own eligible ChatGPT account through Codex's device-code
+flow; FoxOS never receives an API key and never includes Codex credentials in an
+API response, operation record or log.
+
+The saved access profile begins as `read-only`. The embedded Codex application
+remains sealed until the owner separately confirms **Full Server**. Full Server
+threads are created through Codex `app-server` over private stdio with working
+directory `/`, sandbox policy `danger-full-access` and approval policy
+`untrusted`. The app-server process runs inside the real host root and
+namespaces, not the FoxOS container filesystem, so this profile is intentionally
+root-equivalent and can change files, Docker, systemd, packages and networking.
+Command and file-change approval requests are represented by short-lived opaque
+FoxOS IDs; only fixed Codex decisions can be returned.
+
+All connection, thread, event, interrupt and approval endpoints remain behind
+the existing FoxOS owner session. Runtime events are bounded and kept in memory;
+Codex authentication and session state stay in its owner-only host directory.
+Changing the profile back to read-only stops the current app-server runtime and
+blocks turns on earlier Full Server threads. Disconnect first revokes Full Server,
+logs the account out through Codex and keeps the CLI installed for a later user.
+The app-server has no TCP listener, and Codex remains removable without changing
+FoxOS startup, host management or application authority.
+
 ### Implemented boundary: Disposable adoption, route and recovery cutover
 
 Disposable Adoption v1 adds the next import-draft and adoption-plan slice while

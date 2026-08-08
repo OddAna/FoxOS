@@ -14,6 +14,7 @@ import TextEditorApp from './apps/TextEditorApp';
 import ImageViewerApp from './apps/ImageViewerApp';
 import MediaPlayerApp from './apps/MediaPlayerApp';
 import TerminalApp from './apps/TerminalApp';
+import CodexApp from './apps/CodexApp';
 import AppStoreApp from './apps/AppStoreApp';
 import ApplicationLogo from './components/ApplicationLogo';
 import { APPLICATION_STATUS, applicationOperationalState } from './utils/applicationStatus';
@@ -856,6 +857,7 @@ const Desktop = () => {
       case 'image-viewer': return <ImageViewerApp filePath={win.filePath} />;
       case 'media-player': return <MediaPlayerApp filePath={win.filePath} ext={win.ext} />;
       case 'terminal': return <TerminalApp />;
+      case 'codex': return <CodexApp />;
       case 'store': return <AppStoreApp />;
       default: return <div style={{ padding: 20, color: '#fff' }}>Bilinmeyen Uygulama: {win.title}</div>;
     }

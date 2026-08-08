@@ -493,6 +493,11 @@ test('health is public while management APIs require a session', async () => {
   assert.equal(migrationRunsResponse.status, 401);
   const connectionsResponse = await fetch(baseUrl() + '/api/connections');
   assert.equal(connectionsResponse.status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/codex')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/codex/install', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/codex/events')).status, 401);
   const applicationOperationsId = 'res_' + '7'.repeat(32);
   assert.equal((await fetch(baseUrl() + '/api/applications/' + applicationOperationsId + '/update-check')).status, 401);
   assert.equal((await fetch(baseUrl() + '/api/applications/' + applicationOperationsId + '/update-plans', {
@@ -593,10 +598,29 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   });
   assert.equal(connectionsResponse.status, 200);
   const connections = (await connectionsResponse.json()).connections;
-  assert.equal(connections.length, 1);
-  assert.equal(connections[0].id, 'cloudflare');
+  assert.equal(connections.length, 2);
+  assert.equal(connections[0].id, 'codex');
+  assert.equal(connections[0].installed, false);
   assert.equal(connections[0].connected, false);
-  assert.equal(connections[0].tokenIncluded, false);
+  assert.equal(connections[0].accessProfile, 'read-only');
+  assert.equal(connections[0].credentialIncluded, false);
+  assert.equal(connections[1].id, 'cloudflare');
+  assert.equal(connections[1].connected, false);
+  assert.equal(connections[1].tokenIncluded, false);
+
+  const unconfirmedCodexInstall = await fetch(baseUrl() + '/api/connections/codex/install', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ confirmation: 'yes' })
+  });
+  assert.equal(unconfirmedCodexInstall.status, 400);
+  assert.equal((await unconfirmedCodexInstall.json()).code, 'codex-install-confirmation-required');
+
+  const codexThreadWithoutCli = await fetch(baseUrl() + '/api/codex/threads', {
+    method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json' }, body: '{}'
+  });
+  assert.equal(codexThreadWithoutCli.status, 409);
+  assert.equal((await codexThreadWithoutCli.json()).code, 'codex-cli-not-installed');
 
   const filesResponse = await fetch(baseUrl() + '/api/files?path=%2F', {
     headers: { Cookie: cookie }

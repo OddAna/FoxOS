@@ -68,6 +68,14 @@
   keep access-link planning read-only, require the separate confirmed apply,
   recheck DNS drift and preserve exact rollback. It must not become a clean-
   install, startup, paid-plan, proxy or application-authority dependency.
+- Codex is a second optional **Bağlantılar** adapter, not a clean-install
+  dependency. Preserve the separate exact confirmations for host installation
+  and **Full Server**, the default read-only profile, per-owner device-code
+  authentication, real host-root `/` execution, `danger-full-access` plus
+  `untrusted` approval contract, private stdio transport, bounded in-memory
+  events and owner-authenticated endpoints. Never return or log Codex auth state.
+  Revoking Full Server must stop the runtime and block earlier threads;
+  disconnect must revoke access and log out while leaving the CLI optional.
 - A clean public installation must require no external provider account, domain,
   API token, object store, payment method or existing panel. Base startup and
   ordinary host management must work with recovery explicitly unconfigured.
