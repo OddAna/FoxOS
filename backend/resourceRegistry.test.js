@@ -780,7 +780,7 @@ test('FoxOS gateway stays protected while being classified as the FoxOS proxy', 
     'com.foxos.adoption.disposable': 'true'
   };
 
-  assert.equal(roleFor(labels, 'foxos-gateway:0.0.1', 'foxos-gateway', [], []), 'proxy');
+  assert.equal(roleFor(labels, 'foxos-gateway:0.0.2', 'foxos-gateway', [], []), 'proxy');
   assert.deepEqual(safeLabels(labels), labels);
 });
 

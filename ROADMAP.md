@@ -166,7 +166,7 @@ target blocks only adoption/migration operations that require restore proof.
 - [x] Freeze public `main` separately from ongoing development.
 - [x] Use `develop` for the dedicated development server.
 - [x] Keep published tags immutable.
-- [ ] Publish a GitHub Release for each approved version.
+- [x] Publish a GitHub Release for each approved version.
 - [ ] Add opt-in `Stable` and `Preview` update channels with release notes,
   preflight checks, data preservation and rollback; never force updates.
 

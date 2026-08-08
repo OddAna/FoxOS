@@ -9,9 +9,9 @@
   needs isolation.
 - Merge `develop` into `main` only when Burak explicitly requests a release and
   the complete validation suite passes.
-- Published version tags are immutable. `v0.0.1` is frozen at its released
-  commit and must never be force-moved again.
-- Do not change the package/README version from `0.0.1` until Burak explicitly
+- Published version tags are immutable. `v0.0.1` and `v0.0.2` are frozen at
+  their released commits and must never be force-moved.
+- Do not change the package/README version from `0.0.2` until Burak explicitly
   chooses the next release version.
 - Public users update deliberately from a stable release. Never introduce a
   forced or silent updater.
@@ -127,12 +127,18 @@
   source binding, file-revision and runtime drift checks, selected-service plus
   reverse-dependent sidecar graph, previous-image tags, encrypted streaming
   named-volume snapshots, serialized process lock, Compose health wait, public
-  endpoint proof and automatic rollback. Reject scaled services, writable bind
-  mounts, missing Compose sources, FoxOS core and `/opt/foxos`; do not silently
-  broaden the contract to direct containers or host services. Apply and manual
-  rollback require their exact confirmations. Provider provenance remains a
-  warning because a later provider deployment can overwrite the result until
-  migration finishes.
+  endpoint proof and automatic rollback. The separate direct-runtime path may
+  update only a completed, operation-bound stateless or stateful migration whose
+  server-owned container, upstream registry source, immutable replacement
+  digest, runtime contract, route binding and exclusive named volumes are all
+  re-proven at plan and apply. It must replace the exact runtime under a
+  readable controller-neutral name, preserve route identity, update the
+  operation binding atomically and retain exact rollback. Reject unproven local
+  aliases, scaled services, writable bind/special mounts, missing Compose
+  sources, FoxOS core, `/opt/foxos` and host services. Apply and manual rollback
+  require their exact confirmations. Provider provenance remains a warning for
+  incomplete migrations because a later provider deployment can overwrite the
+  result.
 - The application Compose editor is a source-file editor, not a deployment or
   adoption shortcut. Resolve files only from the exact selected container's
   `com.docker.compose.*` labels; reject client-supplied paths, symlinks,

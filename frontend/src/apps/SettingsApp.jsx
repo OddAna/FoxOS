@@ -71,7 +71,7 @@ const SettingsApp = ({ target }) => {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <div style={{ padding: '16px', background: 'rgba(255,255,255,0.05)', borderRadius: '12px' }}>
               <h3 style={{ fontSize: '14px', marginBottom: '8px', color: '#ccc' }}>Sistem Hakkında</h3>
-              <p style={{ fontSize: '16px', fontWeight: '500' }}>FoxOS v0.0.1 alpha</p>
+              <p style={{ fontSize: '16px', fontWeight: '500' }}>FoxOS v0.0.2 alpha</p>
               <p style={{ fontSize: '13px', color: '#888', marginTop: '4px', lineHeight: 1.5 }}>
                 Linux host yönetim ajanı. Bu bir Linux dağıtımı değildir ve sunucuya Ubuntu kurmaz.
               </p>

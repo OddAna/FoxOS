@@ -1145,7 +1145,7 @@ test('rollback and source/Compose/image-update control containers stay out of St
 test('disposable stateless migration source, candidate and route gateway stay out of Store discovery', () => {
   const containers = ['source', 'candidate', 'gateway'].map((role, index) => ({
     Id: String(index + 3).repeat(64),
-    Image: role === 'gateway' ? 'foxos:0.0.1' : 'traefik/whoami@sha256:' + 'a'.repeat(64),
+    Image: role === 'gateway' ? 'foxos:0.0.2' : 'traefik/whoami@sha256:' + 'a'.repeat(64),
     Names: ['/foxos-stateless-lab-' + role + '-123456789abc'],
     State: 'running',
     Status: 'Up 1 second',

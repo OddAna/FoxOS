@@ -1,6 +1,6 @@
 {
   "name": "foxos-backend",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "FoxOS privileged Linux host management agent",
   "main": "server.js",
   "engines": {
