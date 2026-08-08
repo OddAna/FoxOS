@@ -541,11 +541,11 @@ function hostRootShellInvocation(command) {
 }
 
 async function inspectHostCodexCli() {
-  try {
-    fs.accessSync(mountedHostPath(CODEX_HOST_BINARY), fs.constants.X_OK);
-  } catch {
-    return { installed: false, version: null };
-  }
+  // The official installer creates an absolute host symlink. Checking that
+  // symlink through /host makes Node resolve its target inside the agent
+  // container, which incorrectly reports a successful host install as absent.
+  // Execute the binary in the host namespace; its exit status is the source of
+  // truth for both existence and executability.
   const invocation = exactHostExecutableInvocation(CODEX_HOST_BINARY, ['--version']);
   return new Promise((resolve) => {
     execFile(invocation.executable, invocation.args, {
