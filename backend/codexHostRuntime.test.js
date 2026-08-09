@@ -71,7 +71,7 @@ test('Unix WebSocket transport exposes child-like stdio without owning the daemo
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(FakeWebSocket.last.url, 'ws://localhost/');
   assert.equal(FakeWebSocket.last.options.perMessageDeflate, false);
-  assert.equal(FakeWebSocket.last.options.maxPayload, 8 * 1024 * 1024);
+  assert.equal(FakeWebSocket.last.options.maxPayload, 0);
   assert.deepEqual(FakeWebSocket.last.sent, ['{"id":1,"method":"initialize"}']);
 
   FakeWebSocket.last.emit('message', Buffer.from('{"id":1,"result":{}}'));

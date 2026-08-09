@@ -298,7 +298,7 @@ test('device login and Full Server access remain separate explicit operations', 
   fixture.manager.stop();
 });
 
-test('Full Server threads use host root with danger-full-access and stream bounded events', async () => {
+test('Full Server threads use host root and stream large events without size-based omission', async () => {
   const fixture = createFixture({ installed: true });
   await fixture.manager.startLogin();
   await fixture.manager.setAccessProfile('full-server', FULL_SERVER_CONFIRMATION);
@@ -324,23 +324,21 @@ test('Full Server threads use host root with danger-full-access and stream bound
   assert.equal(turnStart.params.approvalPolicy, 'untrusted');
   const events = fixture.manager.events(0, started.thread.id);
   assert.ok(events.events.some((event) => event.method === 'item/agentMessage/delta'));
-  assert.equal(events.events.some((event) => Object.hasOwn(event, 'bufferedBytes')), false);
 
-  const oversizedDelta = 'x'.repeat(300 * 1024);
+  const largeDelta = 'x'.repeat(300 * 1024);
   child.emitServerRequest({
     method: 'item/commandExecution/outputDelta',
-    params: { threadId: started.thread.id, itemId: 'large-1', delta: oversizedDelta }
+    params: { threadId: started.thread.id, itemId: 'large-1', delta: largeDelta }
   });
   child.emitServerRequest({
     method: 'item/commandExecution/outputDelta',
-    params: { threadId: started.thread.id, itemId: 'large-1', delta: oversizedDelta }
+    params: { threadId: started.thread.id, itemId: 'large-1', delta: largeDelta }
   });
-  const warnings = fixture.manager.events(0, started.thread.id).events
-    .filter((event) => event.method === 'warning');
-  assert.equal(warnings.length, 1);
-  assert.equal(warnings[0].params.threadId, started.thread.id);
-  assert.equal(warnings[0].params.omittedMethod, 'item/commandExecution/outputDelta');
-  assert.match(warnings[0].params.message, /tam çalışma sunucuda korunuyor/);
+  const largeEvents = fixture.manager.events(0, started.thread.id).events
+    .filter((event) => event.method === 'item/commandExecution/outputDelta' && event.params.itemId === 'large-1');
+  assert.equal(largeEvents.length, 2);
+  assert.equal(largeEvents[0].params.delta.length, largeDelta.length);
+  assert.equal(largeEvents[1].params.delta, largeDelta);
   fixture.manager.stop();
 });
 

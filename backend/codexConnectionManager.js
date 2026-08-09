@@ -11,8 +11,6 @@ const INSTALL_CONFIRMATION = 'INSTALL CODEX ON SERVER';
 const FULL_SERVER_CONFIRMATION = 'ENABLE CODEX FULL SERVER';
 const DISCONNECT_CONFIRMATION = 'DISCONNECT CODEX';
 const MAX_EVENT_COUNT = 1000;
-const MAX_EVENT_BYTES = 256 * 1024;
-const MAX_EVENT_BUFFER_BYTES = 8 * 1024 * 1024;
 const MAX_PROMPT_LENGTH = 32768;
 const REQUEST_TIMEOUT_MS = 30000;
 const MODEL_LIST_PAGE_LIMIT = 100;
@@ -362,28 +360,6 @@ function normalizeModelCatalog(value) {
   };
 }
 
-function safeEvent(method, params) {
-  let encoded;
-  try {
-    encoded = JSON.stringify({ method, params });
-  } catch {
-    return {
-      method: 'warning',
-      params: { message: 'Codex okunamayan bir çalışma olayı gönderdi.' }
-    };
-  }
-  if (Buffer.byteLength(encoded) <= MAX_EVENT_BYTES) return { method, params };
-  const threadId = threadIdForEvent({ method, params });
-  return {
-    method: 'warning',
-    params: {
-      ...(typeof threadId === 'string' ? { threadId: boundedText(threadId, MAX_THREAD_ID_LENGTH) } : {}),
-      omittedMethod: boundedText(method, 200),
-      message: 'Codex\'in büyük bir çalışma çıktısı arayüz güvenlik sınırı nedeniyle özetlendi; tam çalışma sunucuda korunuyor.'
-    }
-  };
-}
-
 function threadIdForEvent(event) {
   const params = event && event.params || {};
   return params.threadId ||
@@ -405,36 +381,18 @@ class CodexAppServerClient {
     this.pendingRequests = new Map();
     this.pendingApprovals = new Map();
     this.events = [];
-    this.eventBufferBytes = 0;
     this.nextEventSequence = 1;
   }
 
   emit(method, params = {}) {
-    const event = safeEvent(method, params);
-    const previous = this.events.at(-1);
-    if (
-      event.method === 'warning' && previous && previous.method === 'warning' &&
-      previous.params && previous.params.message === event.params.message &&
-      previous.params.omittedMethod === event.params.omittedMethod &&
-      previous.params.threadId === event.params.threadId
-    ) {
-      return;
-    }
     const record = {
       sequence: this.nextEventSequence++,
       createdAt: new Date(this.clock()).toISOString(),
-      ...event
+      method,
+      params
     };
-    const buffered = {
-      ...record,
-      bufferedBytes: Buffer.byteLength(JSON.stringify(record))
-    };
-    this.events.push(buffered);
-    this.eventBufferBytes += buffered.bufferedBytes;
-    while (this.events.length > MAX_EVENT_COUNT || this.eventBufferBytes > MAX_EVENT_BUFFER_BYTES) {
-      const removed = this.events.shift();
-      this.eventBufferBytes -= removed.bufferedBytes;
-    }
+    this.events.push(record);
+    while (this.events.length > MAX_EVENT_COUNT) this.events.shift();
   }
 
   rejectPending(message) {
@@ -621,7 +579,7 @@ class CodexAppServerClient {
     const events = this.events.filter((event) => (
       event.sequence > normalizedSequence &&
       (!threadId || !threadIdForEvent(event) || threadIdForEvent(event) === threadId)
-    )).slice(0, 250).map(({ bufferedBytes, ...event }) => event);
+    )).slice(0, 250);
     return {
       events,
       cursor: events.length ? events[events.length - 1].sequence : normalizedSequence,

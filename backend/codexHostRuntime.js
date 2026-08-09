@@ -51,7 +51,9 @@ function createCodexDaemonTransport({
   const queuedMessages = [];
   const websocket = new WebSocketImpl('ws://localhost/', {
     createConnection,
-    maxPayload: 8 * 1024 * 1024,
+    // FoxOS must not reject Codex output because of an arbitrary frame-size
+    // ceiling. The `ws` package treats zero as unlimited.
+    maxPayload: 0,
     perMessageDeflate: false
   });
 

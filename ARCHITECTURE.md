@@ -254,8 +254,9 @@ running. New threads are explicitly non-ephemeral and
 Codex remains the durable conversation store. FoxOS history requests explicitly
 select `appServer` source threads at host root `/`, return bounded redacted thread
 metadata, and resume a selected thread through `thread/resume`. Runtime events
-are bounded and kept in memory; Codex authentication and session state stay in
-its owner-only host directory. Recreating or stopping the FoxOS agent disconnects
+are kept in a count-based in-memory ring without a byte-size omission rule;
+Codex authentication and session state stay in its owner-only host directory.
+Recreating or stopping the FoxOS agent disconnects
 only the socket client: the host daemon and an already-running turn continue.
 The next agent reconnects to the same control socket and reloads durable thread
 history.
@@ -265,8 +266,10 @@ the App Server's negotiated experimental pagination capability, rejoins a
 thread with `excludeTurns`, then loads at most 200 recent turns in 50-turn
 pages using summary item view. A very large command or Drive transfer can
 therefore grow Codex's durable rollout without forcing one oversized WebSocket
-frame through the FoxOS client. Individual live events remain bounded and
-consecutive duplicate oversize notices are coalesced per thread and method.
+frame through the FoxOS client. The daemon WebSocket has no FoxOS-imposed
+payload-size ceiling, and individual live events are forwarded without a
+FoxOS byte-size replacement warning. Pagination remains an efficiency choice,
+not a response-size rejection boundary.
 
 An owner may also configure an optional private Google Drive memory folder in
 **Bağlantılar**. FoxOS stores the canonical folder reference only in its ignored
