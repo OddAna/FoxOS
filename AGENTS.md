@@ -92,6 +92,18 @@
   large live event with a size-warning placeholder.
   Revoking Full Server must stop the runtime and block earlier threads;
   disconnect must revoke access and log out while leaving the CLI optional.
+- Gemini CLI is a third optional **Bağlantılar** adapter, not a clean-install
+  dependency or a grant of host execution authority. Install only Google's
+  official stable `@google/gemini-cli` package after exact owner confirmation
+  into the dedicated host state root. For headless server authentication,
+  accept only a Gemini API key in the first implementation: verify it through
+  the installed CLI in read-only plan mode, encrypt it with the server-local
+  master key, never persist it in `.env` or Gemini settings, never return it
+  through an API, and inject it only into the bounded verification process.
+  Disconnect removes only the encrypted credential/config and leaves the CLI
+  installed. Do not represent retired individual Google-account OAuth as a
+  working server login, and do not let connection alone execute prompts or
+  grant filesystem, shell, Docker or host access.
 - A clean public installation must require no external provider account, domain,
   API token, object store, payment method or existing panel. Base startup and
   ordinary host management must work with recovery explicitly unconfigured.

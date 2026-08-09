@@ -10,6 +10,7 @@ import {
   RefreshCw,
   ShieldAlert,
   ShieldCheck,
+  Sparkles,
   Unplug
 } from 'lucide-react';
 import { apiFetch } from '../api';
@@ -67,15 +68,19 @@ const ConnectionsSettings = () => {
   const { openWindow } = useWindowManager();
   const [cloudflare, setCloudflare] = useState(null);
   const [codex, setCodex] = useState(null);
+  const [gemini, setGemini] = useState(null);
   const [codexLogin, setCodexLogin] = useState(null);
   const [codexMemoryFolderUrl, setCodexMemoryFolderUrl] = useState('');
   const [editingCodexMemory, setEditingCodexMemory] = useState(false);
+  const [geminiApiKey, setGeminiApiKey] = useState('');
+  const [editingGemini, setEditingGemini] = useState(false);
   const [apiToken, setApiToken] = useState('');
   const [editingCloudflare, setEditingCloudflare] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(null);
-  const [messages, setMessages] = useState({ codex: null, cloudflare: null });
+  const [messages, setMessages] = useState({ codex: null, gemini: null, cloudflare: null });
   const codexConnected = Boolean(codex && codex.connected);
+  const geminiConnected = Boolean(gemini && gemini.connected);
 
   const setMessage = (provider, value) => setMessages((current) => ({ ...current, [provider]: value }));
 
@@ -86,8 +91,10 @@ const ConnectionsSettings = () => {
       const payload = await response.json();
       const nextCloudflare = (payload.connections || []).find((item) => item.id === 'cloudflare') || null;
       const nextCodex = (payload.connections || []).find((item) => item.id === 'codex') || null;
+      const nextGemini = (payload.connections || []).find((item) => item.id === 'gemini-cli') || null;
       setCloudflare(nextCloudflare);
       setCodex(nextCodex);
+      setGemini(nextGemini);
       if (nextCodex && nextCodex.connected) {
         setCodexLogin(null);
         setMessage('codex', { type: 'success', text: 'Codex hesabı bağlandı.' });
@@ -299,6 +306,103 @@ const ConnectionsSettings = () => {
     height: 650
   });
 
+  const installGemini = () => {
+    showDialog({
+      title: 'Gemini CLI’yi Sunucuya Kur',
+      message: 'FoxOS, Google’ın resmî kararlı @google/gemini-cli paketini Linux hostta /var/lib/foxos/gemini altına kuracak. Bu adım hesap bağlamaz, API anahtarı oluşturmaz veya sunucu komut erişimi vermez.',
+      type: 'warning',
+      confirmText: 'Sunucuya Kur',
+      cancelText: 'Vazgeç',
+      onConfirm: async () => {
+        setSaving('gemini-install');
+        setMessage('gemini', null);
+        try {
+          const response = await apiFetch('/api/connections/gemini/install', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ confirmation: 'INSTALL GEMINI CLI ON SERVER' })
+          });
+          const payload = await response.json();
+          setGemini(payload.connection);
+          setMessage('gemini', { type: 'success', text: `Gemini CLI sunucuya kuruldu${payload.version ? `: ${payload.version}` : '.'}` });
+        } catch (error) {
+          setMessage('gemini', { type: 'error', text: error.message });
+        } finally {
+          setSaving(null);
+        }
+      }
+    });
+  };
+
+  const connectGemini = async (event) => {
+    event.preventDefault();
+    const apiKey = geminiApiKey.trim();
+    if (!apiKey) return;
+    setSaving('gemini-connect');
+    setMessage('gemini', null);
+    try {
+      const response = await apiFetch('/api/connections/gemini', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey })
+      });
+      const payload = await response.json();
+      setGemini(payload.connection);
+      setGeminiApiKey('');
+      setEditingGemini(false);
+      setMessage('gemini', { type: 'success', text: 'Gemini CLI bağlandı. API anahtarı sunucuda şifreli saklanıyor.' });
+    } catch (error) {
+      setMessage('gemini', { type: 'error', text: error.message });
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const verifyGemini = async () => {
+    setSaving('gemini-verify');
+    setMessage('gemini', null);
+    try {
+      const response = await apiFetch('/api/connections/gemini/verify', { method: 'POST' });
+      const payload = await response.json();
+      setGemini(payload.connection);
+      setMessage('gemini', { type: 'success', text: 'Gemini CLI ve API erişimi yeniden doğrulandı.' });
+    } catch (error) {
+      setMessage('gemini', { type: 'error', text: error.message });
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const disconnectGemini = () => {
+    showDialog({
+      title: 'Gemini CLI Bağlantısını Kes',
+      message: 'Şifreli Gemini API anahtarı ve yerel bağlantı kaydı silinecek. Gemini CLI kurulu kalacak.',
+      type: 'confirm',
+      confirmText: 'Bağlantıyı Kes',
+      cancelText: 'Vazgeç',
+      onConfirm: async () => {
+        setSaving('gemini-disconnect');
+        setMessage('gemini', null);
+        try {
+          const response = await apiFetch('/api/connections/gemini', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ confirmation: 'DISCONNECT GEMINI CLI' })
+          });
+          const payload = await response.json();
+          setGemini(payload.connection);
+          setGeminiApiKey('');
+          setEditingGemini(false);
+          setMessage('gemini', { type: 'success', text: 'Gemini CLI bağlantısı kesildi; CLI kurulu bırakıldı.' });
+        } catch (error) {
+          setMessage('gemini', { type: 'error', text: error.message });
+        } finally {
+          setSaving(null);
+        }
+      }
+    });
+  };
+
   const connectCloudflare = async (event) => {
     event.preventDefault();
     if (!apiToken.trim()) return;
@@ -376,9 +480,12 @@ const ConnectionsSettings = () => {
   }
 
   const codexInstalled = Boolean(codex && codex.installed);
+  const geminiInstalled = Boolean(gemini && gemini.installed);
   const cloudflareConnected = Boolean(cloudflare && cloudflare.connected);
+  const showGeminiForm = geminiInstalled && (!geminiConnected || editingGemini);
   const showCloudflareForm = !cloudflareConnected || editingCloudflare;
   const codexBusy = Boolean(saving && saving.startsWith('codex'));
+  const geminiBusy = Boolean(saving && saving.startsWith('gemini'));
   const cloudflareBusy = Boolean(saving && saving.startsWith('cloudflare'));
 
   return (
@@ -531,6 +638,91 @@ const ConnectionsSettings = () => {
         )}
 
         <Message value={messages.codex} />
+      </section>
+
+      <section style={CARD_STYLE}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '16px', marginBottom: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>
+            <div style={{ width: '46px', height: '38px', borderRadius: '10px', background: 'linear-gradient(135deg, #4285f4 0%, #9b72cb 52%, #d96570 100%)', border: '1px solid rgba(255,255,255,0.18)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+              <Sparkles size={22} color="#fff" />
+            </div>
+            <div style={{ minWidth: 0 }}>
+              <h3 style={{ margin: 0, fontSize: '15px', color: '#fff' }}>Gemini CLI</h3>
+              <div style={{ marginTop: '4px', color: '#888', fontSize: '12px', lineHeight: 1.4 }}>
+                Google’ın resmî CLI’sini Gemini API anahtarınızla FoxOS’a bağlar.
+              </div>
+            </div>
+          </div>
+          <Status connected={geminiConnected} idleLabel={geminiInstalled ? 'API anahtarı bağlı değil' : 'Kurulu değil'} />
+        </div>
+
+        {!geminiInstalled && (
+          <>
+            <div style={{ color: '#aaa', fontSize: '13px', lineHeight: 1.5, marginBottom: '12px' }}>
+              Resmî kararlı paket yalnız bu bağlantı için ayrılmış sunucu dizinine kurulur. Kurulum isteğe bağlıdır; hesap, API anahtarı veya ücretli hizmet oluşturmaz ve temel FoxOS çalışmasını etkilemez.
+            </div>
+            <button type="button" onClick={installGemini} disabled={geminiBusy} style={{ ...PRIMARY_BUTTON_STYLE, cursor: geminiBusy ? 'wait' : 'pointer', opacity: geminiBusy ? 0.5 : 1 }}>
+              {saving === 'gemini-install' ? <Loader2 size={15} className="spin" /> : <HardDrive size={15} />} Sunucuya Kur
+            </button>
+          </>
+        )}
+
+        {geminiConnected && !editingGemini && (
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 170px) minmax(0, 1fr)', rowGap: '10px', columnGap: '16px', fontSize: '13px', marginBottom: '16px', wordBreak: 'break-word' }}>
+              <div style={{ color: '#888' }}>CLI sürümü</div>
+              <div style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '12px' }}>{gemini.version || 'Bilinmiyor'}</div>
+              <div style={{ color: '#888' }}>Kimlik doğrulama</div>
+              <div>Gemini API anahtarı</div>
+              <div style={{ color: '#888' }}>API anahtarı</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}><ShieldCheck size={14} color="#75da85" /> Sunucuda şifreli saklanıyor</div>
+              <div style={{ color: '#888' }}>Son doğrulama</div>
+              <div>{gemini.lastVerifiedAt ? new Date(gemini.lastVerifiedAt).toLocaleString('tr-TR') : 'Henüz yok'}</div>
+              <div style={{ color: '#888' }}>Sunucu erişimi</div>
+              <div>Bağlantı tek başına komut çalıştırma yetkisi vermez</div>
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
+              <button type="button" onClick={verifyGemini} disabled={geminiBusy} style={{ ...SECONDARY_BUTTON_STYLE, cursor: geminiBusy ? 'wait' : 'pointer', opacity: geminiBusy ? 0.5 : 1 }}>{saving === 'gemini-verify' ? <Loader2 size={15} className="spin" /> : <RefreshCw size={15} />} Bağlantıyı Kontrol Et</button>
+              <button type="button" onClick={installGemini} disabled={geminiBusy} style={{ ...SECONDARY_BUTTON_STYLE, cursor: geminiBusy ? 'wait' : 'pointer', opacity: geminiBusy ? 0.5 : 1 }}><RefreshCw size={15} /> CLI’yi Güncelle</button>
+              <button type="button" onClick={() => { setEditingGemini(true); setMessage('gemini', null); }} disabled={geminiBusy} style={{ ...SECONDARY_BUTTON_STYLE, cursor: geminiBusy ? 'not-allowed' : 'pointer', opacity: geminiBusy ? 0.5 : 1 }}><Link2 size={15} /> API Anahtarını Değiştir</button>
+              <button type="button" onClick={disconnectGemini} disabled={geminiBusy} style={{ background: 'transparent', color: '#aaa', border: '1px solid rgba(255,255,255,0.12)', padding: '9px 14px', borderRadius: '8px', cursor: geminiBusy ? 'not-allowed' : 'pointer', opacity: geminiBusy ? 0.5 : 1, display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px' }}><Unplug size={15} /> Bağlantıyı Kes</button>
+            </div>
+          </>
+        )}
+
+        {showGeminiForm && (
+          <form onSubmit={connectGemini}>
+            <div style={{ color: '#aaa', fontSize: '13px', lineHeight: 1.5, marginBottom: '10px' }}>
+              Başsız Linux sunucularında Gemini CLI, API anahtarı veya Vertex AI ister. FoxOS bu ilk sürümde Gemini API anahtarını destekler ve bağlarken küçük, salt-okunur bir CLI isteğiyle doğrular.
+            </div>
+            <div style={{ color: '#f6c453', fontSize: '12px', lineHeight: 1.5, marginBottom: '10px' }}>
+              Bireysel Google AI Pro, Ultra ve ücretsiz hesapların eski Gemini CLI girişi 18 Haziran 2026’da sona erdi. API kullanımı Google hesabınızdaki kota ve ücretlendirmeye tabidir.
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '14px', marginBottom: '12px' }}>
+              <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', color: '#7dd3fc', fontSize: '12px', textDecoration: 'none' }}>Google AI Studio’da API anahtarı aç <ExternalLink size={13} /></a>
+              <a href="https://developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli/" target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', color: '#aaa', fontSize: '12px', textDecoration: 'none' }}>Google’ın geçiş duyurusu <ExternalLink size={13} /></a>
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center' }}>
+              <input
+                type="password"
+                value={geminiApiKey}
+                onChange={(event) => { setGeminiApiKey(event.target.value); setMessage('gemini', null); }}
+                disabled={geminiBusy}
+                placeholder="Gemini API anahtarı"
+                autoComplete="new-password"
+                spellCheck={false}
+                style={{ flex: '1 1 300px', minWidth: 0, background: '#24242a', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 12px', borderRadius: '8px', outline: 'none', fontSize: '13px' }}
+              />
+              <button type="submit" disabled={geminiBusy || !geminiApiKey.trim()} style={{ ...PRIMARY_BUTTON_STYLE, cursor: geminiBusy || !geminiApiKey.trim() ? 'not-allowed' : 'pointer', opacity: geminiBusy || !geminiApiKey.trim() ? 0.5 : 1 }}>
+                {saving === 'gemini-connect' ? <Loader2 size={15} className="spin" /> : <Link2 size={15} />} {geminiConnected ? 'Yeni Anahtarı Bağla' : 'Bağla'}
+              </button>
+              <button type="button" onClick={installGemini} disabled={geminiBusy} style={{ ...SECONDARY_BUTTON_STYLE, cursor: geminiBusy ? 'wait' : 'pointer', opacity: geminiBusy ? 0.5 : 1 }}><RefreshCw size={15} /> CLI’yi Güncelle</button>
+              {geminiConnected && <button type="button" onClick={() => { setEditingGemini(false); setGeminiApiKey(''); setMessage('gemini', null); }} disabled={geminiBusy} style={{ ...SECONDARY_BUTTON_STYLE, cursor: geminiBusy ? 'not-allowed' : 'pointer', opacity: geminiBusy ? 0.5 : 1 }}>Vazgeç</button>}
+            </div>
+          </form>
+        )}
+
+        <Message value={messages.gemini} />
       </section>
 
       <section style={CARD_STYLE}>

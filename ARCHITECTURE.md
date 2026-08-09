@@ -307,6 +307,39 @@ The app-server has no TCP listener; its Unix socket and daemon state are
 owner-only, and Codex remains removable without changing FoxOS startup, host
 management or application authority.
 
+### Implemented boundary: Optional Gemini CLI connection
+
+Gemini CLI is a third optional adapter configured only through the authenticated
+**Bağlantılar** page. FoxOS neither installs it during clean setup nor assumes a
+Google account, API key, quota or paid service. Exact installation confirmation
+resolves Google's current stable `@google/gemini-cli` package version, pins that
+version for the operation and installs it under the dedicated owner-only host
+state root (`/var/lib/foxos/gemini` by default). It does not modify the system
+npm prefix or create an account.
+
+The first authentication slice supports the documented headless-server Gemini
+API-key path. FoxOS validates the submitted key, passes it only in the bounded
+verification process environment and runs the installed CLI from its isolated
+home with extensions disabled, JSON output and read-only `plan` approval mode.
+Successful verification stores the key only as an AES-256-GCM envelope under
+the FoxOS data root. The owner-only local config stores only a server-keyed
+fingerprint beside timestamps; status, operation, log and API responses contain
+neither the key nor that fingerprint. Gemini's own `.env` and settings files
+never receive the secret.
+
+Connection status is local and does not spend quota. Explicit configure and
+verify actions make one small model request to prove the real CLI/auth path.
+Disconnect deletes only the encrypted key and local connection record while
+leaving the optional CLI installed. Because Google ended Gemini CLI service for
+individual Google AI Pro, Ultra and free Code Assist accounts on 2026-06-18,
+FoxOS does not expose a non-working consumer OAuth flow; Vertex AI and enterprise
+authentication remain future adapters.
+
+This connection is credential plumbing only. It starts no daemon, performs no
+background synchronization and grants no filesystem, shell, Docker or host
+execution capability. A future Gemini execution surface requires a separate,
+explicitly designed approval and isolation contract.
+
 ### Implemented boundary: Disposable adoption, route and recovery cutover
 
 Disposable Adoption v1 adds the next import-draft and adoption-plan slice while

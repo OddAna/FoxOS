@@ -78,6 +78,10 @@ const {
   createCodexConnectionManager
 } = require('./codexConnectionManager');
 const {
+  GeminiConnectionError,
+  createGeminiConnectionManager
+} = require('./geminiConnectionManager');
+const {
   codexDaemonEnsureScript,
   codexDaemonSocket,
   createCodexDaemonTransport
@@ -183,6 +187,10 @@ const CODEX_HOST_CONFIG_HOME = path.posix.join(CODEX_HOST_STATE_ROOT, '.codex');
 const CODEX_HOST_BINARY = path.posix.join(CODEX_HOST_STATE_ROOT, '.local', 'bin', 'codex');
 const CODEX_HOST_DAEMON_SOCKET = codexDaemonSocket(CODEX_HOST_CONFIG_HOME);
 const CODEX_MEMORY_VAULT = path.posix.join(CODEX_HOST_STATE_ROOT, 'ana-memory', 'vault');
+const GEMINI_HOST_STATE_ROOT = process.env.FOXOS_GEMINI_HOST_STATE_ROOT || '/var/lib/foxos/gemini';
+const GEMINI_HOST_HOME = GEMINI_HOST_STATE_ROOT;
+const GEMINI_INSTALL_PREFIX = path.posix.join(GEMINI_HOST_STATE_ROOT, '.local');
+const GEMINI_HOST_BINARY = path.posix.join(GEMINI_INSTALL_PREFIX, 'bin', 'gemini');
 
 const loginAttempts = new Map();
 const appInstallOperations = new Set();
@@ -498,6 +506,22 @@ function codexHostEnvironment() {
   };
 }
 
+function geminiHostEnvironment(apiKey = null) {
+  return {
+    HOME: GEMINI_HOST_HOME,
+    GEMINI_INSTALL_PREFIX,
+    PATH: GEMINI_INSTALL_PREFIX + '/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+    LANG: 'C.UTF-8',
+    LC_ALL: 'C.UTF-8',
+    LOGNAME: 'root',
+    NO_COLOR: '1',
+    SHELL: '/bin/sh',
+    TERM: 'xterm-256color',
+    USER: 'root',
+    ...(apiKey ? { GEMINI_API_KEY: apiKey } : {})
+  };
+}
+
 function validateCodexHostPaths() {
   const paths = [
     CODEX_HOST_STATE_ROOT,
@@ -514,6 +538,17 @@ function validateCodexHostPaths() {
 }
 
 validateCodexHostPaths();
+
+function validateGeminiHostPaths() {
+  const paths = [GEMINI_HOST_STATE_ROOT, GEMINI_HOST_HOME, GEMINI_INSTALL_PREFIX, GEMINI_HOST_BINARY];
+  if (paths.some((entry) => (
+    !entry.startsWith('/') || entry === '/' || entry.length > 512 || /[\r\n\0]/.test(entry)
+  ))) {
+    throw new Error('FOXOS_GEMINI_HOST_STATE_ROOT must be a safe absolute host path');
+  }
+}
+
+validateGeminiHostPaths();
 
 function exactHostExecutableInvocation(hostExecutable, args) {
   if (HOST_EXECUTION === 'nsenter') {
@@ -592,6 +627,110 @@ async function inspectHostCodexAccount() {
         connected: !error,
         authMode: !error && /chatgpt/i.test(output) ? 'chatgpt' : null
       });
+    });
+  });
+}
+
+async function inspectHostGeminiCli() {
+  const invocation = exactHostExecutableInvocation(GEMINI_HOST_BINARY, ['--version']);
+  return new Promise((resolve) => {
+    execFile(invocation.executable, invocation.args, {
+      cwd: invocation.cwd,
+      env: geminiHostEnvironment(),
+      timeout: 15000,
+      maxBuffer: 64 * 1024,
+      windowsHide: true
+    }, (error, stdout) => {
+      resolve({
+        installed: !error,
+        version: !error ? String(stdout || '').trim().slice(0, 120) || null : null
+      });
+    });
+  });
+}
+
+function installHostGeminiCli() {
+  const script = [
+    'set -eu',
+    'umask 077',
+    'install -d -m 700 "$HOME" "$GEMINI_INSTALL_PREFIX"',
+    'command -v node >/dev/null',
+    'command -v npm >/dev/null',
+    'node -e \'process.exit(Number(process.versions.node.split(".")[0]) >= 20 ? 0 : 1)\'',
+    'gemini_version="$(npm view --silent @google/gemini-cli@latest version)"',
+    'printf "%s" "$gemini_version" | grep -Eq \'^[0-9]+\\.[0-9]+\\.[0-9]+([-.][0-9A-Za-z.-]+)?$\'',
+    'npm install --global --prefix "$GEMINI_INSTALL_PREFIX" --no-audit --no-fund --loglevel=error "@google/gemini-cli@$gemini_version"',
+    'test -x "$GEMINI_INSTALL_PREFIX/bin/gemini"',
+    '"$GEMINI_INSTALL_PREFIX/bin/gemini" --version >/dev/null'
+  ].join('\n');
+  const invocation = hostRootShellInvocation(script);
+  return new Promise((resolve, reject) => {
+    execFile(invocation.executable, invocation.args, {
+      cwd: invocation.cwd,
+      env: geminiHostEnvironment(),
+      timeout: 5 * 60 * 1000,
+      maxBuffer: 512 * 1024,
+      windowsHide: true
+    }, (error) => {
+      if (error) {
+        return reject(new GeminiConnectionError(
+          'Gemini CLI sunucuya kurulamadı. Node.js 20+, npm ve sunucu ağını kontrol edin.',
+          503,
+          'gemini-cli-install-failed'
+        ));
+      }
+      resolve();
+    });
+  });
+}
+
+function verifyHostGeminiCredential(apiKey) {
+  const script = [
+    'set -eu',
+    'cd "$HOME"',
+    'exec "$GEMINI_INSTALL_PREFIX/bin/gemini" \\',
+    '  --skip-trust \\',
+    '  --approval-mode plan \\',
+    '  --extensions none \\',
+    '  --output-format json \\',
+    '  --prompt "Reply with exactly FOXOS_GEMINI_CONNECTED. Do not use tools."'
+  ].join('\n');
+  const invocation = hostRootShellInvocation(script);
+  return new Promise((resolve, reject) => {
+    execFile(invocation.executable, invocation.args, {
+      cwd: invocation.cwd,
+      env: geminiHostEnvironment(apiKey),
+      timeout: 90_000,
+      maxBuffer: 512 * 1024,
+      windowsHide: true
+    }, (error, stdout) => {
+      if (error) {
+        return reject(new GeminiConnectionError(
+          error.killed
+            ? 'Gemini CLI doğrulaması zaman aşımına uğradı.'
+            : 'Gemini API anahtarı veya hesabın erişim türü doğrulanamadı.',
+          error.killed ? 504 : 409,
+          error.killed ? 'gemini-verification-timeout' : 'gemini-api-key-verification-failed'
+        ));
+      }
+      let payload;
+      try {
+        payload = JSON.parse(String(stdout || '').trim());
+      } catch {
+        return reject(new GeminiConnectionError(
+          'Gemini CLI doğrulama yanıtı geçersiz.',
+          502,
+          'gemini-verification-response-invalid'
+        ));
+      }
+      if (payload.error || typeof payload.response !== 'string' || !payload.response.trim()) {
+        return reject(new GeminiConnectionError(
+          'Gemini API anahtarı CLI tarafından doğrulanamadı.',
+          409,
+          'gemini-api-key-verification-failed'
+        ));
+      }
+      resolve({ verified: true });
     });
   });
 }
@@ -1058,6 +1197,13 @@ const codexConnectionManager = createCodexConnectionManager({
   stopAppServer: stopHostCodexAppServer,
   memoryVaultPath: CODEX_MEMORY_VAULT
 });
+const geminiConnectionManager = createGeminiConnectionManager({
+  dataRoot: DATA_ROOT,
+  encryptionStore,
+  inspectCli: inspectHostGeminiCli,
+  installCli: installHostGeminiCli,
+  verifyCredential: verifyHostGeminiCredential
+});
 const adoptionManager = createAdoptionManager({
   dataRoot: DATA_ROOT,
   dockerRequest,
@@ -1445,7 +1591,8 @@ function sendConnectionError(res, error, action) {
   const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
   if (status >= 500) console.error(action + ':', error.message);
   res.status(status).json({
-    error: status >= 500 && !(error instanceof CloudflareConnectionError) && !(error instanceof CodexConnectionError)
+    error: status >= 500 && !(error instanceof CloudflareConnectionError) &&
+      !(error instanceof CodexConnectionError) && !(error instanceof GeminiConnectionError)
       ? 'Bağlantı işlemi tamamlanamadı'
       : error.message,
     code: error.code || 'connection-error'
@@ -2885,8 +3032,11 @@ app.post('/api/adoptions/:operationId/rollback', async (req, res) => {
 
 app.get('/api/connections', async (req, res) => {
   try {
-    const codex = await codexConnectionManager.status();
-    res.json({ connections: [codex, cloudflareConnectionManager.status()] });
+    const [codex, gemini] = await Promise.all([
+      codexConnectionManager.status(),
+      geminiConnectionManager.status()
+    ]);
+    res.json({ connections: [codex, gemini, cloudflareConnectionManager.status()] });
   } catch (error) {
     sendConnectionError(res, error, 'Could not read provider connections');
   }
@@ -2950,6 +3100,48 @@ app.delete('/api/connections/codex', async (req, res) => {
     res.json(await codexConnectionManager.disconnect(req.body && req.body.confirmation));
   } catch (error) {
     sendConnectionError(res, error, 'Could not disconnect Codex');
+  }
+});
+
+app.get('/api/connections/gemini', async (req, res) => {
+  try {
+    res.json({ connection: await geminiConnectionManager.status() });
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not read Gemini CLI connection');
+  }
+});
+
+app.post('/api/connections/gemini/install', async (req, res) => {
+  try {
+    res.status(201).json(await geminiConnectionManager.install(req.body && req.body.confirmation));
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not install Gemini CLI');
+  }
+});
+
+app.put('/api/connections/gemini', async (req, res) => {
+  try {
+    const connection = await geminiConnectionManager.configure(req.body || {});
+    res.json({ connection });
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not configure Gemini CLI connection');
+  }
+});
+
+app.post('/api/connections/gemini/verify', async (req, res) => {
+  try {
+    const connection = await geminiConnectionManager.verifyStored();
+    res.json({ connection });
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not verify Gemini CLI connection');
+  }
+});
+
+app.delete('/api/connections/gemini', async (req, res) => {
+  try {
+    res.json(await geminiConnectionManager.disconnect(req.body && req.body.confirmation));
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not disconnect Gemini CLI');
   }
 });
 

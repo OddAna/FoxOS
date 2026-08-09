@@ -498,6 +498,17 @@ target blocks only adoption/migration operations that require restore proof.
   threads, and disconnect logs out while returning the profile to read-only.
   Clean install and ordinary FoxOS management remain Codex/account/subscription-
   free.
+- [x] Add Gemini CLI as a third optional **Bağlantılar** adapter. Exact owner
+  confirmation installs Google's current stable `@google/gemini-cli` package
+  into a dedicated owner-only host root without changing the system npm prefix.
+  The first supported headless authentication method is a Gemini API key: a
+  bounded CLI request with extensions disabled and read-only `plan` approvals
+  verifies the key, then FoxOS stores it only as server-keyed AES-256-GCM
+  ciphertext. Status and ordinary page loads spend no quota and return no key
+  or fingerprint. Disconnect deletes only the encrypted local credential and
+  config while preserving the optional CLI. The card truthfully reports that
+  individual Google-account Gemini CLI service ended on 2026-06-18; Vertex AI,
+  enterprise login and any prompt/execution UI remain separate future work.
 - [x] Persist per-application desktop shortcut visibility on the server. The
   desktop context menu removes the projection without deleting a file,
   container or application; the same application's Settings page can recreate

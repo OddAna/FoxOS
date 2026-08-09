@@ -41,6 +41,8 @@ backup evidence and rollback history live on the server.
   discovering legacy and inactive definitions.
 - Cloudflare is an optional DNS adapter. FoxOS does not require Cloudflare, a
   paid plan, a domain or an API token to install or run.
+- Gemini CLI is an optional AI adapter. FoxOS does not install it or require a
+  Google API key during base setup.
 - S3-compatible storage is an optional, provider-neutral recovery adapter. Base
   installation and ordinary server management work without it.
 - The installer never signs up for, provisions or enables a remote or billable
@@ -153,6 +155,25 @@ socket live in that owner-only host state; the FoxOS container holds only a
 disposable socket client. No app-server TCP listener is exposed. Account
 eligibility and usage limits remain those of the connected ChatGPT account;
 FoxOS does not create a subscription or make Codex a base-install dependency.
+
+### Gemini CLI connection
+
+- Optionally install Google's stable `@google/gemini-cli` package from
+  **Settings → Connections** after exact confirmation.
+- Connect a Gemini API key for the documented headless-server path. FoxOS
+  verifies it through the installed CLI in read-only plan mode, then stores it
+  only as server-keyed encrypted data; the key is never written to a `.env`
+  file or returned through the API.
+- Recheck the real CLI/API path on demand without turning ordinary status reads
+  into billable requests. Disconnecting removes the encrypted credential while
+  leaving the optional CLI installed.
+- Keep connection separate from execution authority. This slice does not add a
+  Gemini prompt window, background agent, filesystem access or shell access.
+
+Google ended Gemini CLI service for individual Google AI Pro, Ultra and free
+Code Assist accounts on June 18, 2026. This connector therefore exposes the
+supported API-key path instead of a non-working consumer Google-login flow.
+Vertex AI and enterprise authentication are not part of this first slice.
 
 ### Updates and Compose
 

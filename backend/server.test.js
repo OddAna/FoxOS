@@ -500,6 +500,19 @@ test('health is public while management APIs require a session', async () => {
   assert.equal((await fetch(baseUrl() + '/api/connections/codex/memory', {
     method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{}'
   })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/gemini')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/gemini/install', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/gemini', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/gemini/verify', {
+    method: 'POST'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/gemini', {
+    method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
   assert.equal((await fetch(baseUrl() + '/api/codex/models')).status, 401);
   assert.equal((await fetch(baseUrl() + '/api/codex/events')).status, 401);
   assert.equal((await fetch(baseUrl() + '/api/codex/threads/thr_1/turns/turn_1/steer', {
@@ -605,15 +618,19 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   });
   assert.equal(connectionsResponse.status, 200);
   const connections = (await connectionsResponse.json()).connections;
-  assert.equal(connections.length, 2);
+  assert.equal(connections.length, 3);
   assert.equal(connections[0].id, 'codex');
   assert.equal(connections[0].installed, false);
   assert.equal(connections[0].connected, false);
   assert.equal(connections[0].accessProfile, 'read-only');
   assert.equal(connections[0].credentialIncluded, false);
-  assert.equal(connections[1].id, 'cloudflare');
+  assert.equal(connections[1].id, 'gemini-cli');
+  assert.equal(connections[1].installed, false);
   assert.equal(connections[1].connected, false);
-  assert.equal(connections[1].tokenIncluded, false);
+  assert.equal(connections[1].credentialIncluded, false);
+  assert.equal(connections[2].id, 'cloudflare');
+  assert.equal(connections[2].connected, false);
+  assert.equal(connections[2].tokenIncluded, false);
 
   const unconfirmedCodexInstall = await fetch(baseUrl() + '/api/connections/codex/install', {
     method: 'POST',
@@ -622,6 +639,25 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   });
   assert.equal(unconfirmedCodexInstall.status, 400);
   assert.equal((await unconfirmedCodexInstall.json()).code, 'codex-install-confirmation-required');
+
+  const unconfirmedGeminiInstall = await fetch(baseUrl() + '/api/connections/gemini/install', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ confirmation: 'yes' })
+  });
+  assert.equal(unconfirmedGeminiInstall.status, 400);
+  assert.equal((await unconfirmedGeminiInstall.json()).code, 'gemini-install-confirmation-required');
+
+  const testGeminiApiKey = 'AIza' + 'x'.repeat(35);
+  const geminiWithoutCli = await fetch(baseUrl() + '/api/connections/gemini', {
+    method: 'PUT',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ apiKey: testGeminiApiKey })
+  });
+  assert.equal(geminiWithoutCli.status, 409);
+  const geminiWithoutCliPayload = await geminiWithoutCli.json();
+  assert.equal(geminiWithoutCliPayload.code, 'gemini-cli-not-installed');
+  assert.equal(JSON.stringify(geminiWithoutCliPayload).includes(testGeminiApiKey), false);
 
   const codexThreadWithoutCli = await fetch(baseUrl() + '/api/codex/threads', {
     method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json' }, body: '{}'
