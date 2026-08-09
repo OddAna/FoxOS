@@ -107,6 +107,20 @@ test('Antigravity install requires exact confirmation and applies protected defa
   assert.equal(fs.statSync(settingsFile).mode & 0o777, 0o600);
 });
 
+test('Antigravity status accepts CLI-compacted protected defaults', async (t) => {
+  const { manager, settingsFile } = fixture(t);
+  await manager.install(INSTALL_CONFIRMATION);
+  fs.writeFileSync(settingsFile, JSON.stringify({
+    agentMode: 'plan',
+    enableTerminalSandbox: true,
+    toolPermission: 'strict'
+  }), { mode: 0o600 });
+  const connection = await manager.status();
+  assert.equal(connection.accessProfile, 'read-only');
+  assert.equal(connection.profileApplied, true);
+  assert.equal(connection.ready, false);
+});
+
 test('Antigravity login URL and code are never persisted in FoxOS connection data', async (t) => {
   const { calls, manager, root } = fixture(t, { installed: true });
   const login = await manager.startLogin();

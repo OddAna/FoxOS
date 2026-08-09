@@ -72,13 +72,21 @@ function createAntigravityLoginController({
   clock = () => new Date(),
   discoveryTimeoutMs = 15_000,
   completionTimeoutMs = 45_000,
-  sessionTtlMs = 65_000
+  sessionTtlMs = 65_000,
+  postSubmissionWaitMs = null,
+  postTerminationWaitMs = 0,
+  authorizationCodeTerminator = '\n'
 }) {
   if (
     typeof spawnLogin !== 'function' || !Number.isInteger(discoveryTimeoutMs) ||
     discoveryTimeoutMs < 100 || !Number.isInteger(completionTimeoutMs) ||
     completionTimeoutMs < 100 || !Number.isInteger(sessionTtlMs) ||
-    sessionTtlMs < discoveryTimeoutMs
+    sessionTtlMs < discoveryTimeoutMs ||
+    (postSubmissionWaitMs !== null && (
+      !Number.isInteger(postSubmissionWaitMs) || postSubmissionWaitMs < 100 ||
+      postSubmissionWaitMs > completionTimeoutMs
+    )) || !Number.isInteger(postTerminationWaitMs) || postTerminationWaitMs < 0 ||
+    postTerminationWaitMs > 5000 || !['\n', '\r'].includes(authorizationCodeTerminator)
   ) {
     throw new Error('Antigravity login controller requires a bounded process adapter');
   }
@@ -235,7 +243,10 @@ function createAntigravityLoginController({
     record.submitted = true;
     try {
       await new Promise((resolve, reject) => {
-        record.child.stdin.write(code + '\n', (error) => error ? reject(error) : resolve());
+        record.child.stdin.write(
+          code + authorizationCodeTerminator,
+          (error) => error ? reject(error) : resolve()
+        );
       });
     } catch {
       stopRecord(record);
@@ -249,12 +260,37 @@ function createAntigravityLoginController({
     const exit = await Promise.race([
       record.exitPromise,
       new Promise((resolve) => {
-        record.completionTimer = setTimeout(() => resolve({ code: null, signal: 'TIMEOUT' }), completionTimeoutMs);
+        record.completionTimer = setTimeout(
+          () => resolve({
+            code: null,
+            signal: postSubmissionWaitMs === null ? 'TIMEOUT' : 'EXTERNAL_VERIFICATION'
+          }),
+          postSubmissionWaitMs === null ? completionTimeoutMs : postSubmissionWaitMs
+        );
         record.completionTimer.unref?.();
       })
     ]);
     if (record.completionTimer) clearTimeout(record.completionTimer);
     record.completionTimer = null;
+    if (postSubmissionWaitMs !== null) {
+      if (active === record) {
+        stopRecord(record);
+        let terminationTimer;
+        await Promise.race([
+          record.exitPromise,
+          new Promise((resolve) => {
+            terminationTimer = setTimeout(resolve, 3000);
+          })
+        ]);
+        if (terminationTimer) clearTimeout(terminationTimer);
+        if (postTerminationWaitMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, postTerminationWaitMs));
+        }
+      } else {
+        clearActive(record);
+      }
+      return { submitted: true, authMode: 'google-oauth' };
+    }
     const payload = finalJsonPayload(record.output);
     const succeeded = exit.code === 0 && !record.processError && payload &&
       payload.status !== 'ERROR' && !payload.error;

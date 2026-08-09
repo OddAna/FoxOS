@@ -553,6 +553,8 @@ function antigravityHostEnvironment(remoteLogin = false) {
     TERM: 'xterm-256color',
     USER: 'root',
     ...(remoteLogin ? {
+      COLUMNS: '4096',
+      LINES: '60',
       SSH_CLIENT: '127.0.0.1 1 22',
       SSH_CONNECTION: '127.0.0.1 1 127.0.0.1 22',
       SSH_TTY: '/dev/pts/0'
@@ -770,13 +772,50 @@ function antigravityUsageInvocation() {
 }
 
 function spawnHostAntigravityLogin() {
-  const invocation = antigravityUsageInvocation();
-  return spawn(invocation.executable, invocation.args, {
+  const shellQuote = (value) => "'" + String(value).replaceAll("'", "'\"'\"'") + "'";
+  const command = 'stty cols 4096 rows 60; exec ' + shellQuote(ANTIGRAVITY_HOST_BINARY);
+  const invocation = exactHostExecutableInvocation('/usr/bin/script', [
+    '-qefc',
+    command,
+    '/dev/null'
+  ]);
+  const child = spawn(invocation.executable, invocation.args, {
     cwd: invocation.cwd,
+    detached: true,
     env: antigravityHostEnvironment(true),
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true
   });
+  const killDirectChild = child.kill.bind(child);
+  child.kill = (signal = 'SIGTERM') => {
+    let groupSignalled = false;
+    if (Number.isInteger(child.pid) && child.pid > 1) {
+      try {
+        process.kill(-child.pid, signal);
+        groupSignalled = true;
+      } catch (error) {
+        if (error.code !== 'ESRCH') throw error;
+      }
+    }
+    let directSignalled = false;
+    try { directSignalled = killDirectChild(signal); } catch { /* The group signal may have won the race. */ }
+    return groupSignalled || directSignalled;
+  };
+  let selectedGoogleOauth = false;
+  let menuOutput = '';
+  const selectGoogleOauth = (chunk) => {
+    if (selectedGoogleOauth) return;
+    menuOutput = (menuOutput + String(chunk || '')).slice(-16 * 1024)
+      .replace(/\x1b\[[0-?]*[ -\/]*[@-~]/g, '');
+    if (!/>\s*1\.\s*Google OAuth/i.test(menuOutput)) return;
+    selectedGoogleOauth = true;
+    setTimeout(() => {
+      try { child.stdin.write('\r'); } catch { /* The TUI may already have exited. */ }
+    }, 100).unref?.();
+  };
+  child.stdout.on('data', selectGoogleOauth);
+  child.stderr.on('data', selectGoogleOauth);
+  return child;
 }
 
 function inspectHostAntigravityAccount() {
@@ -1396,7 +1435,10 @@ const geminiConnectionManager = createGeminiConnectionManager({
   verifyCredential: verifyHostGeminiCredential
 });
 const antigravityLoginController = createAntigravityLoginController({
-  spawnLogin: spawnHostAntigravityLogin
+  spawnLogin: spawnHostAntigravityLogin,
+  authorizationCodeTerminator: '\r',
+  postSubmissionWaitMs: 12_000,
+  postTerminationWaitMs: 1500
 });
 const antigravityConnectionManager = createAntigravityConnectionManager({
   dataRoot: DATA_ROOT,
@@ -3989,6 +4031,13 @@ app.use((error, req, res, next) => {
 });
 
 if (require.main === module) {
+  const shutdownAntigravityLogin = () => {
+    antigravityLoginController.shutdown()
+      .catch(() => {})
+      .finally(() => process.exit(0));
+  };
+  process.once('SIGTERM', shutdownAntigravityLogin);
+  process.once('SIGINT', shutdownAntigravityLogin);
   statefulMigrationManager.recoverInterruptedOperations({ clearStaleLock: true })
     .then((recovery) => {
       if (recovery.recovered.length) {

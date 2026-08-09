@@ -164,7 +164,9 @@ FoxOS does not create a subscription or make Codex a base-install dependency.
   with the official Linux installer and a separate exact confirmation.
 - Connect the server owner's Google account through the documented remote OAuth
   link and browser-returned code. The short-lived link and code are never
-  persisted or logged by FoxOS; credentials remain managed by Antigravity.
+  persisted or logged by FoxOS; credentials remain managed by Antigravity. The
+  connector drives the real `agy` TUI through a private pseudo-terminal because
+  non-interactive `/usage` can verify a login but cannot start one.
 - Start in a protected `plan` + `strict` profile with workspace confinement and
   terminal sandboxing. Explicit account checks use `/usage` and make no model
   request, while ordinary status reads stay fully local.

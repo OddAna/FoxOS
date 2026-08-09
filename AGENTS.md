@@ -108,7 +108,9 @@
   separate from Gemini CLI. Install only through Google's official
   `antigravity.google/cli/install.sh` after exact owner confirmation, into the
   dedicated owner-only host state root. Remote authentication must use the
-  CLI's Google OAuth URL plus browser-returned code; keep that URL and code
+  CLI's interactive TUI in a real pseudo-terminal: `--print /usage` is a
+  post-login verification command and must never be used to bootstrap login.
+  Select the TUI's Google OAuth method, then use its URL plus browser-returned code; keep that URL and code
   process-local, never persist or log them, and verify the resulting session in
   a fresh quota-free `/usage` process before marking it connected. Credentials
   remain Antigravity-owned and must never be copied into FoxOS state or API

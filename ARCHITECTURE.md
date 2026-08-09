@@ -350,8 +350,13 @@ confirmation downloads Google's official Linux installer over TLS and places
 the native CLI plus its private state under `/var/lib/foxos/antigravity` by
 default. Later update actions use the installed CLI's own updater.
 
-Headless login runs Antigravity's documented remote Google OAuth flow. FoxOS
-accepts only an HTTPS PKCE authorization URL at the exact
+Headless login runs Antigravity's documented remote Google OAuth flow inside a
+host pseudo-terminal. FoxOS launches the real interactive `agy` TUI, selects
+its Google OAuth method and gives it a wide terminal so the long authorization
+URL cannot be line-wrapped. Non-interactive `agy --print /usage` is deliberately
+not used to initiate authentication: on a normally installed host it exits with
+`authentication required` and no URL. FoxOS accepts only an HTTPS PKCE
+authorization URL at the exact
 `accounts.google.com/o/oauth2/auth` endpoint and returns it to the authenticated
 owner for the active, short-lived login session. The browser-returned code goes
 directly to that waiting CLI process. Neither value enters FoxOS connection

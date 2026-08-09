@@ -154,12 +154,29 @@ function profileSettings(profile) {
 
 function profileMatches(settings, profile) {
   const expected = profileSettings(profile);
+  const actualPermissions = settings.permissions === undefined
+    ? { allow: [], ask: [], deny: [] }
+    : settings.permissions;
+  if (!actualPermissions || typeof actualPermissions !== 'object' || Array.isArray(actualPermissions)) {
+    return false;
+  }
+  const permissionMatches = ['allow', 'ask', 'deny'].every((key) => {
+    const actual = actualPermissions[key] === undefined ? [] : actualPermissions[key];
+    if (!Array.isArray(actual) || actual.some((entry) => typeof entry !== 'string')) return false;
+    return JSON.stringify([...actual].sort()) === JSON.stringify([...expected.permissions[key]].sort());
+  });
   return settings.agentMode === expected.agentMode &&
     settings.toolPermission === expected.toolPermission &&
-    settings.artifactReviewPolicy === expected.artifactReviewPolicy &&
-    settings.allowNonWorkspaceAccess === expected.allowNonWorkspaceAccess &&
-    settings.enableTerminalSandbox === expected.enableTerminalSandbox &&
-    JSON.stringify(settings.permissions) === JSON.stringify(expected.permissions);
+    (settings.artifactReviewPolicy === undefined
+      ? 'asks-for-review'
+      : settings.artifactReviewPolicy) === expected.artifactReviewPolicy &&
+    (settings.allowNonWorkspaceAccess === undefined
+      ? false
+      : settings.allowNonWorkspaceAccess) === expected.allowNonWorkspaceAccess &&
+    (settings.enableTerminalSandbox === undefined
+      ? false
+      : settings.enableTerminalSandbox) === expected.enableTerminalSandbox &&
+    permissionMatches;
 }
 
 function createAntigravityConnectionManager({
@@ -319,6 +336,17 @@ function createAntigravityConnectionManager({
     }
   }
 
+  function connectionErrorFromAdapter(error, message, statusCode, code) {
+    if (error && Number.isInteger(error.statusCode)) {
+      return new AntigravityConnectionError(
+        error.message || message,
+        error.statusCode,
+        String(error.code || code)
+      );
+    }
+    return new AntigravityConnectionError(message, statusCode, code);
+  }
+
   function publicStatus(config, cli, settings) {
     const profile = config ? config.accessProfile : READ_ONLY_PROFILE;
     const connected = Boolean(config && config.accountConnected);
@@ -409,8 +437,8 @@ function createAntigravityConnectionManager({
       try {
         login = await loginController.start();
       } catch (error) {
-        if (error && Number.isInteger(error.statusCode)) throw error;
-        throw new AntigravityConnectionError(
+        throw connectionErrorFromAdapter(
+          error,
           'Antigravity Google giriş işlemi başlatılamadı.',
           502,
           'antigravity-login-start-failed'
@@ -439,8 +467,8 @@ function createAntigravityConnectionManager({
       try {
         await loginController.complete(loginId, authorizationCode);
       } catch (error) {
-        if (error && Number.isInteger(error.statusCode)) throw error;
-        throw new AntigravityConnectionError(
+        throw connectionErrorFromAdapter(
+          error,
           'Antigravity Google hesabı doğrulanamadı.',
           409,
           'antigravity-login-failed'
@@ -466,7 +494,16 @@ function createAntigravityConnectionManager({
   }
 
   async function cancelLogin(loginId = null) {
-    return loginController.cancel(loginId);
+    try {
+      return await loginController.cancel(loginId);
+    } catch (error) {
+      throw connectionErrorFromAdapter(
+        error,
+        'Antigravity giriş işlemi iptal edilemedi.',
+        409,
+        'antigravity-login-cancel-failed'
+      );
+    }
   }
 
   async function verify() {

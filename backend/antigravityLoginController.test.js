@@ -90,6 +90,27 @@ test('Antigravity login controller cancels and does not expose process output', 
   assert.equal(JSON.stringify(login).includes('private preface'), false);
 });
 
+test('Antigravity TUI login submits the code with carriage return for external verification', async () => {
+  const child = new FakeChild();
+  const controller = createAntigravityLoginController({
+    spawnLogin: () => child,
+    authorizationCodeTerminator: '\r',
+    postSubmissionWaitMs: 100,
+    discoveryTimeoutMs: 500,
+    completionTimeoutMs: 500,
+    sessionTtlMs: 1000
+  });
+  const startPromise = controller.start();
+  child.stdout.write('TUI authorization ' + AUTH_URL + '\n');
+  const login = await startPromise;
+  const written = new Promise((resolve) => child.stdin.once('data', (chunk) => resolve(String(chunk))));
+  const completion = controller.complete(login.loginId, '4/0AbCdEf_123-xyz');
+  assert.equal(await written, '4/0AbCdEf_123-xyz\r');
+  assert.deepEqual(await completion, { submitted: true, authMode: 'google-oauth' });
+  assert.equal(child.killedWith, 'SIGTERM');
+  assert.equal(controller.inProgress(), false);
+});
+
 test('Antigravity login controller fails closed when the URL is unavailable', async () => {
   const child = new FakeChild();
   const controller = createAntigravityLoginController({
