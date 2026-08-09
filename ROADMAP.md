@@ -509,6 +509,21 @@ target blocks only adoption/migration operations that require restore proof.
   config while preserving the optional CLI. The card truthfully reports that
   individual Google-account Gemini CLI service ended on 2026-06-18; Vertex AI,
   enterprise login and any prompt/execution UI remain separate future work.
+- [x] Add Antigravity CLI as a fourth, separate optional **Bağlantılar**
+  adapter. Exact confirmation runs Google's official native installer in a
+  dedicated owner-only host root. Remote OAuth exposes only a short-lived,
+  allowlisted Google authorization link to the authenticated owner and passes
+  the returned code directly to the waiting CLI; neither value is persisted.
+  A fresh quota-free `/usage` process proves session persistence. Protected
+  `plan` + `strict` + sandbox settings are the default. A separate **Full
+  Server** confirmation atomically selects `accept-edits`, tool and artifact
+  `always-proceed`, workspace-external access, sandbox off and explicit
+  allow-all file/URL/command/unsandboxed/MCP permissions with empty ask/deny
+  lists, so later native CLI work does not request individual approvals.
+  Revocation remains available without a working account check, disconnect
+  downgrades before proven logout, ordinary status is local and clean install
+  remains Google/Antigravity-free. An embedded execution/chat surface remains
+  separate future work.
 - [x] Persist per-application desktop shortcut visibility on the server. The
   desktop context menu removes the projection without deleting a file,
   container or application; the same application's Settings page can recreate

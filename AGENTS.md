@@ -104,6 +104,24 @@
   installed. Do not represent retired individual Google-account OAuth as a
   working server login, and do not let connection alone execute prompts or
   grant filesystem, shell, Docker or host access.
+- Antigravity CLI is a fourth optional **Bağlantılar** adapter and remains
+  separate from Gemini CLI. Install only through Google's official
+  `antigravity.google/cli/install.sh` after exact owner confirmation, into the
+  dedicated owner-only host state root. Remote authentication must use the
+  CLI's Google OAuth URL plus browser-returned code; keep that URL and code
+  process-local, never persist or log them, and verify the resulting session in
+  a fresh quota-free `/usage` process before marking it connected. Credentials
+  remain Antigravity-owned and must never be copied into FoxOS state or API
+  responses. Access defaults to protected `plan` + `strict` with terminal
+  sandboxing. The separate exact **Full Server** confirmation persistently sets
+  `accept-edits`, `always-proceed`, artifact `always-proceed`, workspace-external
+  access, sandbox off and explicit allow-all file/URL/command/unsandboxed/MCP
+  permissions with empty ask/deny lists. Treat that profile as root-equivalent
+  and prompt-free; revoking it must remain possible even if account inspection
+  or the CLI is unavailable. Disconnect must downgrade first, prove CLI logout,
+  and leave the optional binary installed. Ordinary status reads must be local
+  and spend no model quota. Do not claim this connection card is an embedded
+  Antigravity chat or background agent; execution UI remains a separate slice.
 - A clean public installation must require no external provider account, domain,
   API token, object store, payment method or existing panel. Base startup and
   ordinary host management must work with recovery explicitly unconfigured.

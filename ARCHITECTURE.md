@@ -340,6 +340,47 @@ background synchronization and grants no filesystem, shell, Docker or host
 execution capability. A future Gemini execution surface requires a separate,
 explicitly designed approval and isolation contract.
 
+### Implemented boundary: Optional Antigravity CLI Full Server profile
+
+Antigravity CLI is a fourth optional adapter in the authenticated
+**Bağlantılar** page and is deliberately separate from the legacy Gemini CLI
+API-key connector. Clean setup does not install `agy`, contact Google, create a
+login, require a Google subscription or alter FoxOS startup. An exact owner
+confirmation downloads Google's official Linux installer over TLS and places
+the native CLI plus its private state under `/var/lib/foxos/antigravity` by
+default. Later update actions use the installed CLI's own updater.
+
+Headless login runs Antigravity's documented remote Google OAuth flow. FoxOS
+accepts only an HTTPS PKCE authorization URL at the exact
+`accounts.google.com/o/oauth2/auth` endpoint and returns it to the authenticated
+owner for the active, short-lived login session. The browser-returned code goes
+directly to that waiting CLI process. Neither value enters FoxOS connection
+state, logs or normal status responses. After the login process finishes,
+FoxOS starts a new `agy --print /usage` process and marks the account connected
+only if the independently persisted CLI session works. `/usage` is also the
+explicit reconnect check; it reads account usage without a model request.
+Ordinary connection status remains entirely local and spends no quota.
+
+The saved access profile begins as `read-only`, represented by Antigravity
+`agentMode: plan`, strict tool permission, artifact review requests, workspace
+confinement and terminal sandboxing. The owner may separately confirm
+**Full Server**. FoxOS then atomically writes `agentMode: accept-edits`,
+`toolPermission: always-proceed`, `artifactReviewPolicy: always-proceed`,
+workspace-external access and terminal sandbox off. Explicit wildcard allows
+cover files, URLs, commands, unsandboxed execution and MCP, while both ask and
+deny lists are empty. This profile intentionally does not request per-command,
+per-file or artifact approval and is therefore root-equivalent when `agy` is
+run from host root `/`.
+
+Only the profile and timestamps live in owner-only FoxOS connection state.
+Google credentials remain in Antigravity-owned private state and are never
+copied or returned. Downgrading always rewrites the protected profile even if
+the CLI or account check is unavailable. Disconnect downgrades first, invokes
+the CLI logout command, proves the account is no longer usable in a fresh
+process and preserves the installed binary. This slice prepares the native CLI
+and its persistent permissions; it does not add an Antigravity chat window,
+daemon or autonomous background loop to FoxOS.
+
 ### Implemented boundary: Disposable adoption, route and recovery cutover
 
 Disposable Adoption v1 adds the next import-draft and adoption-plan slice while

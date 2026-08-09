@@ -68,8 +68,11 @@ const ConnectionsSettings = () => {
   const { openWindow } = useWindowManager();
   const [cloudflare, setCloudflare] = useState(null);
   const [codex, setCodex] = useState(null);
+  const [antigravity, setAntigravity] = useState(null);
   const [gemini, setGemini] = useState(null);
   const [codexLogin, setCodexLogin] = useState(null);
+  const [antigravityLogin, setAntigravityLogin] = useState(null);
+  const [antigravityCode, setAntigravityCode] = useState('');
   const [codexMemoryFolderUrl, setCodexMemoryFolderUrl] = useState('');
   const [editingCodexMemory, setEditingCodexMemory] = useState(false);
   const [geminiApiKey, setGeminiApiKey] = useState('');
@@ -78,8 +81,9 @@ const ConnectionsSettings = () => {
   const [editingCloudflare, setEditingCloudflare] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(null);
-  const [messages, setMessages] = useState({ codex: null, gemini: null, cloudflare: null });
+  const [messages, setMessages] = useState({ codex: null, antigravity: null, gemini: null, cloudflare: null });
   const codexConnected = Boolean(codex && codex.connected);
+  const antigravityConnected = Boolean(antigravity && antigravity.connected);
   const geminiConnected = Boolean(gemini && gemini.connected);
 
   const setMessage = (provider, value) => setMessages((current) => ({ ...current, [provider]: value }));
@@ -91,13 +95,19 @@ const ConnectionsSettings = () => {
       const payload = await response.json();
       const nextCloudflare = (payload.connections || []).find((item) => item.id === 'cloudflare') || null;
       const nextCodex = (payload.connections || []).find((item) => item.id === 'codex') || null;
+      const nextAntigravity = (payload.connections || []).find((item) => item.id === 'antigravity-cli') || null;
       const nextGemini = (payload.connections || []).find((item) => item.id === 'gemini-cli') || null;
       setCloudflare(nextCloudflare);
       setCodex(nextCodex);
+      setAntigravity(nextAntigravity);
       setGemini(nextGemini);
       if (nextCodex && nextCodex.connected) {
         setCodexLogin(null);
         setMessage('codex', { type: 'success', text: 'Codex hesabı bağlandı.' });
+      }
+      if (nextAntigravity && nextAntigravity.connected) {
+        setAntigravityLogin(null);
+        setAntigravityCode('');
       }
     } catch (error) {
       setMessage('codex', { type: 'error', text: error.message });
@@ -306,6 +316,197 @@ const ConnectionsSettings = () => {
     height: 650
   });
 
+  const installAntigravity = () => {
+    showDialog({
+      title: 'Antigravity CLI’yi Sunucuya Kur',
+      message: 'FoxOS, Google’ın resmî Antigravity kurucusunu kullanarak agy komutunu Linux hostta /var/lib/foxos/antigravity altına kuracak veya güncelleyecek. Bu adım hesap bağlamaz ve Full Server yetkisi vermez.',
+      type: 'warning',
+      confirmText: 'Sunucuya Kur',
+      cancelText: 'Vazgeç',
+      onConfirm: async () => {
+        setSaving('antigravity-install');
+        setMessage('antigravity', null);
+        try {
+          const response = await apiFetch('/api/connections/antigravity/install', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ confirmation: 'INSTALL ANTIGRAVITY CLI ON SERVER' })
+          });
+          const payload = await response.json();
+          setAntigravity(payload.connection);
+          setMessage('antigravity', { type: 'success', text: `Antigravity CLI sunucuya kuruldu${payload.version ? `: ${payload.version}` : '.'}` });
+        } catch (error) {
+          setMessage('antigravity', { type: 'error', text: error.message });
+        } finally {
+          setSaving(null);
+        }
+      }
+    });
+  };
+
+  const startAntigravityLogin = async () => {
+    setSaving('antigravity-login');
+    setMessage('antigravity', null);
+    try {
+      const response = await apiFetch('/api/connections/antigravity/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}'
+      });
+      const payload = await response.json();
+      setAntigravityLogin(payload.login);
+      setAntigravityCode('');
+      setMessage('antigravity', { type: 'info', text: 'Google bağlantısını açın, hesabınızla onaylayın ve tarayıcıdaki doğrulama kodunu aşağıya yapıştırın.' });
+    } catch (error) {
+      setMessage('antigravity', { type: 'error', text: error.message });
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const completeAntigravityLogin = async (event) => {
+    event.preventDefault();
+    const authorizationCode = antigravityCode.trim();
+    if (!antigravityLogin || !authorizationCode) return;
+    setSaving('antigravity-login-complete');
+    setMessage('antigravity', null);
+    try {
+      const response = await apiFetch('/api/connections/antigravity/login/complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ loginId: antigravityLogin.loginId, authorizationCode })
+      });
+      const payload = await response.json();
+      setAntigravity(payload.connection);
+      setAntigravityLogin(null);
+      setAntigravityCode('');
+      setMessage('antigravity', { type: 'success', text: 'Antigravity Google hesabı bağlandı. Başlangıç profili salt-okunur ve korumalıdır.' });
+    } catch (error) {
+      setMessage('antigravity', { type: 'error', text: error.message });
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const cancelAntigravityLogin = async () => {
+    if (!antigravityLogin) return;
+    setSaving('antigravity-login-cancel');
+    try {
+      await apiFetch('/api/connections/antigravity/login/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ loginId: antigravityLogin.loginId })
+      });
+      setAntigravityLogin(null);
+      setAntigravityCode('');
+      setMessage('antigravity', { type: 'info', text: 'Antigravity giriş işlemi iptal edildi.' });
+    } catch (error) {
+      setMessage('antigravity', { type: 'error', text: error.message });
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const enableAntigravityFullServer = () => {
+    showDialog({
+      title: 'Antigravity Full Server Erişimi',
+      message: 'Antigravity sunucu kökünde / çalışabilecek ve root eşdeğeri erişimle dosyaları, Docker’ı, systemd servislerini, paketleri ve ağ ayarlarını değiştirebilecek. Terminal sandboxı kapanacak; komut, dosya değişikliği ve artifact incelemesi için tek tek onay SORMAYACAK.',
+      type: 'warning',
+      confirmText: 'Full Server’ı Etkinleştir',
+      cancelText: 'Vazgeç',
+      onConfirm: async () => {
+        setSaving('antigravity-profile');
+        setMessage('antigravity', null);
+        try {
+          const response = await apiFetch('/api/connections/antigravity/access-profile', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              accessProfile: 'full-server',
+              confirmation: 'ENABLE ANTIGRAVITY FULL SERVER'
+            })
+          });
+          const payload = await response.json();
+          setAntigravity(payload.connection);
+          setMessage('antigravity', { type: 'success', text: 'Antigravity Full Server etkin: sunucu kökü /, terminal sandboxı kapalı ve tek tek onay yok.' });
+        } catch (error) {
+          setMessage('antigravity', { type: 'error', text: error.message });
+        } finally {
+          setSaving(null);
+        }
+      }
+    });
+  };
+
+  const setAntigravityReadOnly = async () => {
+    setSaving('antigravity-profile');
+    setMessage('antigravity', null);
+    try {
+      const response = await apiFetch('/api/connections/antigravity/access-profile', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accessProfile: 'read-only' })
+      });
+      const payload = await response.json();
+      setAntigravity(payload.connection);
+      setMessage('antigravity', { type: 'success', text: 'Antigravity salt-okunur plan moduna alındı; sıkı izinler ve terminal sandboxı açık.' });
+    } catch (error) {
+      setMessage('antigravity', { type: 'error', text: error.message });
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const verifyAntigravity = async () => {
+    setSaving('antigravity-verify');
+    setMessage('antigravity', null);
+    try {
+      const response = await apiFetch('/api/connections/antigravity/verify', { method: 'POST' });
+      const payload = await response.json();
+      setAntigravity(payload.connection);
+      setMessage('antigravity', {
+        type: payload.connection.connected ? 'success' : 'error',
+        text: payload.connection.connected
+          ? 'Antigravity hesabı ve kalıcı erişim profili yeniden doğrulandı; model kotası kullanılmadı.'
+          : 'Antigravity hesabı bağlı değil. Erişim profili korumalı moda döndü.'
+      });
+    } catch (error) {
+      setMessage('antigravity', { type: 'error', text: error.message });
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const disconnectAntigravity = () => {
+    showDialog({
+      title: 'Antigravity Bağlantısını Kes',
+      message: 'Google oturumu Antigravity CLI’dan çıkarılacak ve Full Server profili kapatılıp salt-okunura dönecek. CLI kurulu kalacak.',
+      type: 'confirm',
+      confirmText: 'Bağlantıyı Kes',
+      cancelText: 'Vazgeç',
+      onConfirm: async () => {
+        setSaving('antigravity-disconnect');
+        setMessage('antigravity', null);
+        try {
+          const response = await apiFetch('/api/connections/antigravity', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ confirmation: 'DISCONNECT ANTIGRAVITY CLI' })
+          });
+          const payload = await response.json();
+          setAntigravity(payload.connection);
+          setAntigravityLogin(null);
+          setAntigravityCode('');
+          setMessage('antigravity', { type: 'success', text: 'Antigravity hesabı çıkarıldı, Full Server kapatıldı ve CLI kurulu bırakıldı.' });
+        } catch (error) {
+          setMessage('antigravity', { type: 'error', text: error.message });
+        } finally {
+          setSaving(null);
+        }
+      }
+    });
+  };
+
   const installGemini = () => {
     showDialog({
       title: 'Gemini CLI’yi Sunucuya Kur',
@@ -480,11 +681,13 @@ const ConnectionsSettings = () => {
   }
 
   const codexInstalled = Boolean(codex && codex.installed);
+  const antigravityInstalled = Boolean(antigravity && antigravity.installed);
   const geminiInstalled = Boolean(gemini && gemini.installed);
   const cloudflareConnected = Boolean(cloudflare && cloudflare.connected);
   const showGeminiForm = geminiInstalled && (!geminiConnected || editingGemini);
   const showCloudflareForm = !cloudflareConnected || editingCloudflare;
   const codexBusy = Boolean(saving && saving.startsWith('codex'));
+  const antigravityBusy = Boolean(saving && saving.startsWith('antigravity'));
   const geminiBusy = Boolean(saving && saving.startsWith('gemini'));
   const cloudflareBusy = Boolean(saving && saving.startsWith('cloudflare'));
 
@@ -638,6 +841,126 @@ const ConnectionsSettings = () => {
         )}
 
         <Message value={messages.codex} />
+      </section>
+
+      <section style={CARD_STYLE}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '16px', marginBottom: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>
+            <div style={{ width: '46px', height: '38px', borderRadius: '10px', background: 'linear-gradient(135deg, #0f172a 0%, #2563eb 45%, #a855f7 100%)', border: '1px solid rgba(255,255,255,0.18)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+              <Sparkles size={22} color="#fff" />
+            </div>
+            <div style={{ minWidth: 0 }}>
+              <h3 style={{ margin: 0, fontSize: '15px', color: '#fff' }}>Antigravity CLI</h3>
+              <div style={{ marginTop: '4px', color: '#888', fontSize: '12px', lineHeight: 1.4 }}>
+                Google’ın resmî <strong style={{ color: '#aaa' }}>agy</strong> aracını kendi Google hesabınızla sunucuya bağlar.
+              </div>
+            </div>
+          </div>
+          <Status connected={antigravityConnected} idleLabel={antigravityInstalled ? 'Google hesabı bağlı değil' : 'Kurulu değil'} />
+        </div>
+
+        {!antigravityInstalled && (
+          <>
+            <div style={{ color: '#aaa', fontSize: '13px', lineHeight: 1.5, marginBottom: '12px' }}>
+              Antigravity, Gemini CLI’dan ayrı bir araçtır. Resmî Google kurucusu yalnız bu bağlantıya ayrılmış dizine kurulur; kurulum isteğe bağlıdır ve temel FoxOS çalışmasını etkilemez.
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '12px' }}>
+              <button type="button" onClick={installAntigravity} disabled={antigravityBusy} style={{ ...PRIMARY_BUTTON_STYLE, cursor: antigravityBusy ? 'wait' : 'pointer', opacity: antigravityBusy ? 0.5 : 1 }}>
+                {saving === 'antigravity-install' ? <Loader2 size={15} className="spin" /> : <HardDrive size={15} />} Sunucuya Kur
+              </button>
+              <a href="https://antigravity.google/docs/cli/install" target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', color: '#7dd3fc', fontSize: '12px', textDecoration: 'none' }}>Resmî kurulum belgesi <ExternalLink size={13} /></a>
+            </div>
+          </>
+        )}
+
+        {antigravityInstalled && !antigravityConnected && !antigravityLogin && (
+          <>
+            <div style={{ color: '#aaa', fontSize: '13px', lineHeight: 1.5, marginBottom: '12px' }}>
+              Giriş, uzak sunucuya uygun Google OAuth akışını kullanır. FoxOS’ta parola, token veya tarayıcı oturumu saklanmaz; hesabın kalıcılığı CLI tarafından yönetilir.
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
+              <button type="button" onClick={startAntigravityLogin} disabled={antigravityBusy} style={{ ...PRIMARY_BUTTON_STYLE, cursor: antigravityBusy ? 'wait' : 'pointer', opacity: antigravityBusy ? 0.5 : 1 }}>
+                {saving === 'antigravity-login' ? <Loader2 size={15} className="spin" /> : <Link2 size={15} />} Google Hesabını Bağla
+              </button>
+              <button type="button" onClick={installAntigravity} disabled={antigravityBusy} style={{ ...SECONDARY_BUTTON_STYLE, cursor: antigravityBusy ? 'wait' : 'pointer', opacity: antigravityBusy ? 0.5 : 1 }}><RefreshCw size={15} /> CLI’yi Güncelle</button>
+            </div>
+          </>
+        )}
+
+        {antigravityInstalled && !antigravityConnected && antigravityLogin && (
+          <form onSubmit={completeAntigravityLogin}>
+            <div style={{ padding: '14px', borderRadius: '10px', background: 'rgba(14,165,233,0.08)', border: '1px solid rgba(14,165,233,0.24)', marginBottom: '12px' }}>
+              <div style={{ color: '#ddd', fontSize: '13px', lineHeight: 1.55, marginBottom: '10px' }}>
+                1. Aşağıdaki gerçek bağlantıyı açın. 2. Google hesabınızla onaylayın. 3. Tarayıcıda gösterilen kodu buraya yapıştırın.
+              </div>
+              <a href={antigravityLogin.verificationUrl} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: '7px', color: '#7dd3fc', fontSize: '13px', fontWeight: 700, textDecoration: 'underline', textUnderlineOffset: '3px' }}>
+                Google’da Doğrula <ExternalLink size={14} />
+              </a>
+              <div style={{ color: '#888', fontSize: '11px', marginTop: '8px' }}>
+                Bağlantı yaklaşık 60 saniye geçerlidir{antigravityLogin.expiresAt ? ` · Bitiş: ${new Date(antigravityLogin.expiresAt).toLocaleTimeString('tr-TR')}` : ''}.
+              </div>
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center' }}>
+              <input
+                type="text"
+                value={antigravityCode}
+                onChange={(event) => { setAntigravityCode(event.target.value); setMessage('antigravity', null); }}
+                disabled={antigravityBusy}
+                placeholder="Google doğrulama kodu"
+                autoComplete="one-time-code"
+                spellCheck={false}
+                style={{ flex: '1 1 300px', minWidth: 0, background: '#24242a', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 12px', borderRadius: '8px', outline: 'none', fontSize: '13px', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}
+              />
+              <button type="submit" disabled={antigravityBusy || !antigravityCode.trim()} style={{ ...PRIMARY_BUTTON_STYLE, cursor: antigravityBusy || !antigravityCode.trim() ? 'not-allowed' : 'pointer', opacity: antigravityBusy || !antigravityCode.trim() ? 0.5 : 1 }}>
+                {saving === 'antigravity-login-complete' ? <Loader2 size={15} className="spin" /> : <ShieldCheck size={15} />} Kodu Doğrula
+              </button>
+              <button type="button" onClick={cancelAntigravityLogin} disabled={antigravityBusy} style={{ ...SECONDARY_BUTTON_STYLE, cursor: antigravityBusy ? 'not-allowed' : 'pointer', opacity: antigravityBusy ? 0.5 : 1 }}>İptal Et</button>
+            </div>
+          </form>
+        )}
+
+        {antigravityConnected && (
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 170px) minmax(0, 1fr)', rowGap: '10px', columnGap: '16px', fontSize: '13px', marginBottom: '16px', wordBreak: 'break-word' }}>
+              <div style={{ color: '#888' }}>CLI sürümü</div>
+              <div style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '12px' }}>{antigravity.version || 'Bilinmiyor'}</div>
+              <div style={{ color: '#888' }}>Kimlik doğrulama</div>
+              <div>Google OAuth · Antigravity tarafından yönetiliyor</div>
+              <div style={{ color: '#888' }}>Erişim profili</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '7px', color: antigravity.fullServer ? '#f6c453' : '#75da85', fontWeight: 700 }}>
+                {antigravity.fullServer ? <ShieldAlert size={14} /> : <ShieldCheck size={14} />}
+                {antigravity.fullServer ? 'Full Server — onay sormaz' : 'Salt-okunur — plan + strict'}
+              </div>
+              <div style={{ color: '#888' }}>Çalışma alanı</div>
+              <div>{antigravity.fullServer ? 'Sunucu kökü / · workspace dışı erişim açık' : 'Workspace sınırı · terminal sandboxı açık'}</div>
+              <div style={{ color: '#888' }}>Komut ve dosya onayı</div>
+              <div>{antigravity.fullServer ? 'Yok · always-proceed' : 'Sıkı izin · strict'}</div>
+              <div style={{ color: '#888' }}>Son doğrulama</div>
+              <div>{antigravity.lastVerifiedAt ? new Date(antigravity.lastVerifiedAt).toLocaleString('tr-TR') : 'Henüz yok'}</div>
+            </div>
+
+            {!antigravity.profileApplied && (
+              <div style={{ color: '#f6c453', fontSize: '12px', lineHeight: 1.5, marginBottom: '12px' }}>
+                Kalıcı ayar dosyası seçili profille eşleşmiyor. Profili yeniden seçmeden CLI’yi çalıştırmayın.
+              </div>
+            )}
+
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
+              {antigravity.fullServer ? (
+                <button type="button" onClick={setAntigravityReadOnly} disabled={antigravityBusy} style={{ ...SECONDARY_BUTTON_STYLE, cursor: antigravityBusy ? 'wait' : 'pointer', opacity: antigravityBusy ? 0.5 : 1 }}><ShieldCheck size={15} /> Salt-okunura Al</button>
+              ) : (
+                <button type="button" onClick={enableAntigravityFullServer} disabled={antigravityBusy} style={{ ...PRIMARY_BUTTON_STYLE, background: '#b7791f', cursor: antigravityBusy ? 'wait' : 'pointer', opacity: antigravityBusy ? 0.5 : 1 }}>
+                  {saving === 'antigravity-profile' ? <Loader2 size={15} className="spin" /> : <ShieldAlert size={15} />} Full Server’ı Etkinleştir
+                </button>
+              )}
+              <button type="button" onClick={verifyAntigravity} disabled={antigravityBusy} style={{ ...SECONDARY_BUTTON_STYLE, cursor: antigravityBusy ? 'wait' : 'pointer', opacity: antigravityBusy ? 0.5 : 1 }}>{saving === 'antigravity-verify' ? <Loader2 size={15} className="spin" /> : <RefreshCw size={15} />} Bağlantıyı Kontrol Et</button>
+              <button type="button" onClick={installAntigravity} disabled={antigravityBusy} style={{ ...SECONDARY_BUTTON_STYLE, cursor: antigravityBusy ? 'wait' : 'pointer', opacity: antigravityBusy ? 0.5 : 1 }}><RefreshCw size={15} /> CLI’yi Güncelle</button>
+              <button type="button" onClick={disconnectAntigravity} disabled={antigravityBusy} style={{ background: 'transparent', color: '#aaa', border: '1px solid rgba(255,255,255,0.12)', padding: '9px 14px', borderRadius: '8px', cursor: antigravityBusy ? 'not-allowed' : 'pointer', opacity: antigravityBusy ? 0.5 : 1, display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px' }}><Unplug size={15} /> Bağlantıyı Kes</button>
+            </div>
+          </>
+        )}
+
+        <Message value={messages.antigravity} />
       </section>
 
       <section style={CARD_STYLE}>

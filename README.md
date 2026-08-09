@@ -43,6 +43,8 @@ backup evidence and rollback history live on the server.
   paid plan, a domain or an API token to install or run.
 - Gemini CLI is an optional AI adapter. FoxOS does not install it or require a
   Google API key during base setup.
+- Antigravity CLI is a separate optional AI adapter. FoxOS does not install it,
+  start Google login or grant host access during base setup.
 - S3-compatible storage is an optional, provider-neutral recovery adapter. Base
   installation and ordinary server management work without it.
 - The installer never signs up for, provisions or enables a remote or billable
@@ -155,6 +157,30 @@ socket live in that owner-only host state; the FoxOS container holds only a
 disposable socket client. No app-server TCP listener is exposed. Account
 eligibility and usage limits remain those of the connected ChatGPT account;
 FoxOS does not create a subscription or make Codex a base-install dependency.
+
+### Antigravity CLI connection
+
+- Optionally install Google's native `agy` CLI from **Settings → Connections**
+  with the official Linux installer and a separate exact confirmation.
+- Connect the server owner's Google account through the documented remote OAuth
+  link and browser-returned code. The short-lived link and code are never
+  persisted or logged by FoxOS; credentials remain managed by Antigravity.
+- Start in a protected `plan` + `strict` profile with workspace confinement and
+  terminal sandboxing. Explicit account checks use `/usage` and make no model
+  request, while ordinary status reads stay fully local.
+- Separately confirm **Full Server** to enable root-equivalent host work from
+  `/` with workspace-external access and terminal sandboxing disabled. This
+  profile uses `always-proceed` for tools and artifacts plus explicit wildcard
+  permissions, so it does not ask again for individual commands, file changes
+  or artifact review.
+- Return to salt-okunur at any time. Disconnect first applies the protected
+  profile, then logs the Google account out and verifies the result while
+  leaving the optional CLI installed.
+
+This connector prepares Antigravity's native CLI and persistent permission
+profile. It does not yet add an Antigravity chat window, daemon or autonomous
+background agent inside FoxOS. Full Server should therefore be treated exactly
+like granting an authenticated root shell to later `agy` executions.
 
 ### Gemini CLI connection
 
@@ -447,6 +473,9 @@ authenticated FoxOS session should be treated as a server administrator.
   details, use **Tam Erişim — sorma** only when you intend to delegate every
   command and file change without another prompt, protect the FoxOS owner
   session and return Codex to read-only when the task is finished.
+- Treat Antigravity Full Server as an authenticated root shell with no
+  per-command prompt. Enable it only when that is intentional, protect the
+  FoxOS owner session and return Antigravity to salt-okunur when finished.
 - Back up encryption and recovery material separately from the server.
 - Read [SECURITY.md](SECURITY.md) before internet exposure or production
   migration.

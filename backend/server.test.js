@@ -500,6 +500,28 @@ test('health is public while management APIs require a session', async () => {
   assert.equal((await fetch(baseUrl() + '/api/connections/codex/memory', {
     method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{}'
   })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/antigravity')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/antigravity/install', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/antigravity/login', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/antigravity/login/complete', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/antigravity/login/cancel', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/antigravity/access-profile', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/antigravity/verify', {
+    method: 'POST'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/antigravity', {
+    method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
   assert.equal((await fetch(baseUrl() + '/api/connections/gemini')).status, 401);
   assert.equal((await fetch(baseUrl() + '/api/connections/gemini/install', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
@@ -618,19 +640,25 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   });
   assert.equal(connectionsResponse.status, 200);
   const connections = (await connectionsResponse.json()).connections;
-  assert.equal(connections.length, 3);
+  assert.equal(connections.length, 4);
   assert.equal(connections[0].id, 'codex');
   assert.equal(connections[0].installed, false);
   assert.equal(connections[0].connected, false);
   assert.equal(connections[0].accessProfile, 'read-only');
   assert.equal(connections[0].credentialIncluded, false);
-  assert.equal(connections[1].id, 'gemini-cli');
+  assert.equal(connections[1].id, 'antigravity-cli');
   assert.equal(connections[1].installed, false);
   assert.equal(connections[1].connected, false);
+  assert.equal(connections[1].accessProfile, 'read-only');
   assert.equal(connections[1].credentialIncluded, false);
-  assert.equal(connections[2].id, 'cloudflare');
+  assert.equal(connections[1].oauthAuthorizationUrlIncluded, false);
+  assert.equal(connections[2].id, 'gemini-cli');
+  assert.equal(connections[2].installed, false);
   assert.equal(connections[2].connected, false);
-  assert.equal(connections[2].tokenIncluded, false);
+  assert.equal(connections[2].credentialIncluded, false);
+  assert.equal(connections[3].id, 'cloudflare');
+  assert.equal(connections[3].connected, false);
+  assert.equal(connections[3].tokenIncluded, false);
 
   const unconfirmedCodexInstall = await fetch(baseUrl() + '/api/connections/codex/install', {
     method: 'POST',
@@ -639,6 +667,28 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   });
   assert.equal(unconfirmedCodexInstall.status, 400);
   assert.equal((await unconfirmedCodexInstall.json()).code, 'codex-install-confirmation-required');
+
+  const unconfirmedAntigravityInstall = await fetch(baseUrl() + '/api/connections/antigravity/install', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ confirmation: 'yes' })
+  });
+  assert.equal(unconfirmedAntigravityInstall.status, 400);
+  assert.equal((await unconfirmedAntigravityInstall.json()).code, 'antigravity-install-confirmation-required');
+
+  const antigravityFullServerWithoutCli = await fetch(
+    baseUrl() + '/api/connections/antigravity/access-profile',
+    {
+      method: 'PUT',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        accessProfile: 'full-server',
+        confirmation: 'ENABLE ANTIGRAVITY FULL SERVER'
+      })
+    }
+  );
+  assert.equal(antigravityFullServerWithoutCli.status, 409);
+  assert.equal((await antigravityFullServerWithoutCli.json()).code, 'antigravity-cli-not-installed');
 
   const unconfirmedGeminiInstall = await fetch(baseUrl() + '/api/connections/gemini/install', {
     method: 'POST',

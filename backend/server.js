@@ -82,6 +82,14 @@ const {
   createGeminiConnectionManager
 } = require('./geminiConnectionManager');
 const {
+  AntigravityConnectionError,
+  createAntigravityConnectionManager
+} = require('./antigravityConnectionManager');
+const {
+  createAntigravityLoginController,
+  finalJsonPayload
+} = require('./antigravityLoginController');
+const {
   codexDaemonEnsureScript,
   codexDaemonSocket,
   createCodexDaemonTransport
@@ -191,6 +199,16 @@ const GEMINI_HOST_STATE_ROOT = process.env.FOXOS_GEMINI_HOST_STATE_ROOT || '/var
 const GEMINI_HOST_HOME = GEMINI_HOST_STATE_ROOT;
 const GEMINI_INSTALL_PREFIX = path.posix.join(GEMINI_HOST_STATE_ROOT, '.local');
 const GEMINI_HOST_BINARY = path.posix.join(GEMINI_INSTALL_PREFIX, 'bin', 'gemini');
+const ANTIGRAVITY_HOST_STATE_ROOT = process.env.FOXOS_ANTIGRAVITY_HOST_STATE_ROOT || '/var/lib/foxos/antigravity';
+const ANTIGRAVITY_HOST_HOME = ANTIGRAVITY_HOST_STATE_ROOT;
+const ANTIGRAVITY_INSTALL_DIR = path.posix.join(ANTIGRAVITY_HOST_STATE_ROOT, '.local', 'bin');
+const ANTIGRAVITY_HOST_BINARY = path.posix.join(ANTIGRAVITY_INSTALL_DIR, 'agy');
+const ANTIGRAVITY_SETTINGS_FILE = path.posix.join(
+  ANTIGRAVITY_HOST_STATE_ROOT,
+  '.gemini',
+  'antigravity-cli',
+  'settings.json'
+);
 
 const loginAttempts = new Map();
 const appInstallOperations = new Set();
@@ -522,6 +540,26 @@ function geminiHostEnvironment(apiKey = null) {
   };
 }
 
+function antigravityHostEnvironment(remoteLogin = false) {
+  return {
+    HOME: ANTIGRAVITY_HOST_HOME,
+    ANTIGRAVITY_INSTALL_DIR,
+    PATH: ANTIGRAVITY_INSTALL_DIR + ':/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+    LANG: 'C.UTF-8',
+    LC_ALL: 'C.UTF-8',
+    LOGNAME: 'root',
+    NO_COLOR: '1',
+    SHELL: '/bin/sh',
+    TERM: 'xterm-256color',
+    USER: 'root',
+    ...(remoteLogin ? {
+      SSH_CLIENT: '127.0.0.1 1 22',
+      SSH_CONNECTION: '127.0.0.1 1 127.0.0.1 22',
+      SSH_TTY: '/dev/pts/0'
+    } : {})
+  };
+}
+
 function validateCodexHostPaths() {
   const paths = [
     CODEX_HOST_STATE_ROOT,
@@ -549,6 +587,23 @@ function validateGeminiHostPaths() {
 }
 
 validateGeminiHostPaths();
+
+function validateAntigravityHostPaths() {
+  const paths = [
+    ANTIGRAVITY_HOST_STATE_ROOT,
+    ANTIGRAVITY_HOST_HOME,
+    ANTIGRAVITY_INSTALL_DIR,
+    ANTIGRAVITY_HOST_BINARY,
+    ANTIGRAVITY_SETTINGS_FILE
+  ];
+  if (paths.some((entry) => (
+    !entry.startsWith('/') || entry === '/' || entry.length > 512 || /[\r\n\0]/.test(entry)
+  ))) {
+    throw new Error('FOXOS_ANTIGRAVITY_HOST_STATE_ROOT must be a safe absolute host path');
+  }
+}
+
+validateAntigravityHostPaths();
 
 function exactHostExecutableInvocation(hostExecutable, args) {
   if (HOST_EXECUTION === 'nsenter') {
@@ -645,6 +700,142 @@ async function inspectHostGeminiCli() {
         installed: !error,
         version: !error ? String(stdout || '').trim().slice(0, 120) || null : null
       });
+    });
+  });
+}
+
+async function inspectHostAntigravityCli() {
+  const invocation = exactHostExecutableInvocation(ANTIGRAVITY_HOST_BINARY, ['--version']);
+  return new Promise((resolve) => {
+    execFile(invocation.executable, invocation.args, {
+      cwd: invocation.cwd,
+      env: antigravityHostEnvironment(),
+      timeout: 15_000,
+      maxBuffer: 64 * 1024,
+      windowsHide: true
+    }, (error, stdout) => {
+      resolve({
+        installed: !error,
+        version: !error ? String(stdout || '').trim().slice(0, 120) || null : null
+      });
+    });
+  });
+}
+
+function installHostAntigravityCli() {
+  const script = [
+    'set -eu',
+    'umask 077',
+    'install -d -m 700 "$HOME" "$ANTIGRAVITY_INSTALL_DIR"',
+    'if test -x "$ANTIGRAVITY_INSTALL_DIR/agy"; then',
+    '  "$ANTIGRAVITY_INSTALL_DIR/agy" update',
+    'else',
+    '  antigravity_tmp="$(mktemp -d /tmp/foxos-antigravity-install.XXXXXX)"',
+    '  trap \'rm -f -- "$antigravity_tmp/install.sh"; rmdir -- "$antigravity_tmp" 2>/dev/null || true\' EXIT HUP INT TERM',
+    '  curl --fail --silent --show-error --location --proto \'=https\' --tlsv1.2 \\',
+    '    --output "$antigravity_tmp/install.sh" "https://antigravity.google/cli/install.sh"',
+    '  test -s "$antigravity_tmp/install.sh"',
+    '  /bin/bash "$antigravity_tmp/install.sh" --dir "$ANTIGRAVITY_INSTALL_DIR"',
+    'fi',
+    'test -x "$ANTIGRAVITY_INSTALL_DIR/agy"',
+    '"$ANTIGRAVITY_INSTALL_DIR/agy" --version >/dev/null'
+  ].join('\n');
+  const invocation = hostRootShellInvocation(script);
+  return new Promise((resolve, reject) => {
+    execFile(invocation.executable, invocation.args, {
+      cwd: invocation.cwd,
+      env: antigravityHostEnvironment(),
+      timeout: 5 * 60 * 1000,
+      maxBuffer: 512 * 1024,
+      windowsHide: true
+    }, (error) => {
+      if (error) {
+        return reject(new AntigravityConnectionError(
+          'Antigravity CLI sunucuya kurulamadı. Sunucu ağını ve resmi Google kurulum hizmetini kontrol edin.',
+          503,
+          'antigravity-cli-install-failed'
+        ));
+      }
+      resolve();
+    });
+  });
+}
+
+function antigravityUsageInvocation() {
+  return exactHostExecutableInvocation(ANTIGRAVITY_HOST_BINARY, [
+    '--output-format', 'json',
+    '--print-timeout', '20s',
+    '--print', '/usage'
+  ]);
+}
+
+function spawnHostAntigravityLogin() {
+  const invocation = antigravityUsageInvocation();
+  return spawn(invocation.executable, invocation.args, {
+    cwd: invocation.cwd,
+    env: antigravityHostEnvironment(true),
+    stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true
+  });
+}
+
+function inspectHostAntigravityAccount() {
+  const invocation = antigravityUsageInvocation();
+  return new Promise((resolve, reject) => {
+    execFile(invocation.executable, invocation.args, {
+      cwd: invocation.cwd,
+      env: antigravityHostEnvironment(true),
+      timeout: 10_000,
+      maxBuffer: 256 * 1024,
+      windowsHide: true
+    }, (error, stdout, stderr) => {
+      const output = String(stdout || '') + '\n' + String(stderr || '');
+      const payload = finalJsonPayload(output);
+      if (!error && payload && payload.status !== 'ERROR' && !payload.error) {
+        return resolve({ connected: true, authMode: 'google-oauth' });
+      }
+      if (
+        /Authentication required|authentication failed|accounts\.google\.com\/o\/oauth2\/auth/i.test(output)
+      ) {
+        return resolve({ connected: false, authMode: null });
+      }
+      reject(new AntigravityConnectionError(
+        error && error.killed
+          ? 'Antigravity hesap kontrolü zaman aşımına uğradı.'
+          : 'Antigravity hesap durumu okunamadı.',
+        error && error.killed ? 504 : 502,
+        error && error.killed
+          ? 'antigravity-account-verification-timeout'
+          : 'antigravity-account-verification-failed'
+      ));
+    });
+  });
+}
+
+function logoutHostAntigravityAccount() {
+  const invocation = exactHostExecutableInvocation(ANTIGRAVITY_HOST_BINARY, [
+    '--output-format', 'json',
+    '--print-timeout', '20s',
+    '--print', '/logout'
+  ]);
+  return new Promise((resolve, reject) => {
+    execFile(invocation.executable, invocation.args, {
+      cwd: invocation.cwd,
+      env: antigravityHostEnvironment(),
+      timeout: 30_000,
+      maxBuffer: 256 * 1024,
+      windowsHide: true
+    }, (error) => {
+      if (error && error.killed) {
+        return reject(new AntigravityConnectionError(
+          'Antigravity hesabından çıkış zaman aşımına uğradı.',
+          504,
+          'antigravity-logout-timeout'
+        ));
+      }
+      // The following account inspection is authoritative. Some releases exit
+      // non-zero after deleting the active session, so no output is trusted here.
+      resolve();
     });
   });
 }
@@ -1204,6 +1395,18 @@ const geminiConnectionManager = createGeminiConnectionManager({
   installCli: installHostGeminiCli,
   verifyCredential: verifyHostGeminiCredential
 });
+const antigravityLoginController = createAntigravityLoginController({
+  spawnLogin: spawnHostAntigravityLogin
+});
+const antigravityConnectionManager = createAntigravityConnectionManager({
+  dataRoot: DATA_ROOT,
+  settingsFile: mountedHostPath(ANTIGRAVITY_SETTINGS_FILE),
+  inspectCli: inspectHostAntigravityCli,
+  installCli: installHostAntigravityCli,
+  inspectAccount: inspectHostAntigravityAccount,
+  loginController: antigravityLoginController,
+  logoutAccount: logoutHostAntigravityAccount
+});
 const adoptionManager = createAdoptionManager({
   dataRoot: DATA_ROOT,
   dockerRequest,
@@ -1592,7 +1795,8 @@ function sendConnectionError(res, error, action) {
   if (status >= 500) console.error(action + ':', error.message);
   res.status(status).json({
     error: status >= 500 && !(error instanceof CloudflareConnectionError) &&
-      !(error instanceof CodexConnectionError) && !(error instanceof GeminiConnectionError)
+      !(error instanceof CodexConnectionError) && !(error instanceof GeminiConnectionError) &&
+      !(error instanceof AntigravityConnectionError)
       ? 'Bağlantı işlemi tamamlanamadı'
       : error.message,
     code: error.code || 'connection-error'
@@ -3032,11 +3236,12 @@ app.post('/api/adoptions/:operationId/rollback', async (req, res) => {
 
 app.get('/api/connections', async (req, res) => {
   try {
-    const [codex, gemini] = await Promise.all([
+    const [codex, antigravity, gemini] = await Promise.all([
       codexConnectionManager.status(),
+      antigravityConnectionManager.status(),
       geminiConnectionManager.status()
     ]);
-    res.json({ connections: [codex, gemini, cloudflareConnectionManager.status()] });
+    res.json({ connections: [codex, antigravity, gemini, cloudflareConnectionManager.status()] });
   } catch (error) {
     sendConnectionError(res, error, 'Could not read provider connections');
   }
@@ -3100,6 +3305,78 @@ app.delete('/api/connections/codex', async (req, res) => {
     res.json(await codexConnectionManager.disconnect(req.body && req.body.confirmation));
   } catch (error) {
     sendConnectionError(res, error, 'Could not disconnect Codex');
+  }
+});
+
+app.get('/api/connections/antigravity', async (req, res) => {
+  try {
+    res.json({ connection: await antigravityConnectionManager.status() });
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not read Antigravity CLI connection');
+  }
+});
+
+app.post('/api/connections/antigravity/install', async (req, res) => {
+  try {
+    res.status(201).json(await antigravityConnectionManager.install(req.body && req.body.confirmation));
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not install Antigravity CLI');
+  }
+});
+
+app.post('/api/connections/antigravity/login', async (req, res) => {
+  try {
+    res.status(201).json({ login: await antigravityConnectionManager.startLogin() });
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not start Antigravity login');
+  }
+});
+
+app.post('/api/connections/antigravity/login/complete', async (req, res) => {
+  try {
+    const connection = await antigravityConnectionManager.completeLogin(
+      req.body && req.body.loginId,
+      req.body && req.body.authorizationCode
+    );
+    res.json({ connection });
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not complete Antigravity login');
+  }
+});
+
+app.post('/api/connections/antigravity/login/cancel', async (req, res) => {
+  try {
+    res.json(await antigravityConnectionManager.cancelLogin(req.body && req.body.loginId));
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not cancel Antigravity login');
+  }
+});
+
+app.put('/api/connections/antigravity/access-profile', async (req, res) => {
+  try {
+    const connection = await antigravityConnectionManager.setAccessProfile(
+      req.body && req.body.accessProfile,
+      req.body && req.body.confirmation
+    );
+    res.json({ connection });
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not configure Antigravity access');
+  }
+});
+
+app.post('/api/connections/antigravity/verify', async (req, res) => {
+  try {
+    res.json({ connection: await antigravityConnectionManager.verify() });
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not verify Antigravity connection');
+  }
+});
+
+app.delete('/api/connections/antigravity', async (req, res) => {
+  try {
+    res.json(await antigravityConnectionManager.disconnect(req.body && req.body.confirmation));
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not disconnect Antigravity CLI');
   }
 });
 
