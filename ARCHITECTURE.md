@@ -245,8 +245,8 @@ root-equivalent and can change files, Docker, systemd, packages and networking.
 Command and file-change approval requests are represented by short-lived opaque
 FoxOS IDs; only fixed Codex decisions can be returned.
 
-All connection, thread, event, interrupt and approval endpoints remain behind
-the existing FoxOS owner session. That owner session is durable control-plane
+All connection, thread, turn-steering, event, interrupt and approval endpoints
+remain behind the existing FoxOS owner session. That owner session is durable control-plane
 state: FoxOS persists only a SHA-256 token digest in owner-only server data,
 renews the 12-hour expiry during active use and removes it on logout. Agent
 recreation therefore cannot invalidate the browser while its Codex turn keeps
@@ -260,6 +260,17 @@ Recreating or stopping the FoxOS agent disconnects
 only the socket client: the host daemon and an already-running turn continue.
 The next agent reconnects to the same control socket and reloads durable thread
 history.
+
+The Codex window does not treat one active turn as an application-wide lock.
+An owner can create or resume another thread while earlier work continues in
+the host daemon, and each conversation exposes its own active state. Additional
+input submitted on the selected in-flight turn is bound to both the thread and
+the expected turn ID and forwarded through `turn/steer`; it cannot be mistaken
+for a new turn or redirected to a different conversation. The UI keeps the stop
+control separate from message submission so steering does not interrupt work.
+Agent messages are rendered as escaped CommonMark plus GFM, with safe URL
+transforms, explicit external-link handling and FoxOS-local file-link opening;
+raw model HTML is never executed.
 
 Thread resume is also bounded independently from rollout size. FoxOS opts into
 the App Server's negotiated experimental pagination capability, rejoins a

@@ -19,29 +19,8 @@ import {
 } from 'lucide-react';
 import { apiFetch } from '../api';
 import { useWindowManager } from '../contexts/WindowContext';
-
-const BUTTON_STYLE = {
-  border: '1px solid rgba(255,255,255,0.14)',
-  borderRadius: '8px',
-  color: '#fff',
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  gap: '7px',
-  fontSize: '12px',
-  padding: '8px 11px'
-};
-
-const SELECT_STYLE = {
-  minWidth: '150px',
-  border: '1px solid rgba(255,255,255,0.14)',
-  borderRadius: '7px',
-  background: 'rgba(255,255,255,0.07)',
-  color: '#fff',
-  fontSize: '12px',
-  padding: '7px 28px 7px 9px',
-  outline: 'none'
-};
+import CodexMarkdown from './CodexMarkdown';
+import './CodexApp.css';
 
 const MODEL_STORAGE_KEY = 'foxos.codex.model';
 const REASONING_STORAGE_KEY = 'foxos.codex.reasoning-effort';
@@ -232,6 +211,22 @@ const activeTurnFromThread = (thread) => {
 
 const threadTitle = (thread) => thread.name || thread.preview || 'Yeni konuşma';
 
+const eventThreadId = (event) => {
+  const params = event && event.params || {};
+  return params.threadId || params.thread?.id || params.turn?.threadId || null;
+};
+
+const localFileDetails = (href) => {
+  let decoded = String(href || '');
+  try { decoded = decodeURI(decoded); } catch {}
+  decoded = decoded.split(/[?#]/, 1)[0];
+  const location = decoded.match(/^(.*?):(\d+)(?::(\d+))?$/);
+  const filePath = location ? location[1] : decoded;
+  const line = location ? Number(location[2]) : null;
+  const name = filePath.split('/').filter(Boolean).at(-1) || filePath;
+  return { filePath, line, name };
+};
+
 const threadTime = (thread) => {
   const timestamp = thread.recencyAt || thread.updatedAt || thread.createdAt;
   if (!timestamp) return '';
@@ -269,14 +264,18 @@ const CodexApp = () => {
   const [threadsLoading, setThreadsLoading] = useState(true);
   const [loadingMoreThreads, setLoadingMoreThreads] = useState(false);
   const [resumingThreadId, setResumingThreadId] = useState(null);
+  const [startingTurn, setStartingTurn] = useState(false);
+  const [steering, setSteering] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [historyError, setHistoryError] = useState(null);
   const cursorRef = useRef(0);
+  const activityCursorRef = useRef(0);
   const bottomRef = useRef(null);
   const autoResumeAttemptedRef = useRef(false);
   const resumeConversationRef = useRef(null);
+  const selectedThreadRef = useRef(null);
 
   const usable = Boolean(connection && connection.ready && connection.fullServer);
   const connectionReady = Boolean(connection && connection.ready);
@@ -294,6 +293,20 @@ const CodexApp = () => {
     width: 800,
     height: 550
   });
+
+  const openLocalFile = (href) => {
+    const { filePath, line, name } = localFileDetails(href);
+    if (!filePath.startsWith('/')) return;
+    openWindow({
+      id: `codex-file-${encodeURIComponent(`${filePath}:${line || 0}`).slice(0, 180)}`,
+      type: 'text-viewer',
+      title: line ? `${name}:${line}` : name,
+      filePath: `/Sunucu${filePath}`,
+      initialLine: line,
+      width: 760,
+      height: 590
+    });
+  };
 
   const loadConnection = async () => {
     const response = await apiFetch('/api/connections/codex');
@@ -338,8 +351,15 @@ const CodexApp = () => {
   };
 
   const resumeConversation = async (selectedThreadId, { silent = false } = {}) => {
-    if (!selectedThreadId || busy || resumingThreadId) return;
+    if (!selectedThreadId || resumingThreadId || startingTurn) return;
+    if (selectedThreadId === threadId && !silent) return;
     setResumingThreadId(selectedThreadId);
+    selectedThreadRef.current = selectedThreadId;
+    setThreadId(selectedThreadId);
+    setEntries([]);
+    setActiveTurnId(null);
+    setBusy(false);
+    cursorRef.current = 0;
     if (!silent) setError(null);
     try {
       const response = await apiFetch(`/api/codex/threads/${encodeURIComponent(selectedThreadId)}/resume`, {
@@ -351,6 +371,7 @@ const CodexApp = () => {
       const resumedThread = payload.thread;
       const activeTurn = activeTurnFromThread(resumedThread);
       cursorRef.current = 0;
+      selectedThreadRef.current = resumedThread.id;
       setThreadId(resumedThread.id);
       setActiveModel(payload.model || '');
       setActiveReasoningEffort(payload.reasoningEffort || '');
@@ -374,7 +395,13 @@ const CodexApp = () => {
       ) {
         removePreference(ACTIVE_THREAD_STORAGE_KEY);
       }
-      setError(requestError.message);
+      if (selectedThreadRef.current === selectedThreadId || !selectedThreadRef.current) {
+        setError(requestError.message);
+        selectedThreadRef.current = null;
+        setThreadId(null);
+        setActiveTurnId(null);
+        setBusy(false);
+      }
     } finally {
       setResumingThreadId(null);
     }
@@ -386,6 +413,10 @@ const CodexApp = () => {
       .catch((requestError) => setError(requestError.message))
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    selectedThreadRef.current = threadId;
+  }, [threadId]);
 
   useEffect(() => {
     if (!connectionReady) {
@@ -443,6 +474,65 @@ const CodexApp = () => {
   }, [usable, threadsLoading, threadId]);
 
   useEffect(() => {
+    if (!usable) return undefined;
+    let cancelled = false;
+    let pending = false;
+    activityCursorRef.current = 0;
+    const pollActivity = async () => {
+      if (pending || cancelled) return;
+      pending = true;
+      try {
+        const response = await apiFetch(`/api/codex/events?after=${activityCursorRef.current}`);
+        const payload = await response.json();
+        if (cancelled) return;
+        activityCursorRef.current = payload.cursor;
+        const events = Array.isArray(payload.events) ? payload.events : [];
+        if (!events.length) return;
+        const statusChanges = new Map();
+        for (const event of events) {
+          const ownerThreadId = eventThreadId(event);
+          if (!ownerThreadId) continue;
+          if (event.method === 'turn/started') statusChanges.set(ownerThreadId, 'active');
+          if (event.method === 'turn/completed') statusChanges.set(ownerThreadId, 'idle');
+          if (ownerThreadId !== selectedThreadRef.current) continue;
+          if (event.method === 'turn/started' && event.params?.turn?.id) {
+            setActiveTurnId(event.params.turn.id);
+            setBusy(true);
+          }
+          if (event.method === 'turn/completed') {
+            const completedTurnId = event.params?.turn?.id || null;
+            setActiveTurnId((current) => !completedTurnId || current === completedTurnId ? null : current);
+            setBusy(false);
+          }
+        }
+        if (statusChanges.size) {
+          const timestamp = Math.floor(Date.now() / 1000);
+          setThreads((current) => current.map((thread) => statusChanges.has(thread.id)
+            ? {
+              ...thread,
+              status: statusChanges.get(thread.id),
+              ...(statusChanges.get(thread.id) === 'idle'
+                ? { updatedAt: timestamp, recencyAt: timestamp }
+                : {})
+            }
+            : thread));
+        }
+      } catch {
+        // The selected-thread poll surfaces connection errors. This poll only
+        // keeps background activity badges current.
+      } finally {
+        pending = false;
+      }
+    };
+    pollActivity();
+    const timer = window.setInterval(pollActivity, 900);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [usable]);
+
+  useEffect(() => {
     if (!threadId) return undefined;
     let cancelled = false;
     let pending = false;
@@ -454,7 +544,7 @@ const CodexApp = () => {
           `/api/codex/events?after=${cursorRef.current}&threadId=${encodeURIComponent(threadId)}`
         );
         const payload = await response.json();
-        if (cancelled) return;
+        if (cancelled || selectedThreadRef.current !== threadId) return;
         cursorRef.current = payload.cursor;
         if (payload.events && payload.events.length) {
           setEntries((current) => applyEvents(current, payload.events));
@@ -475,7 +565,7 @@ const CodexApp = () => {
           }
         }
       } catch (requestError) {
-        if (!cancelled) setError(requestError.message);
+        if (!cancelled && selectedThreadRef.current === threadId) setError(requestError.message);
       } finally {
         pending = false;
       }
@@ -526,7 +616,8 @@ const CodexApp = () => {
   });
 
   const startConversation = () => {
-    if (busy) return;
+    if (resumingThreadId || startingTurn) return;
+    selectedThreadRef.current = null;
     setThreadId(null);
     setActiveTurnId(null);
     setActiveModel('');
@@ -534,6 +625,8 @@ const CodexApp = () => {
     setActiveApprovalPolicy('');
     setEntries([]);
     setPrompt('');
+    setBusy(false);
+    setSteering(false);
     setError(null);
     cursorRef.current = 0;
     removePreference(ACTIVE_THREAD_STORAGE_KEY);
@@ -541,13 +634,49 @@ const CodexApp = () => {
 
   const submitPrompt = async () => {
     const text = prompt.trim();
-    if (!text || busy || resumingThreadId) return;
+    if (!text || resumingThreadId || startingTurn || steering) return;
+    if (busy && threadId && activeTurnId) {
+      const optimisticId = `user:steer:${Date.now()}:${Math.random().toString(16).slice(2)}`;
+      setPrompt('');
+      setSteering(true);
+      setError(null);
+      setEntries((current) => [...current, {
+        id: optimisticId,
+        type: 'user',
+        text,
+        delivery: 'pending'
+      }]);
+      try {
+        await apiFetch(
+          `/api/codex/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(activeTurnId)}/steer`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text })
+          }
+        );
+        setEntries((current) => current.map((entry) => entry.id === optimisticId
+          ? { ...entry, delivery: 'accepted' }
+          : entry));
+      } catch (requestError) {
+        setEntries((current) => current.map((entry) => entry.id === optimisticId
+          ? { ...entry, delivery: 'failed' }
+          : entry));
+        setError(requestError.message);
+      } finally {
+        setSteering(false);
+      }
+      return;
+    }
+    if (busy) return;
     let currentThread = threadId;
+    const optimisticId = `user:${Date.now()}:${Math.random().toString(16).slice(2)}`;
     setPrompt('');
     setBusy(true);
+    setStartingTurn(true);
     setError(null);
     setEntries((current) => [...current, {
-      id: `user:${Date.now()}`,
+      id: optimisticId,
       type: 'user',
       text
     }]);
@@ -561,6 +690,7 @@ const CodexApp = () => {
         });
         const threadPayload = await threadResponse.json();
         currentThread = threadPayload.thread.id;
+        selectedThreadRef.current = currentThread;
         setThreadId(currentThread);
         setActiveModel(threadPayload.model || selectedModel);
         setActiveReasoningEffort(threadPayload.reasoningEffort || reasoningEffort);
@@ -582,20 +712,27 @@ const CodexApp = () => {
         body: JSON.stringify({ text, approvalPolicy })
       });
       const payload = await response.json();
-      setActiveTurnId(payload.turn && payload.turn.id || null);
-      setActiveApprovalPolicy(payload.approvalPolicy || approvalPolicy);
+      if (selectedThreadRef.current === currentThread) {
+        setActiveTurnId(payload.turn && payload.turn.id || null);
+        setActiveApprovalPolicy(payload.approvalPolicy || approvalPolicy);
+        setBusy(true);
+      }
       setThreads((current) => current.map((thread) => (
         thread.id === currentThread
           ? { ...thread, preview: thread.preview || text, updatedAt: Math.floor(Date.now() / 1000), recencyAt: Math.floor(Date.now() / 1000), status: 'active' }
           : thread
       )));
     } catch (requestError) {
-      setBusy(false);
-      setEntries((current) => [...current, {
-        id: `error:${Date.now()}`,
-        type: 'error',
-        text: requestError.message
-      }]);
+      if (!currentThread || selectedThreadRef.current === currentThread) {
+        setBusy(false);
+        setEntries((current) => [...current, {
+          id: `error:${Date.now()}`,
+          type: 'error',
+          text: requestError.message
+        }]);
+      }
+    } finally {
+      setStartingTurn(false);
     }
   };
 
@@ -632,217 +769,264 @@ const CodexApp = () => {
     if (!connection.installed) return 'Kurulu değil';
     if (!connection.connected) return 'Hesap bağlı değil';
     if (!connection.fullServer) return 'Salt okunur';
-    return `Full Server · / · ${effectiveApprovalPolicy === NO_APPROVAL_POLICY ? 'İzin sorma' : 'Onaylı'}`;
-  }, [connection, effectiveApprovalPolicy]);
+    return 'Sunucuya bağlı';
+  }, [connection]);
+  const canSubmit = Boolean(prompt.trim()) && !resumingThreadId && !startingTurn && !steering && (
+    busy
+      ? Boolean(threadId && activeTurnId)
+      : Boolean(threadId || selectionReady)
+  );
+  const activeModelLabel = models.find((entry) => entry.model === activeModel)?.displayName || activeModel;
 
   if (loading) {
     return (
-      <div style={{ height: '100%', display: 'grid', placeItems: 'center', color: '#888' }}>
-        <Loader2 size={18} className="spin" />
+      <div className="codex-shell">
+        <div className="codex-loading"><Loader2 size={18} className="spin" /></div>
       </div>
     );
   }
 
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'rgba(20,20,24,0.96)', color: '#fff', minWidth: 0 }}>
-      <div style={{ padding: '11px 14px', borderBottom: '1px solid rgba(255,255,255,0.09)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '9px', minWidth: 0 }}>
+    <div className="codex-shell">
+      <header className="codex-topbar">
+        <div className="codex-brand">
           <button
             type="button"
             onClick={() => setSidebarOpen((current) => !current)}
             disabled={!usable}
             title={sidebarOpen ? 'Konuşma geçmişini gizle' : 'Konuşma geçmişini göster'}
             aria-label={sidebarOpen ? 'Konuşma geçmişini gizle' : 'Konuşma geçmişini göster'}
-            style={{ ...BUTTON_STYLE, width: '32px', height: '32px', padding: 0, background: 'rgba(255,255,255,0.05)', cursor: usable ? 'pointer' : 'not-allowed', opacity: usable ? 1 : 0.45 }}
+            className="codex-icon-button"
           >
             {sidebarOpen ? <PanelLeftClose size={15} /> : <PanelLeftOpen size={15} />}
           </button>
-          <Bot size={19} color={usable ? '#75da85' : '#aaa'} />
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: '13px', fontWeight: 700 }}>Codex</div>
-            <div style={{ color: usable ? '#75da85' : '#888', fontSize: '11px', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{statusLabel}</div>
+          <div className="codex-brand-mark"><Bot size={16} /></div>
+          <div className="codex-brand-copy">
+            <div className="codex-brand-title">Codex</div>
+            <div className="codex-brand-status">{statusLabel}</div>
           </div>
         </div>
-        <div style={{ display: 'flex', gap: '8px' }}>
-          <button type="button" onClick={startConversation} disabled={!usable || busy || Boolean(resumingThreadId)} style={{ ...BUTTON_STYLE, background: 'rgba(255,255,255,0.07)', cursor: !usable || busy || resumingThreadId ? 'not-allowed' : 'pointer', opacity: !usable || busy || resumingThreadId ? 0.45 : 1 }}>
-            <Plus size={14} /> Yeni Konuşma
+        <div className="codex-top-actions">
+          <button
+            type="button"
+            onClick={startConversation}
+            disabled={!usable || Boolean(resumingThreadId) || startingTurn}
+            className="codex-secondary-button"
+            title="Yeni konuşma"
+          >
+            <Plus size={14} /> <span>Yeni konuşma</span>
           </button>
-          <button type="button" onClick={openConnections} style={{ ...BUTTON_STYLE, background: 'rgba(255,255,255,0.07)', cursor: 'pointer' }}>
-            <Settings size={14} /> Bağlantı
+          <button type="button" onClick={openConnections} className="codex-secondary-button">
+            <Settings size={14} /> <span>Bağlantı</span>
           </button>
         </div>
-      </div>
+      </header>
 
       {!usable ? (
-        <div style={{ flex: 1, display: 'grid', placeItems: 'center', padding: '24px' }}>
-          <div style={{ maxWidth: '480px', padding: '20px', borderRadius: '12px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', textAlign: 'center' }}>
+        <div className="codex-gate">
+          <div className="codex-gate-card">
             <ShieldAlert size={28} color="#f6c453" />
-            <h3 style={{ fontSize: '16px', margin: '12px 0 8px' }}>Full Server bağlantısı gerekli</h3>
-            <p style={{ color: '#aaa', fontSize: '13px', lineHeight: 1.55, margin: '0 0 14px' }}>
+            <h3>Full Server bağlantısı gerekli</h3>
+            <p>
               Codex CLI’ı kurun, kendi ChatGPT hesabınızı bağlayın ve Full Server erişimini açıkça etkinleştirin.
             </p>
-            <button type="button" onClick={openConnections} style={{ ...BUTTON_STYLE, background: '#0ea5e9', border: 'none', cursor: 'pointer', fontWeight: 700 }}>
+            <button type="button" onClick={openConnections} className="codex-secondary-button">
               <Settings size={14} /> Bağlantılar’a Git
             </button>
           </div>
         </div>
       ) : (
-        <div style={{ flex: 1, display: 'flex', minHeight: 0, minWidth: 0 }}>
+        <div className="codex-workspace">
           {sidebarOpen && (
-            <aside style={{ width: 'clamp(190px, 25%, 240px)', flex: '0 0 clamp(190px, 25%, 240px)', display: 'flex', flexDirection: 'column', minHeight: 0, borderRight: '1px solid rgba(255,255,255,0.09)', background: 'rgba(0,0,0,0.16)' }}>
-              <div style={{ height: '45px', padding: '0 10px 0 12px', display: 'flex', alignItems: 'center', gap: '7px', borderBottom: '1px solid rgba(255,255,255,0.07)', color: '#bbb' }}>
+            <aside className="codex-sidebar">
+              <div className="codex-sidebar-top">
+                <button
+                  type="button"
+                  onClick={startConversation}
+                  disabled={Boolean(resumingThreadId) || startingTurn}
+                  className="codex-new-chat"
+                >
+                  <Plus size={14} /> Yeni konuşma
+                </button>
+              </div>
+              <div className="codex-sidebar-heading">
                 <History size={14} />
-                <span style={{ fontSize: '12px', fontWeight: 700 }}>Konuşmalar</span>
+                <span>Konuşmalar</span>
                 <button
                   type="button"
                   onClick={refreshThreads}
                   disabled={threadsLoading}
                   title="Geçmişi yenile"
                   aria-label="Konuşma geçmişini yenile"
-                  style={{ marginLeft: 'auto', border: 'none', background: 'transparent', color: '#999', display: 'grid', placeItems: 'center', cursor: threadsLoading ? 'wait' : 'pointer', padding: '5px' }}
                 >
                   <RefreshCw size={13} className={threadsLoading ? 'spin' : ''} />
                 </button>
               </div>
-              <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '8px' }}>
+              <div className="codex-thread-list">
                 {threadsLoading && !threads.length ? (
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '7px', padding: '20px 8px', color: '#777', fontSize: '11px' }}><Loader2 size={13} className="spin" /> Geçmiş yükleniyor</div>
+                  <div className="codex-sidebar-message"><Loader2 size={13} className="spin" /> Geçmiş yükleniyor</div>
                 ) : !threads.length ? (
-                  <div style={{ padding: '18px 10px', color: '#777', fontSize: '11px', lineHeight: 1.5, textAlign: 'center' }}>Henüz kayıtlı konuşma yok.</div>
+                  <div className="codex-sidebar-message">Henüz kayıtlı konuşma yok.</div>
                 ) : threads.map((thread) => {
                   const active = thread.id === threadId;
                   const resuming = thread.id === resumingThreadId;
+                  const running = thread.status === 'active';
                   return (
                     <button
                       key={thread.id}
                       type="button"
                       onClick={() => resumeConversation(thread.id)}
-                      disabled={busy || Boolean(resumingThreadId)}
+                      disabled={Boolean(resumingThreadId) || startingTurn}
                       aria-current={active ? 'page' : undefined}
                       title={threadTitle(thread)}
-                      style={{ width: '100%', display: 'block', border: `1px solid ${active ? 'rgba(14,165,233,0.38)' : 'transparent'}`, background: active ? 'rgba(14,165,233,0.13)' : 'transparent', color: active ? '#fff' : '#bbb', borderRadius: '8px', padding: '9px 10px', marginBottom: '3px', textAlign: 'left', cursor: busy || resumingThreadId ? 'not-allowed' : 'pointer', opacity: busy && !active ? 0.55 : 1 }}
+                      className={`codex-thread-row${active ? ' is-selected' : ''}`}
                     >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
-                        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '12px', fontWeight: active ? 700 : 500 }}>{threadTitle(thread)}</span>
-                        {resuming ? <Loader2 size={12} className="spin" /> : <span style={{ color: '#666', fontSize: '10px', whiteSpace: 'nowrap' }}>{threadTime(thread)}</span>}
+                      <span className={`codex-thread-dot${running ? ' is-running' : ''}`} aria-hidden="true" />
+                      <div className="codex-thread-copy">
+                        <div className="codex-thread-title">{threadTitle(thread)}</div>
+                        {(running || resuming) && <div className="codex-thread-state">{resuming ? 'Açılıyor…' : 'Çalışıyor'}</div>}
                       </div>
+                      {resuming ? <Loader2 size={12} className="spin" /> : <span className="codex-thread-time">{threadTime(thread)}</span>}
                     </button>
                   );
                 })}
                 {nextThreadCursor && (
-                  <button type="button" onClick={loadMoreThreads} disabled={loadingMoreThreads} style={{ ...BUTTON_STYLE, width: '100%', marginTop: '7px', background: 'rgba(255,255,255,0.04)', color: '#aaa', cursor: loadingMoreThreads ? 'wait' : 'pointer' }}>
+                  <button type="button" onClick={loadMoreThreads} disabled={loadingMoreThreads} className="codex-load-more">
                     {loadingMoreThreads && <Loader2 size={12} className="spin" />} Daha fazla
                   </button>
                 )}
-                {historyError && <div style={{ color: '#ff8a84', fontSize: '11px', lineHeight: 1.45, padding: '9px' }}>{historyError}</div>}
+                {historyError && <div className="codex-sidebar-message is-error">{historyError}</div>}
               </div>
             </aside>
           )}
 
-          <section style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-            <div style={{ padding: '9px 14px', borderBottom: '1px solid rgba(255,255,255,0.09)', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '7px', color: '#aaa', fontSize: '11px' }}>
-                Model
-                <select aria-label="Codex modeli" value={selectedModel} onChange={(event) => chooseModel(event.target.value)} disabled={modelsLoading || busy || !models.length} style={{ ...SELECT_STYLE, opacity: modelsLoading || busy ? 0.5 : 1 }}>
-                  {models.map((model) => <option key={model.model} value={model.model}>{model.displayName}</option>)}
-                </select>
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '7px', color: '#aaa', fontSize: '11px' }}>
-                Reasoning
-                <select aria-label="Codex reasoning seviyesi" value={reasoningEffort} onChange={(event) => chooseReasoningEffort(event.target.value)} disabled={modelsLoading || busy || !selectedModelDetails} style={{ ...SELECT_STYLE, minWidth: '110px', opacity: modelsLoading || busy ? 0.5 : 1 }}>
-                  {(selectedModelDetails?.supportedReasoningEfforts || []).map((effort) => <option key={effort} value={effort}>{REASONING_LABELS[effort] || effort}</option>)}
-                </select>
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '7px', color: approvalPolicy === NO_APPROVAL_POLICY ? '#f6c453' : '#aaa', fontSize: '11px' }}>
-                <ShieldCheck size={13} /> İzinler
-                <select aria-label="Codex izin politikası" value={approvalPolicy} onChange={(event) => chooseApprovalPolicy(event.target.value)} disabled={busy || Boolean(resumingThreadId)} style={{ ...SELECT_STYLE, minWidth: '154px', borderColor: approvalPolicy === NO_APPROVAL_POLICY ? 'rgba(246,196,83,0.4)' : 'rgba(255,255,255,0.14)', opacity: busy || resumingThreadId ? 0.5 : 1 }}>
+          <section className="codex-main">
+            <div className="codex-config-row">
+              {threadId ? (
+                <div className="codex-thread-meta">
+                  <Bot size={12} />
+                  <span>{activeModelLabel || 'Codex'} · {REASONING_LABELS[activeReasoningEffort] || activeReasoningEffort || '—'}</span>
+                </div>
+              ) : (
+                <>
+                  <label className="codex-config-field">
+                    <span>Model</span>
+                    <select aria-label="Codex modeli" value={selectedModel} onChange={(event) => chooseModel(event.target.value)} disabled={modelsLoading || !models.length}>
+                      {models.map((model) => <option key={model.model} value={model.model}>{model.displayName}</option>)}
+                    </select>
+                  </label>
+                  <label className="codex-config-field">
+                    <span>Reasoning</span>
+                    <select aria-label="Codex reasoning seviyesi" value={reasoningEffort} onChange={(event) => chooseReasoningEffort(event.target.value)} disabled={modelsLoading || !selectedModelDetails}>
+                      {(selectedModelDetails?.supportedReasoningEfforts || []).map((effort) => <option key={effort} value={effort}>{REASONING_LABELS[effort] || effort}</option>)}
+                    </select>
+                  </label>
+                </>
+              )}
+              <label className={`codex-config-field is-permission${approvalPolicy === NO_APPROVAL_POLICY ? ' is-unrestricted' : ''}`}>
+                <ShieldCheck size={12} /> <span>İzinler</span>
+                <select aria-label="Codex izin politikası" value={approvalPolicy} onChange={(event) => chooseApprovalPolicy(event.target.value)} disabled={busy || Boolean(resumingThreadId)}>
                   <option value={DEFAULT_APPROVAL_POLICY}>Gerektiğinde sor</option>
                   <option value={NO_APPROVAL_POLICY}>Tam Erişim — sorma</option>
                 </select>
               </label>
-              <div style={{ color: approvalPolicy === NO_APPROVAL_POLICY ? '#d9b85f' : '#777', fontSize: '11px', lineHeight: 1.35 }}>
-                {modelsLoading
-                  ? 'Modeller yükleniyor...'
-                  : approvalPolicy === NO_APPROVAL_POLICY
-                    ? 'Sonraki istekte komut ve dosya değişiklikleri için onay istenmez.'
-                    : threadId && activeModel
-                      ? `Aktif: ${activeModel} · ${REASONING_LABELS[activeReasoningEffort] || activeReasoningEffort}. Model değişikliği yeni konuşmada uygulanır.`
-                      : 'Yeni konuşma ayarları'}
-              </div>
             </div>
 
-            <div style={{ flex: 1, overflowY: 'auto', padding: '16px' }}>
+            <div className="codex-conversation">
               {resumingThreadId && !entries.length ? (
-                <div style={{ minHeight: '100%', display: 'grid', placeItems: 'center', color: '#888', fontSize: '12px' }}><div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}><Loader2 size={15} className="spin" /> Konuşma açılıyor...</div></div>
+                <div className="codex-empty-state"><div className="codex-agent-loading"><Loader2 size={15} className="spin" /> Konuşma açılıyor…</div></div>
               ) : !entries.length ? (
-                <div style={{ minHeight: '100%', display: 'grid', placeItems: 'center', color: '#777', textAlign: 'center' }}>
+                <div className="codex-empty-state">
                   <div>
-                    <Bot size={34} style={{ marginBottom: '10px' }} />
-                    <div style={{ fontSize: '14px', color: '#aaa' }}>{threadId ? 'Bu konuşmaya devam edebilirsiniz.' : 'Codex bütün Linux sunucusunda çalışmaya hazır.'}</div>
-                    <div style={{ fontSize: '12px', marginTop: '5px' }}>
+                    <div className="codex-empty-mark"><Bot size={19} /></div>
+                    <div className="codex-empty-title">{threadId ? 'Bu konuşmaya devam edebilirsin' : 'Sunucuda ne yapmak istersin?'}</div>
+                    <div className="codex-empty-copy">
                       {threadId
                         ? connection.memoryEnabled
-                          ? 'Geçmiş konuşma açıldı; Drive hafızası bu oturum için yeniden yüklenecek.'
+                          ? 'Geçmiş ve kişisel hafıza bu konuşma için hazır.'
                           : 'Geçmiş konuşma sunucudaki Codex kaydından açıldı.'
                         : connection.memoryEnabled
-                          ? 'Drive hafızası ilk mesajdan önce otomatik yüklenir.'
+                          ? 'Dosyalar, servisler ve hafızan bu konuşmada kullanılabilir.'
                           : 'Dosyalar, Docker, systemd, servisler ve paketler dahil.'}
                     </div>
                   </div>
                 </div>
               ) : null}
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              {!!entries.length && <div className="codex-thread-column">
+              <div className="codex-entry-list">
                 {entries.map((entry) => {
                   if (entry.type === 'user') {
-                    return <div key={entry.id} style={{ alignSelf: 'flex-end', maxWidth: '78%', background: '#0b6fa4', padding: '10px 12px', borderRadius: '12px 12px 3px 12px', fontSize: '13px', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{entry.text}</div>;
-                  }
-                  if (entry.type === 'agent') {
-                    return <div key={entry.id} style={{ maxWidth: '88%', color: '#e5e5e5', fontSize: '13px', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{entry.text || <Loader2 size={14} className="spin" />}</div>;
-                  }
-                  if (entry.type === 'command') {
                     return (
-                      <div key={entry.id} style={{ border: '1px solid rgba(255,255,255,0.1)', borderRadius: '10px', background: 'rgba(0,0,0,0.28)', overflow: 'hidden' }}>
-                        <div style={{ padding: '8px 10px', display: 'flex', gap: '8px', alignItems: 'center', borderBottom: entry.output ? '1px solid rgba(255,255,255,0.08)' : 'none', color: '#aaa', fontSize: '11px' }}>
-                          <TerminalSquare size={13} /> <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', color: '#ddd' }}>{entry.command || 'Komut çalışıyor'}</span>
-                          <span style={{ marginLeft: 'auto' }}>{entry.status}</span>
-                        </div>
-                        {entry.output && <pre style={{ margin: 0, padding: '10px', maxHeight: '260px', overflow: 'auto', whiteSpace: 'pre-wrap', color: '#bbb', fontSize: '11px', lineHeight: 1.45 }}>{entry.output}</pre>}
-                      </div>
-                    );
-                  }
-                  if (entry.type === 'file') {
-                    return <div key={entry.id} style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', color: '#b9dfc0', fontSize: '12px', whiteSpace: 'pre-wrap' }}><Code2 size={14} style={{ marginTop: 2 }} />{entry.text}</div>;
-                  }
-                  if (entry.type === 'approval') {
-                    const canAcceptSession = !entry.availableDecisions || entry.availableDecisions.includes('acceptForSession');
-                    return (
-                      <div key={entry.id} style={{ border: '1px solid rgba(246,196,83,0.35)', background: 'rgba(246,196,83,0.08)', borderRadius: '10px', padding: '12px' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#f6c453', fontWeight: 700, fontSize: '13px' }}><ShieldAlert size={15} /> Codex onay istiyor</div>
-                        {entry.reason && <div style={{ color: '#bbb', fontSize: '12px', marginTop: '8px' }}>{entry.reason}</div>}
-                        {entry.command && <pre style={{ whiteSpace: 'pre-wrap', margin: '9px 0 0', padding: '9px', borderRadius: '7px', background: 'rgba(0,0,0,0.3)', color: '#eee', fontSize: '11px' }}>{entry.command}</pre>}
-                        {entry.resolved ? (
-                          <div style={{ marginTop: '9px', color: entry.decision.startsWith('accept') ? '#75da85' : '#aaa', fontSize: '12px' }}>{entry.decision.startsWith('accept') ? 'Onaylandı' : 'Reddedildi'}</div>
-                        ) : (
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '10px' }}>
-                            <button type="button" onClick={() => resolveApproval(entry, 'accept')} style={{ ...BUTTON_STYLE, background: '#238636', border: 'none', cursor: 'pointer' }}><Check size={13} /> Bir Kez Onayla</button>
-                            {canAcceptSession && <button type="button" onClick={() => resolveApproval(entry, 'acceptForSession')} style={{ ...BUTTON_STYLE, background: 'rgba(255,255,255,0.08)', cursor: 'pointer' }}>Bu Oturumda Onayla</button>}
-                            <button type="button" onClick={() => resolveApproval(entry, 'decline')} style={{ ...BUTTON_STYLE, background: 'transparent', cursor: 'pointer' }}><X size={13} /> Reddet</button>
+                      <div key={entry.id} className="codex-user-message">
+                        {entry.text}
+                        {entry.delivery && (
+                          <div className={`codex-user-delivery${entry.delivery === 'failed' ? ' is-failed' : ''}`}>
+                            {entry.delivery === 'pending' ? 'Çalışan isteğe ekleniyor…' : entry.delivery === 'accepted' ? 'Çalışan isteğe eklendi' : 'Eklenemedi'}
                           </div>
                         )}
                       </div>
                     );
                   }
-                  return <div key={entry.id} style={{ color: entry.type === 'error' ? '#ff8a84' : '#f6c453', fontSize: '12px' }}>{entry.text}</div>;
+                  if (entry.type === 'agent') {
+                    return (
+                      <div key={entry.id} className="codex-agent-message">
+                        {entry.text
+                          ? <CodexMarkdown onOpenLocalFile={openLocalFile}>{entry.text}</CodexMarkdown>
+                          : <div className="codex-agent-loading"><Loader2 size={14} className="spin" /> Yanıt hazırlanıyor…</div>}
+                      </div>
+                    );
+                  }
+                  if (entry.type === 'command') {
+                    return (
+                      <div key={entry.id} className="codex-command-card">
+                        <div className="codex-command-title">
+                          <TerminalSquare size={13} /> <code>{entry.command || 'Komut çalışıyor'}</code>
+                          <span>{entry.status}</span>
+                        </div>
+                        {entry.output && <pre className="codex-command-output">{entry.output}</pre>}
+                      </div>
+                    );
+                  }
+                  if (entry.type === 'file') {
+                    return <div key={entry.id} className="codex-file-change"><Code2 size={14} />{entry.text}</div>;
+                  }
+                  if (entry.type === 'approval') {
+                    const canAcceptSession = !entry.availableDecisions || entry.availableDecisions.includes('acceptForSession');
+                    return (
+                      <div key={entry.id} className="codex-approval-card">
+                        <div className="codex-approval-title"><ShieldAlert size={15} /> Codex onay istiyor</div>
+                        {entry.reason && <div className="codex-approval-reason">{entry.reason}</div>}
+                        {entry.command && <pre className="codex-approval-command">{entry.command}</pre>}
+                        {entry.resolved ? (
+                          <div className="codex-approval-reason">{entry.decision.startsWith('accept') ? 'Onaylandı' : 'Reddedildi'}</div>
+                        ) : (
+                          <div className="codex-approval-actions">
+                            <button type="button" onClick={() => resolveApproval(entry, 'accept')} className="is-accept"><Check size={13} /> Bir kez onayla</button>
+                            {canAcceptSession && <button type="button" onClick={() => resolveApproval(entry, 'acceptForSession')}>Bu oturumda onayla</button>}
+                            <button type="button" onClick={() => resolveApproval(entry, 'decline')}><X size={13} /> Reddet</button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }
+                  return <div key={entry.id} className={`codex-inline-notice${entry.type === 'error' ? ' is-error' : ''}`}>{entry.text}</div>;
                 })}
-                {busy && <div style={{ display: 'flex', alignItems: 'center', gap: '7px', color: '#888', fontSize: '12px' }}><Loader2 size={13} className="spin" /> Codex çalışıyor...</div>}
+                {busy && (
+                  <div className="codex-working">
+                    <span className="codex-working-dots" aria-hidden="true"><i /><i /><i /></span>
+                    Codex çalışıyor
+                  </div>
+                )}
                 <div ref={bottomRef} />
               </div>
+              </div>}
             </div>
 
-            <div style={{ borderTop: '1px solid rgba(255,255,255,0.09)', padding: '12px' }}>
-              {error && <div style={{ color: '#ff8a84', fontSize: '12px', marginBottom: '8px' }}>{error}</div>}
-              <div style={{ display: 'flex', alignItems: 'flex-end', gap: '8px', borderRadius: '10px', background: 'rgba(255,255,255,0.06)', border: `1px solid ${approvalPolicy === NO_APPROVAL_POLICY ? 'rgba(246,196,83,0.3)' : 'rgba(255,255,255,0.12)'}`, padding: '8px' }}>
+            <div className="codex-composer-wrap">
+              <div className="codex-composer-column">
+              {error && <div className="codex-composer-error">{error}</div>}
+              <div className={`codex-composer${effectiveApprovalPolicy === NO_APPROVAL_POLICY ? ' is-unrestricted' : ''}`}>
                 <textarea
                   value={prompt}
                   onChange={(event) => setPrompt(event.target.value)}
@@ -852,16 +1036,35 @@ const CodexApp = () => {
                       submitPrompt();
                     }
                   }}
-                  disabled={busy || Boolean(resumingThreadId)}
-                  placeholder="Sunucuda ne yapmamı istersin?"
+                  disabled={Boolean(resumingThreadId)}
+                  placeholder={busy ? 'Çalışan isteğe bir şey ekle…' : 'Sunucuda ne yapmamı istersin?'}
+                  aria-label={busy ? 'Çalışan Codex isteğine mesaj ekle' : 'Codex’e mesaj gönder'}
                   rows={2}
-                  style={{ flex: 1, resize: 'none', background: 'transparent', color: '#fff', border: 'none', outline: 'none', font: 'inherit', fontSize: '13px', lineHeight: 1.45, minHeight: '38px' }}
                 />
-                {busy && activeTurnId ? (
-                  <button type="button" onClick={interrupt} title="Durdur" style={{ ...BUTTON_STYLE, width: '36px', height: '36px', padding: 0, background: 'rgba(255,95,86,0.15)', color: '#ff8a84', cursor: 'pointer' }}><CircleStop size={16} /></button>
-                ) : (
-                  <button type="button" onClick={submitPrompt} disabled={!prompt.trim() || Boolean(resumingThreadId) || (!threadId && !selectionReady)} title="Gönder" style={{ ...BUTTON_STYLE, width: '36px', height: '36px', padding: 0, background: '#0ea5e9', border: 'none', cursor: prompt.trim() && !resumingThreadId && (threadId || selectionReady) ? 'pointer' : 'not-allowed', opacity: prompt.trim() && !resumingThreadId && (threadId || selectionReady) ? 1 : 0.45 }}><Send size={16} /></button>
-                )}
+                <div className="codex-composer-footer">
+                  <div className="codex-composer-status">
+                    <span className={`codex-status-dot${busy ? ' is-running' : ''}`} aria-hidden="true" />
+                    <span>{busy
+                      ? steering ? 'Mesaj ekleniyor…' : 'Codex çalışıyor · Yeni mesaj bu işe eklenir'
+                      : threadId ? 'Bu konuşmaya devam et' : `${selectedModelDetails?.displayName || 'Codex'} · ${REASONING_LABELS[reasoningEffort] || reasoningEffort}`}</span>
+                  </div>
+                  <div className="codex-composer-actions">
+                    {busy && activeTurnId && (
+                      <button type="button" onClick={interrupt} title="Çalışmayı durdur" aria-label="Çalışmayı durdur" className="codex-stop-button"><CircleStop size={15} /></button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={submitPrompt}
+                      disabled={!canSubmit}
+                      title={busy ? 'Çalışan isteğe ekle' : 'Gönder'}
+                      aria-label={busy ? 'Çalışan isteğe ekle' : 'Gönder'}
+                      className={`codex-send-button${busy ? ' is-steer' : ''}`}
+                    >
+                      {startingTurn || steering ? <Loader2 size={15} className="spin" /> : <Send size={15} />}
+                    </button>
+                  </div>
+                </div>
+              </div>
               </div>
             </div>
           </section>

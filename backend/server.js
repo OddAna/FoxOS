@@ -3004,6 +3004,18 @@ app.post('/api/codex/threads/:threadId/turns', async (req, res) => {
   }
 });
 
+app.post('/api/codex/threads/:threadId/turns/:turnId/steer', async (req, res) => {
+  try {
+    res.json(await codexConnectionManager.steerTurn(
+      req.params.threadId,
+      req.params.turnId,
+      req.body && req.body.text
+    ));
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not steer Codex turn');
+  }
+});
+
 app.post('/api/codex/threads/:threadId/turns/:turnId/interrupt', async (req, res) => {
   try {
     res.json(await codexConnectionManager.interruptTurn(req.params.threadId, req.params.turnId));

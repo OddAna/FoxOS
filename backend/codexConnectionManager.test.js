@@ -181,6 +181,9 @@ function fakeAppServer({ getAccount, setAccount }) {
       });
       return;
     }
+    if (message.method === 'turn/steer') {
+      return respond({ id: message.id, result: { turnId: message.params.expectedTurnId } });
+    }
     if (message.method === 'turn/interrupt' || message.method === 'account/login/cancel') {
       return respond({ id: message.id, result: {} });
     }
@@ -339,6 +342,54 @@ test('Full Server threads use host root and stream large events without size-bas
   assert.equal(largeEvents.length, 2);
   assert.equal(largeEvents[0].params.delta.length, largeDelta.length);
   assert.equal(largeEvents[1].params.delta, largeDelta);
+  fixture.manager.stop();
+});
+
+test('an active Codex turn accepts additional user input through turn steer', async () => {
+  const fixture = createFixture({ installed: true });
+  await fixture.manager.startLogin();
+  await fixture.manager.setAccessProfile('full-server', FULL_SERVER_CONFIRMATION);
+  const started = await fixture.manager.startThread();
+  const running = await fixture.manager.startTurn(started.thread.id, 'İlk isteği çalıştır.');
+
+  const steered = await fixture.manager.steerTurn(
+    started.thread.id,
+    running.turn.id,
+    'Önce başarısız testlere bak.'
+  );
+  assert.deepEqual(steered, { steered: true, turnId: running.turn.id });
+
+  const child = fixture.children[0];
+  const request = child.received.find((message) => message.method === 'turn/steer');
+  assert.deepEqual(request.params, {
+    threadId: started.thread.id,
+    input: [{ type: 'text', text: 'Önce başarısız testlere bak.' }],
+    expectedTurnId: running.turn.id
+  });
+  assert.equal(Object.hasOwn(request.params, 'approvalPolicy'), false);
+  await assert.rejects(
+    fixture.manager.steerTurn(started.thread.id, 'bad\nturn', 'Geçersiz.'),
+    (error) => error.code === 'codex-turn-id-invalid'
+  );
+  fixture.manager.stop();
+});
+
+test('a second Codex conversation can start while another thread has an in-flight turn', async () => {
+  const fixture = createFixture({ installed: true });
+  await fixture.manager.startLogin();
+  await fixture.manager.setAccessProfile('full-server', FULL_SERVER_CONFIRMATION);
+  const first = await fixture.manager.startThread();
+  await fixture.manager.startTurn(first.thread.id, 'Uzun işi başlat.');
+  const second = await fixture.manager.startThread();
+  await fixture.manager.startTurn(second.thread.id, 'Bağımsız soruyu yanıtla.');
+
+  assert.notEqual(first.thread.id, second.thread.id);
+  const child = fixture.children[0];
+  assert.equal(child.received.filter((message) => message.method === 'thread/start').length, 2);
+  assert.deepEqual(
+    child.received.filter((message) => message.method === 'turn/start').map((message) => message.params.threadId),
+    [first.thread.id, second.thread.id]
+  );
   fixture.manager.stop();
 });
 

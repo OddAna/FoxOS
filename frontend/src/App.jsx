@@ -853,7 +853,7 @@ const Desktop = () => {
       case 'server': return <ServerApp />;
       case 'settings': return <SettingsApp target={win.navigation} />;
       case 'files': return <FilesApp initialPath={win.initialPath} />;
-      case 'text-viewer': return <TextEditorApp filePath={win.filePath} />;
+      case 'text-viewer': return <TextEditorApp filePath={win.filePath} initialLine={win.initialLine} />;
       case 'image-viewer': return <ImageViewerApp filePath={win.filePath} />;
       case 'media-player': return <MediaPlayerApp filePath={win.filePath} ext={win.ext} />;
       case 'terminal': return <TerminalApp />;

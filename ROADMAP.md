@@ -484,7 +484,10 @@ target blocks only adoption/migration operations that require restore proof.
   at host `/` with `danger-full-access` and default `untrusted` approvals. The
   owner can explicitly select per-thread `never` approvals. Non-ephemeral
   app-server threads are listed and resumed from the Codex-owned persistent
-  history. An optional server-private Drive memory reference injects an
+  history. Active work does not lock the whole Codex window: another thread can
+  start independently, and expected-turn-bound `turn/steer` input can be added
+  to the selected in-flight turn. Agent Markdown, fenced code and links render
+  as safe interactive content instead of raw notation. An optional server-private Drive memory reference injects an
   `AGENTS.md` then `index.md` bootstrap into new and resumed threads without
   returning the folder location or committing it to Git. OpenAI's managed
   app-server daemon runs on the host behind an

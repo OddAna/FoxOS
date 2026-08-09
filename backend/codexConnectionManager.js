@@ -78,6 +78,14 @@ function normalizeThreadId(value) {
   return threadId;
 }
 
+function normalizeTurnId(value) {
+  const turnId = typeof value === 'string' ? value.trim() : '';
+  if (!turnId || turnId.length > MAX_THREAD_ID_LENGTH || /[\r\n\0]/.test(turnId)) {
+    throw new CodexConnectionError('Codex çalışma kimliği geçersiz.', 400, 'codex-turn-id-invalid');
+  }
+  return turnId;
+}
+
 function normalizeApprovalPolicy(value) {
   const approvalPolicy = value === undefined || value === null || value === ''
     ? DEFAULT_APPROVAL_POLICY
@@ -1130,11 +1138,36 @@ function createCodexConnectionManager({
     return { turn: result.turn || null, approvalPolicy };
   }
 
-  async function interruptTurn(threadId, turnId) {
-    if (typeof threadId !== 'string' || !threadId || typeof turnId !== 'string' || !turnId) {
-      throw new CodexConnectionError('Codex çalışma kimliği geçersiz.', 400, 'codex-turn-id-invalid');
+  async function steerTurn(threadId, turnId, text) {
+    await requireFullServer();
+    const normalizedThreadId = normalizeThreadId(threadId);
+    const normalizedTurnId = normalizeTurnId(turnId);
+    const prompt = typeof text === 'string' ? text.trim() : '';
+    if (!prompt || prompt.length > MAX_PROMPT_LENGTH) {
+      throw new CodexConnectionError('Codex isteği boş veya çok uzun.', 400, 'codex-prompt-invalid');
     }
-    await client.request('turn/interrupt', { threadId, turnId });
+    const result = await client.request('turn/steer', {
+      threadId: normalizedThreadId,
+      input: [{ type: 'text', text: prompt }],
+      expectedTurnId: normalizedTurnId
+    });
+    if (!result || result.turnId !== normalizedTurnId) {
+      throw new CodexConnectionError(
+        'Mesaj çalışan Codex isteğine eklenemedi.',
+        502,
+        'codex-turn-steer-invalid'
+      );
+    }
+    return { steered: true, turnId: normalizedTurnId };
+  }
+
+  async function interruptTurn(threadId, turnId) {
+    const normalizedThreadId = normalizeThreadId(threadId);
+    const normalizedTurnId = normalizeTurnId(turnId);
+    await client.request('turn/interrupt', {
+      threadId: normalizedThreadId,
+      turnId: normalizedTurnId
+    });
     return { interrupted: true };
   }
 
@@ -1160,6 +1193,9 @@ function createCodexConnectionManager({
     ),
     startTurn: (threadId, text, approvalPolicy) => serializeRuntimeMutation(
       () => startTurn(threadId, text, approvalPolicy)
+    ),
+    steerTurn: (threadId, turnId, text) => serializeRuntimeMutation(
+      () => steerTurn(threadId, turnId, text)
     ),
     status,
     stop: () => client.stop()
