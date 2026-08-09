@@ -74,8 +74,9 @@
   authentication, real host-root `/` execution, `danger-full-access` plus
   default `untrusted` approvals, the explicit owner-selected per-thread `never`
   option, persisted app-server thread history, a host-owned managed app-server
-  daemon, its owner-only Unix WebSocket control socket, bounded in-memory events
-  and owner-authenticated endpoints. The optional Drive-memory folder reference
+  daemon, its owner-only Unix WebSocket control socket, a count-based in-memory
+  event ring without byte-size omission, and owner-authenticated endpoints. The
+  optional Drive-memory folder reference
   is server-local private configuration: keep it out of Git and ordinary logs,
   store it with owner-only permissions, never return its location through the
   API, and inject its `AGENTS.md` then `index.md` bootstrap only into new or
@@ -86,8 +87,9 @@
   owner session must survive the same recreation in owner-only persistent state;
   never persist its raw bearer token, only a one-way digest, and remove it on
   logout. Resume large durable threads through the negotiated `excludeTurns`
-  plus bounded `thread/turns/list` summary pagination path; never raise the Unix
-  WebSocket payload ceiling merely to ingest an unbounded rollout response.
+  plus bounded `thread/turns/list` summary pagination path for efficiency, but
+  do not impose a FoxOS byte-size ceiling on the Unix WebSocket or replace a
+  large live event with a size-warning placeholder.
   Revoking Full Server must stop the runtime and block earlier threads;
   disconnect must revoke access and log out while leaving the CLI optional.
 - A clean public installation must require no external provider account, domain,
