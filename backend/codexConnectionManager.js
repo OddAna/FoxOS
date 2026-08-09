@@ -133,19 +133,39 @@ function normalizeMemoryConfig(value) {
   };
 }
 
-function memoryDeveloperInstructions(config) {
+function memoryDeveloperInstructions(config, localMemoryVault = null) {
   const memory = config && config.memory;
   if (!memory || memory.enabled !== true) return null;
-  return [
+  const localVault = typeof localMemoryVault === 'string' && localMemoryVault
+    ? localMemoryVault
+    : null;
+  const instructions = [
     'FoxOS owner-configured private memory bootstrap:',
-    'Before answering the first user message in this thread, use the connected Google Drive capability to open this exact private folder:',
+  ];
+  if (localVault) {
+    const localSearch = path.posix.join(localVault, 'tools', 'memory-search');
+    instructions.push(
+      `Preferred owner-only local hybrid snapshot: ${localVault}`,
+      `Before answering the first user message in this thread, read AGENTS.md completely first at ${path.posix.join(localVault, 'AGENTS.md')}, then read index.md completely at ${path.posix.join(localVault, 'index.md')}.`,
+      `For substantive memory questions, run ${localSearch} search with the user\'s question as one safely quoted argument and --json; use the returned chunks first and open only the one to three returned pages needed for exact detail.`,
+      'The local helper combines SQLite FTS5/BM25, local multilingual embeddings, reciprocal-rank fusion and identifier-aware path matching. Treat the local vault as a read-only retrieval snapshot, not the writable source of truth.',
+      'For freshness-sensitive facts, newly created pages, consequential actions, or a local miss, verify only the relevant candidates through the connected Google Drive capability. Do not bulk-load the Drive vault.'
+    );
+  } else {
+    instructions.push(
+      'Before answering the first user message in this thread, use the connected Google Drive capability to read AGENTS.md completely, then index.md completely.'
+    );
+  }
+  instructions.push(
+    'The authoritative private Google Drive folder is:',
     memory.folderUrl,
-    'Read AGENTS.md completely first, then read index.md. Follow the vault rules and use the compact index to open only the memory pages relevant to the user\'s actual request.',
+    'Follow the vault rules and use only memory relevant to the user\'s actual request.',
     'When the request concerns this FoxOS server or prior maintenance, search the same folder for foxos-46-server-operations.md and read only the relevant recent entries before acting.',
-    'If a vault instruction names a local helper that is unavailable on this server, use targeted Google Drive search, folder listing, and file fetch instead; do not treat the missing local helper as missing memory.',
+    'If the local snapshot or helper is unavailable, use targeted Google Drive search, folder listing, and file fetch instead; do not treat a missing local helper as missing memory.',
     'Do not expose or copy the folder URL, connector credentials, authentication state, tokens, or private memory into Git, repository files, command logs, or ordinary responses.',
-    'Do not claim memory was loaded unless both startup files were read successfully. If the Drive connection is unavailable, tell the owner briefly and continue with the available context.'
-  ].join('\n');
+    'Do not claim memory was loaded unless both startup files were read successfully. If Drive freshness cannot be verified, say so briefly when freshness matters and continue with the verified local snapshot.'
+  );
+  return instructions.join('\n');
 }
 
 function normalizedTimestamp(value) {
@@ -624,6 +644,7 @@ function createCodexConnectionManager({
   prepareAppServer,
   spawnAppServer,
   stopAppServer,
+  memoryVaultPath = null,
   clock = () => new Date()
 }) {
   if (
@@ -637,6 +658,16 @@ function createCodexConnectionManager({
 
   const root = path.join(dataRoot, 'connections', PROVIDER);
   const configFile = path.join(root, 'config.json');
+  const localMemoryVault = typeof memoryVaultPath === 'string' && memoryVaultPath.trim()
+    ? path.posix.normalize(memoryVaultPath.trim())
+    : null;
+  if (
+    localMemoryVault &&
+    (!path.posix.isAbsolute(localMemoryVault) || localMemoryVault === '/' ||
+      localMemoryVault.length > 512 || /[\r\n\0]/.test(localMemoryVault))
+  ) {
+    throw new Error('Codex memory vault path must be a safe absolute host path');
+  }
   let hostRuntimeKnownStopped = false;
   let loginInProgress = false;
   const client = new CodexAppServerClient({
@@ -1002,7 +1033,7 @@ function createCodexConnectionManager({
         'codex-reasoning-effort-invalid'
       );
     }
-    const developerInstructions = memoryDeveloperInstructions(config);
+    const developerInstructions = memoryDeveloperInstructions(config, localMemoryVault);
     const result = await client.request('thread/start', {
       model: selectedModel.model,
       cwd: '/',
@@ -1034,7 +1065,7 @@ function createCodexConnectionManager({
     const config = await requireFullServer();
     const normalizedThreadId = normalizeThreadId(threadId);
     const approvalPolicy = normalizeApprovalPolicy(requestedApprovalPolicy);
-    const developerInstructions = memoryDeveloperInstructions(config);
+    const developerInstructions = memoryDeveloperInstructions(config, localMemoryVault);
     const result = await client.request('thread/resume', {
       threadId: normalizedThreadId,
       cwd: '/',

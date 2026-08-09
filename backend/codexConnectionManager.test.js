@@ -189,7 +189,7 @@ function fakeAppServer({ getAccount, setAccount }) {
   return child;
 }
 
-function createFixture({ installed = false } = {}) {
+function createFixture({ installed = false, memoryVaultPath = '/private/ana-memory/vault' } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-codex-'));
   let cliInstalled = installed;
   let account = null;
@@ -213,6 +213,7 @@ function createFixture({ installed = false } = {}) {
       return child;
     },
     stopAppServer: async () => { runtime.stopCalls += 1; },
+    memoryVaultPath,
     clock: () => new Date('2026-08-08T12:00:00.000Z')
   });
   return { children, manager, root, runtime };
@@ -391,14 +392,20 @@ test('private Drive memory is hidden from status and bootstraps new and resumed 
   const started = await fixture.manager.startThread('gpt-5.6-sol', 'low');
   const child = fixture.children[0];
   const threadStart = child.received.find((message) => message.method === 'thread/start');
-  assert.match(threadStart.params.developerInstructions, /Read AGENTS\.md completely first/);
+  assert.match(threadStart.params.developerInstructions, /read AGENTS\.md completely first/i);
   assert.match(threadStart.params.developerInstructions, /then read index\.md/);
+  assert.match(threadStart.params.developerInstructions, /local hybrid snapshot/);
+  assert.match(threadStart.params.developerInstructions, /tools\/memory-search/);
+  assert.match(threadStart.params.developerInstructions, /SQLite FTS5\/BM25/);
+  assert.ok(threadStart.params.developerInstructions.includes('/private/ana-memory/vault'));
   assert.match(threadStart.params.developerInstructions, /foxos-46-server-operations\.md/);
   assert.ok(threadStart.params.developerInstructions.includes(folderUrl));
   assert.equal(started.memoryEnabled, true);
 
   const resumed = await fixture.manager.resumeThread(started.thread.id);
   const threadResume = child.received.find((message) => message.method === 'thread/resume');
+  assert.match(threadResume.params.developerInstructions, /local hybrid snapshot/);
+  assert.ok(threadResume.params.developerInstructions.includes('/private/ana-memory/vault'));
   assert.ok(threadResume.params.developerInstructions.includes(folderUrl));
   assert.equal(resumed.memoryEnabled, true);
 

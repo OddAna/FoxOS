@@ -182,6 +182,7 @@ const CODEX_HOST_HOME = CODEX_HOST_STATE_ROOT;
 const CODEX_HOST_CONFIG_HOME = path.posix.join(CODEX_HOST_STATE_ROOT, '.codex');
 const CODEX_HOST_BINARY = path.posix.join(CODEX_HOST_STATE_ROOT, '.local', 'bin', 'codex');
 const CODEX_HOST_DAEMON_SOCKET = codexDaemonSocket(CODEX_HOST_CONFIG_HOME);
+const CODEX_MEMORY_VAULT = path.posix.join(CODEX_HOST_STATE_ROOT, 'ana-memory', 'vault');
 
 const loginAttempts = new Map();
 const appInstallOperations = new Set();
@@ -498,7 +499,13 @@ function codexHostEnvironment() {
 }
 
 function validateCodexHostPaths() {
-  const paths = [CODEX_HOST_STATE_ROOT, CODEX_HOST_HOME, CODEX_HOST_CONFIG_HOME, CODEX_HOST_BINARY];
+  const paths = [
+    CODEX_HOST_STATE_ROOT,
+    CODEX_HOST_HOME,
+    CODEX_HOST_CONFIG_HOME,
+    CODEX_HOST_BINARY,
+    CODEX_MEMORY_VAULT
+  ];
   if (paths.some((entry) => (
     !entry.startsWith('/') || entry === '/' || entry.length > 512 || /[\r\n\0]/.test(entry)
   ))) {
@@ -1048,7 +1055,8 @@ const codexConnectionManager = createCodexConnectionManager({
   installCli: installHostCodexCli,
   prepareAppServer: prepareHostCodexAppServer,
   spawnAppServer: spawnHostCodexAppServer,
-  stopAppServer: stopHostCodexAppServer
+  stopAppServer: stopHostCodexAppServer,
+  memoryVaultPath: CODEX_MEMORY_VAULT
 });
 const adoptionManager = createAdoptionManager({
   dataRoot: DATA_ROOT,

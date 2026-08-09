@@ -265,11 +265,18 @@ An owner may also configure an optional private Google Drive memory folder in
 server data under `connections/codex/config.json` with mode `600`; status APIs
 expose only configured/enabled state and a display label, never the folder
 location. When enabled, FoxOS adds private developer instructions to both
-`thread/start` and `thread/resume`: Codex must fetch `AGENTS.md` completely,
-then `index.md`, and retrieve only task-relevant memory before responding. A
-clean installation has no memory folder or Drive dependency, and disabling the
-feature preserves the private local reference without injecting it into later
-threads.
+`thread/start` and `thread/resume`. If the owner-only hybrid snapshot exists
+under the Codex host state root, Codex reads its local `AGENTS.md` and compact
+`index.md`, then uses local `tools/memory-search` before opening additional
+pages. The helper combines SQLite FTS5/BM25, local multilingual embeddings,
+reciprocal-rank fusion and identifier-aware path matching.
+
+Google Drive remains the writable source of truth and the targeted fallback
+for fresh, newly created or missing material. The local Markdown snapshot,
+model cache and disposable SQLite index remain outside Git and are never
+returned by connection-status APIs. A clean installation has no memory folder
+or Drive dependency, and disabling the feature preserves the private local
+reference without injecting it into later threads.
 
 Changing the profile back to read-only stops the current app-server runtime and
 blocks turns on earlier Full Server threads. Disconnect first revokes Full Server,
