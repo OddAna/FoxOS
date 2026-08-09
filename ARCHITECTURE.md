@@ -260,6 +260,14 @@ only the socket client: the host daemon and an already-running turn continue.
 The next agent reconnects to the same control socket and reloads durable thread
 history.
 
+Thread resume is also bounded independently from rollout size. FoxOS opts into
+the App Server's negotiated experimental pagination capability, rejoins a
+thread with `excludeTurns`, then loads at most 200 recent turns in 50-turn
+pages using summary item view. A very large command or Drive transfer can
+therefore grow Codex's durable rollout without forcing one oversized WebSocket
+frame through the FoxOS client. Individual live events remain bounded and
+consecutive duplicate oversize notices are coalesced per thread and method.
+
 An owner may also configure an optional private Google Drive memory folder in
 **Bağlantılar**. FoxOS stores the canonical folder reference only in its ignored
 server data under `connections/codex/config.json` with mode `600`; status APIs

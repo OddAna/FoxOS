@@ -131,10 +131,31 @@ function fakeAppServer({ getAccount, setAccount }) {
       return respond({
         id: message.id,
         result: {
-          thread,
+          thread: message.params.excludeTurns ? { ...thread, turns: [] } : thread,
           model: 'gpt-5.6-sol',
           reasoningEffort: 'low',
           approvalPolicy: message.params.approvalPolicy
+        }
+      });
+    }
+    if (message.method === 'thread/turns/list') {
+      const thread = threads.find((entry) => entry.id === message.params.threadId);
+      if (!thread) {
+        return respond({ id: message.id, error: { message: 'thread not found' } });
+      }
+      const reverseChronological = [...thread.turns].reverse();
+      const offset = typeof message.params.cursor === 'string'
+        ? Number.parseInt(message.params.cursor.replace(/^turns:/, ''), 10)
+        : 0;
+      const limit = Number.isInteger(message.params.limit) ? message.params.limit : 50;
+      const data = reverseChronological.slice(offset, offset + limit);
+      const nextOffset = offset + data.length;
+      return respond({
+        id: message.id,
+        result: {
+          data,
+          nextCursor: nextOffset < reverseChronological.length ? `turns:${nextOffset}` : null,
+          backwardsCursor: data.length ? `backwards:${offset}` : null
         }
       });
     }
@@ -185,6 +206,10 @@ function fakeAppServer({ getAccount, setAccount }) {
     return true;
   };
   child.emitServerRequest = (message) => respond(message);
+  child.replaceThreadTurns = (threadId, turns) => {
+    const thread = threads.find((entry) => entry.id === threadId);
+    if (thread) thread.turns = turns;
+  };
   child.received = received;
   return child;
 }
@@ -283,6 +308,8 @@ test('Full Server threads use host root with danger-full-access and stream bound
 
   const child = fixture.children[0];
   const threadStart = child.received.find((message) => message.method === 'thread/start');
+  const initialize = child.received.find((message) => message.method === 'initialize');
+  assert.deepEqual(initialize.params.capabilities, { experimentalApi: true });
   assert.equal(threadStart.params.cwd, '/');
   assert.equal(threadStart.params.sandbox, 'danger-full-access');
   assert.equal(threadStart.params.approvalPolicy, 'untrusted');
@@ -298,6 +325,22 @@ test('Full Server threads use host root with danger-full-access and stream bound
   const events = fixture.manager.events(0, started.thread.id);
   assert.ok(events.events.some((event) => event.method === 'item/agentMessage/delta'));
   assert.equal(events.events.some((event) => Object.hasOwn(event, 'bufferedBytes')), false);
+
+  const oversizedDelta = 'x'.repeat(300 * 1024);
+  child.emitServerRequest({
+    method: 'item/commandExecution/outputDelta',
+    params: { threadId: started.thread.id, itemId: 'large-1', delta: oversizedDelta }
+  });
+  child.emitServerRequest({
+    method: 'item/commandExecution/outputDelta',
+    params: { threadId: started.thread.id, itemId: 'large-1', delta: oversizedDelta }
+  });
+  const warnings = fixture.manager.events(0, started.thread.id).events
+    .filter((event) => event.method === 'warning');
+  assert.equal(warnings.length, 1);
+  assert.equal(warnings[0].params.threadId, started.thread.id);
+  assert.equal(warnings[0].params.omittedMethod, 'item/commandExecution/outputDelta');
+  assert.match(warnings[0].params.message, /tam çalışma sunucuda korunuyor/);
   fixture.manager.stop();
 });
 
@@ -327,6 +370,44 @@ test('Codex history explicitly lists app-server threads and resumes their persis
   assert.equal(resumed.thread.turns[0].items[0].content[0].text, 'Geçmişte kalması gereken mesaj.');
   assert.equal(resumed.thread.turns[0].items[1].text, 'Hazırım.');
   assert.equal(Object.hasOwn(resumed.thread, 'path'), false);
+  const threadResume = child.received.find((message) => message.method === 'thread/resume');
+  const turnsList = child.received.find((message) => message.method === 'thread/turns/list');
+  assert.equal(threadResume.params.excludeTurns, true);
+  assert.equal(turnsList.params.limit, 50);
+  assert.equal(turnsList.params.sortDirection, 'desc');
+  assert.equal(turnsList.params.itemsView, 'summary');
+  fixture.manager.stop();
+});
+
+test('large Codex history resumes through bounded summary pages', async () => {
+  const fixture = createFixture({ installed: true });
+  await fixture.manager.startLogin();
+  await fixture.manager.setAccessProfile('full-server', FULL_SERVER_CONFIRMATION);
+  const started = await fixture.manager.startThread();
+  const child = fixture.children[0];
+  child.replaceThreadTurns(started.thread.id, Array.from({ length: 205 }, (_, index) => ({
+    id: `turn_${index + 1}`,
+    status: 'completed',
+    items: [{
+      id: `user_${index + 1}`,
+      type: 'userMessage',
+      content: [{ type: 'text', text: `Mesaj ${index + 1}` }]
+    }]
+  })));
+
+  const resumed = await fixture.manager.resumeThread(started.thread.id);
+  assert.equal(resumed.thread.turns.length, 200);
+  assert.equal(resumed.thread.historyTruncated, true);
+  assert.equal(resumed.thread.turns[0].items[0].content[0].text, 'Mesaj 6');
+  assert.equal(resumed.thread.turns.at(-1).items[0].content[0].text, 'Mesaj 205');
+  const pageRequests = child.received.filter((message) => message.method === 'thread/turns/list');
+  assert.equal(pageRequests.length, 4);
+  assert.deepEqual(pageRequests.map((message) => message.params.cursor || null), [
+    null,
+    'turns:50',
+    'turns:100',
+    'turns:150'
+  ]);
   fixture.manager.stop();
 });
 

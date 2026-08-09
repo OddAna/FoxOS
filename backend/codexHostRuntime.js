@@ -101,6 +101,10 @@ function createCodexDaemonTransport({
   websocket.on('error', (error) => {
     child.stderr.write(String(error && error.message || 'Codex daemon socket error').slice(0, 1000));
     child.emit('error', error);
+    try {
+      if (typeof websocket.terminate === 'function') websocket.terminate();
+    } catch {}
+    queueMicrotask(() => finish(1));
   });
   websocket.on('close', () => finish(child.killed ? 0 : 1, child.killed ? 'SIGTERM' : null));
 

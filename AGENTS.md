@@ -85,7 +85,9 @@
   local socket client while the host daemon and active turn continue. The FoxOS
   owner session must survive the same recreation in owner-only persistent state;
   never persist its raw bearer token, only a one-way digest, and remove it on
-  logout.
+  logout. Resume large durable threads through the negotiated `excludeTurns`
+  plus bounded `thread/turns/list` summary pagination path; never raise the Unix
+  WebSocket payload ceiling merely to ingest an unbounded rollout response.
   Revoking Full Server must stop the runtime and block earlier threads;
   disconnect must revoke access and log out while leaving the CLI optional.
 - A clean public installation must require no external provider account, domain,

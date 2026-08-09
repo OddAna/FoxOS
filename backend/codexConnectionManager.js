@@ -25,6 +25,8 @@ const FOXOS_THREAD_SOURCES = new Set(['appServer', 'vscode']);
 const MAX_THREAD_ID_LENGTH = 256;
 const MAX_HISTORY_TURNS = 200;
 const MAX_HISTORY_ITEMS = 2000;
+const THREAD_TURNS_PAGE_LIMIT = 50;
+const THREAD_TURNS_MAX_PAGES = Math.ceil(MAX_HISTORY_TURNS / THREAD_TURNS_PAGE_LIMIT);
 const MAX_MEMORY_LABEL_LENGTH = 120;
 const DEFAULT_APPROVAL_POLICY = 'untrusted';
 const NO_APPROVAL_POLICY = 'never';
@@ -371,9 +373,14 @@ function safeEvent(method, params) {
     };
   }
   if (Buffer.byteLength(encoded) <= MAX_EVENT_BYTES) return { method, params };
+  const threadId = threadIdForEvent({ method, params });
   return {
     method: 'warning',
-    params: { message: 'Codex çalışma olayı güvenli yanıt sınırını aştığı için gösterilmedi.' }
+    params: {
+      ...(typeof threadId === 'string' ? { threadId: boundedText(threadId, MAX_THREAD_ID_LENGTH) } : {}),
+      omittedMethod: boundedText(method, 200),
+      message: 'Codex\'in büyük bir çalışma çıktısı arayüz güvenlik sınırı nedeniyle özetlendi; tam çalışma sunucuda korunuyor.'
+    }
   };
 }
 
@@ -404,6 +411,15 @@ class CodexAppServerClient {
 
   emit(method, params = {}) {
     const event = safeEvent(method, params);
+    const previous = this.events.at(-1);
+    if (
+      event.method === 'warning' && previous && previous.method === 'warning' &&
+      previous.params && previous.params.message === event.params.message &&
+      previous.params.omittedMethod === event.params.omittedMethod &&
+      previous.params.threadId === event.params.threadId
+    ) {
+      return;
+    }
     const record = {
       sequence: this.nextEventSequence++,
       createdAt: new Date(this.clock()).toISOString(),
@@ -514,7 +530,10 @@ class CodexAppServerClient {
       this.stderrTail = (this.stderrTail + chunk).slice(-4000);
     });
     child.once('error', () => {
-      this.emit('error', { error: { message: 'Codex app-server başlatılamadı.' } });
+      if (this.child !== child) return;
+      this.emit('warning', {
+        message: 'Codex app-server bağlantısı kesildi; sonraki istek sunucudaki daemon\'a yeniden bağlanacak.'
+      });
     });
     child.once('exit', (code, signal) => {
       if (this.child !== child) return;
@@ -572,7 +591,8 @@ class CodexAppServerClient {
             name: 'foxos',
             title: 'FoxOS',
             version: '0.0.2'
-          }
+          },
+          capabilities: { experimentalApi: true }
         });
         this.write({ method: 'initialized', params: {} });
         this.emit('foxos/runtimeReady', {});
@@ -1001,6 +1021,46 @@ function createCodexConnectionManager({
     };
   }
 
+  async function loadRecentThreadTurns(threadId) {
+    const reverseChronological = [];
+    let cursor = null;
+    for (let page = 0; page < THREAD_TURNS_MAX_PAGES; page += 1) {
+      const result = await client.request('thread/turns/list', {
+        threadId,
+        limit: THREAD_TURNS_PAGE_LIMIT,
+        sortDirection: 'desc',
+        itemsView: 'summary',
+        ...(cursor ? { cursor } : {})
+      });
+      if (!result || !Array.isArray(result.data)) {
+        throw new CodexConnectionError(
+          'Codex konuşma geçmişi okunamadı.',
+          502,
+          'codex-thread-history-invalid'
+        );
+      }
+      reverseChronological.push(...result.data);
+      const nextCursor = typeof result.nextCursor === 'string' && result.nextCursor
+        ? result.nextCursor
+        : null;
+      if (!nextCursor) {
+        return { turns: reverseChronological.reverse(), truncated: false };
+      }
+      if (
+        nextCursor.length > MAX_THREAD_CURSOR_LENGTH || /[\r\n\0]/.test(nextCursor) ||
+        nextCursor === cursor
+      ) {
+        throw new CodexConnectionError(
+          'Codex konuşma geçmişi sayfalaması geçersiz.',
+          502,
+          'codex-thread-history-invalid'
+        );
+      }
+      cursor = nextCursor;
+    }
+    return { turns: reverseChronological.reverse(), truncated: Boolean(cursor) };
+  }
+
   async function startThread(model, reasoningEffort, requestedApprovalPolicy) {
     const config = await requireFullServer();
     const approvalPolicy = normalizeApprovalPolicy(requestedApprovalPolicy);
@@ -1071,9 +1131,15 @@ function createCodexConnectionManager({
       cwd: '/',
       approvalPolicy,
       sandbox: 'danger-full-access',
+      excludeTurns: true,
       ...(developerInstructions ? { developerInstructions } : {})
     });
-    const thread = sanitizeThreadWithHistory(result.thread);
+    const history = await loadRecentThreadTurns(normalizedThreadId);
+    const thread = sanitizeThreadWithHistory({
+      ...result.thread,
+      turns: history.turns
+    });
+    if (thread && history.truncated) thread.historyTruncated = true;
     if (!thread || thread.id !== normalizedThreadId) {
       throw new CodexConnectionError('Codex konuşması açılamadı.', 404, 'codex-thread-not-found');
     }

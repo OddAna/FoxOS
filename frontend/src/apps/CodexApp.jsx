@@ -368,7 +368,10 @@ const CodexApp = () => {
           : [summary, ...current];
       });
     } catch (requestError) {
-      if (storedPreference(ACTIVE_THREAD_STORAGE_KEY) === selectedThreadId) {
+      if (
+        requestError.status === 404 &&
+        storedPreference(ACTIVE_THREAD_STORAGE_KEY) === selectedThreadId
+      ) {
         removePreference(ACTIVE_THREAD_STORAGE_KEY);
       }
       setError(requestError.message);
