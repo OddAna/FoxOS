@@ -72,7 +72,9 @@ agent is still required to perform management operations.
   interfaces without reading unit contents, WireGuard configuration or keys.
 - Start, stop, restart and change boot enablement for verified host services
   through fixed, Registry-bound operations.
-- Use a host terminal and browse the host filesystem from the web interface.
+- Use a real interactive host PTY from the web interface, including ANSI/TUI
+  programs, Ctrl/key input, live resize and long-running shell state while the
+  Terminal window is open or minimized; browse the host filesystem separately.
 
 ### Desktop and Application Manager
 

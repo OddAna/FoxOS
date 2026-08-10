@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const fs = require('fs');
+const http = require('http');
 const os = require('os');
 const path = require('path');
 const { execFile, spawn } = require('child_process');
@@ -102,6 +103,8 @@ const { HostServiceError, createHostServiceManager } = require('./hostServiceMan
 const { createRouteManager } = require('./routeManager');
 const { createSecretManager } = require('./secretManager');
 const { createSessionStore } = require('./sessionStore');
+const { createHostTerminalPtyFactory } = require('./hostTerminalPty');
+const { createTerminalSessionManager } = require('./terminalSessionManager');
 const {
   WorkloadEvidenceError,
   createWorkloadEvidenceManager
@@ -213,6 +216,7 @@ const ANTIGRAVITY_SETTINGS_FILE = path.posix.join(
 const loginAttempts = new Map();
 const appInstallOperations = new Set();
 const containerPortCache = new Map();
+const activeTerminalManagers = new Set();
 
 if (process.env.FOXOS_TRUST_PROXY === '1') {
   app.set('trust proxy', 1);
@@ -328,6 +332,10 @@ function createSession(res, username) {
 function clearSession(req, res) {
   const session = getSession(req);
   if (session) {
+    const ownerId = crypto.createHash('sha256').update(session.token).digest('hex');
+    for (const terminalManager of activeTerminalManagers) {
+      terminalManager.closeOwnerSessions(ownerId);
+    }
     sessionStore.remove(session.token);
   }
   const secure = process.env.FOXOS_SECURE_COOKIE === 'true' ? '; Secure' : '';
@@ -344,6 +352,43 @@ function requireAuth(req, res, next) {
   }
   req.session = session;
   next();
+}
+
+function terminalUpgradeOwner(req) {
+  const origin = String(req.headers.origin || '');
+  const host = String(req.headers.host || '');
+  if (!origin || !host) return null;
+  try {
+    if (new URL(origin).host !== host) return null;
+  } catch {
+    return null;
+  }
+
+  const session = getSession(req);
+  if (!session) return null;
+  return {
+    ownerId: crypto.createHash('sha256').update(session.token).digest('hex'),
+    expiresAt: session.expiresAt
+  };
+}
+
+function createFoxOSHttpServer({ spawnTerminalPty } = {}) {
+  const spawnPty = spawnTerminalPty || createHostTerminalPtyFactory({
+    hostRoot: HOST_ROOT,
+    hostExecution: HOST_EXECUTION
+  });
+  const terminalManager = createTerminalSessionManager({
+    authenticate: terminalUpgradeOwner,
+    spawnPty
+  });
+  const server = http.createServer(app);
+  terminalManager.attach(server);
+  activeTerminalManagers.add(terminalManager);
+  server.once('close', () => {
+    terminalManager.shutdown();
+    activeTerminalManagers.delete(terminalManager);
+  });
+  return server;
 }
 
 function isLoopbackRequest(req) {
@@ -4038,6 +4083,7 @@ app.use((error, req, res, next) => {
 
 if (require.main === module) {
   const shutdownAntigravityLogin = () => {
+    for (const terminalManager of activeTerminalManagers) terminalManager.shutdown();
     antigravityLoginController.shutdown()
       .catch(() => {})
       .finally(() => process.exit(0));
@@ -4084,7 +4130,7 @@ if (require.main === module) {
       console.error('Initial server ingress reconciliation failed:', error.message);
     })
     .finally(() => {
-      app.listen(PORT, '0.0.0.0', () => {
+      createFoxOSHttpServer().listen(PORT, '0.0.0.0', () => {
         console.log('FoxOS is listening on port ' + PORT);
         console.log('Host execution mode: ' + HOST_EXECUTION);
         console.log('Host filesystem mount: ' + HOST_ROOT);
@@ -4119,4 +4165,5 @@ if (require.main === module) {
     });
 }
 
+app.createHttpServer = createFoxOSHttpServer;
 module.exports = app;

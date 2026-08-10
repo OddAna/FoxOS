@@ -51,6 +51,25 @@ FoxOS keeps the desired records, keys, mappings, policy and recovery metadata on
 the server, then applies them through a replaceable adapter. A future
 self-hosted authoritative DNS adapter can use the same local records.
 
+## Host terminal boundary
+
+The desktop Terminal is a real host-root pseudo-terminal. The browser uses
+xterm.js for ANSI, curses/TUI, keyboard and resize behavior, and carries only a
+small typed JSON input/output protocol over a same-origin WebSocket. The agent
+uses `node-pty` to allocate the PTY and enters PID 1's mount, UTS, IPC, network
+and PID namespaces through `nsenter`, with the host root and verified root login
+shell. The shell receives a minimal fixed environment rather than the FoxOS
+agent environment.
+
+The WebSocket upgrade requires the existing owner session cookie and an exact
+Origin/Host match. Session IDs are represented internally only by SHA-256
+digests. Payload, dimension, output-backpressure, concurrent-session and
+session-lifetime bounds fail closed. FoxOS does not log or persist terminal
+bytes. Logout, owner-session expiry, window close, agent shutdown and socket
+failure hang up the PTY. A minimized window stays mounted so its shell process
+and frontend terminal state continue; activating its existing Dock icon restores
+and raises that same window instead of constructing a second Terminal.
+
 ## Provider-neutral resource manifest
 
 Every manageable instance receives a stable FoxOS resource ID. A versioned

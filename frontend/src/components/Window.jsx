@@ -126,8 +126,6 @@ const Window = ({ win, children }) => {
     window.addEventListener('pointerup', onPointerUp);
   };
 
-  if (win.isMinimized) return null;
-
   const style = {
     position: 'absolute',
     left: win.isMaximized || isMobileWindow ? 0 : win.x,
@@ -135,7 +133,7 @@ const Window = ({ win, children }) => {
     width: win.isMaximized || isMobileWindow ? '100%' : win.width,
     height: isMobileWindow ? '100%' : win.isMaximized ? 'calc(100vh - 30px - 85px)' : win.height, // 30px topbar, 85px for dock
     zIndex: win.zIndex,
-    display: 'flex',
+    display: win.isMinimized ? 'none' : 'flex',
     flexDirection: 'column',
     borderRadius: win.isMaximized || isMobileWindow ? '0' : '12px',
     overflow: 'hidden',

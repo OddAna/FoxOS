@@ -1,150 +1,161 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
+import { FitAddon } from '@xterm/addon-fit';
+import { Terminal } from '@xterm/xterm';
+import '@xterm/xterm/css/xterm.css';
+import { useWindowManager } from '../contexts/WindowContext';
+
+const TERMINAL_SOCKET_PATH = '/api/terminal/socket';
+
+function terminalSocketUrl() {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${protocol}//${window.location.host}${TERMINAL_SOCKET_PATH}`;
+}
 
 const TerminalApp = () => {
-  const [history, setHistory] = useState([
-    { type: 'system', content: 'FoxOS Host Terminal' },
-    { type: 'system', content: 'Komutlar doğrudan bağlı Linux sunucusunda root yetkisiyle çalışır.\n' }
-  ]);
-  const [input, setInput] = useState('');
-  const [cwd, setCwd] = useState('/');
-  const [commandHistory, setCommandHistory] = useState([]);
-  const [historyIndex, setHistoryIndex] = useState(-1);
-  const [isProcessing, setIsProcessing] = useState(false);
-  
-  const bottomRef = useRef(null);
-  const inputRef = useRef(null);
+  const containerRef = useRef(null);
+  const terminalRef = useRef(null);
+  const { focusedWindowId } = useWindowManager();
 
   useEffect(() => {
-    if (bottomRef.current) {
-      bottomRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [history]);
+    const container = containerRef.current;
+    if (!container) return undefined;
 
-  useEffect(() => {
-    if (inputRef.current) {
-      inputRef.current.focus();
+    let disposed = false;
+    let socket = null;
+    let connected = false;
+    const terminal = new Terminal({
+      cursorBlink: true,
+      cursorStyle: 'block',
+      fontFamily: 'Consolas, Monaco, "Liberation Mono", monospace',
+      fontSize: 13,
+      lineHeight: 1.15,
+      scrollback: 10_000,
+      allowTransparency: true,
+      theme: {
+        background: '#1e1e1e',
+        foreground: '#d4d4d4',
+        cursor: '#ffffff',
+        selectionBackground: '#264f78',
+        black: '#1e1e1e',
+        red: '#f87171',
+        green: '#4ade80',
+        yellow: '#facc15',
+        blue: '#60a5fa',
+        magenta: '#c084fc',
+        cyan: '#22d3ee',
+        white: '#d4d4d4',
+        brightBlack: '#737373',
+        brightRed: '#fca5a5',
+        brightGreen: '#86efac',
+        brightYellow: '#fde047',
+        brightBlue: '#93c5fd',
+        brightMagenta: '#d8b4fe',
+        brightCyan: '#67e8f9',
+        brightWhite: '#ffffff'
+      }
+    });
+    const fitAddon = new FitAddon();
+    terminal.loadAddon(fitAddon);
+    terminal.open(container);
+    terminalRef.current = terminal;
+    terminal.writeln('\x1b[94mFoxOS Host Terminal\x1b[0m');
+    terminal.writeln('\x1b[94mDoğrudan bağlı Linux sunucusunda root yetkili, kalıcı PTY oturumu.\x1b[0m');
+    terminal.writeln('');
+
+    const send = (message) => {
+      if (!socket || socket.readyState !== WebSocket.OPEN) return;
+      socket.send(JSON.stringify(message));
+    };
+
+    const fit = () => {
+      if (disposed || !container.isConnected) return;
+      const bounds = container.getBoundingClientRect();
+      if (bounds.width < 40 || bounds.height < 20) return;
+      try {
+        fitAddon.fit();
+        send({ type: 'resize', cols: terminal.cols, rows: terminal.rows });
+      } catch { /* The window may be between minimized and restored layouts. */ }
+    };
+
+    const inputSubscription = terminal.onData((data) => {
+      send({ type: 'input', data });
+    });
+
+    try {
+      socket = new WebSocket(terminalSocketUrl());
+      socket.addEventListener('open', () => {
+        if (disposed) return;
+        connected = true;
+        fit();
+        terminal.focus();
+      });
+      socket.addEventListener('message', (event) => {
+        if (disposed || typeof event.data !== 'string') return;
+        try {
+          const message = JSON.parse(event.data);
+          if (message.type === 'output' && typeof message.data === 'string') {
+            terminal.write(message.data);
+          } else if (message.type === 'error') {
+            terminal.writeln(`\r\n\x1b[91m${message.message || 'Terminal başlatılamadı.'}\x1b[0m`);
+          } else if (message.type === 'exit') {
+            terminal.writeln(`\r\n\x1b[90m[PTY oturumu sona erdi: ${message.exitCode ?? 0}]\x1b[0m`);
+          }
+        } catch {
+          terminal.writeln('\r\n\x1b[91mGeçersiz terminal yanıtı alındı.\x1b[0m');
+        }
+      });
+      socket.addEventListener('close', () => {
+        if (!disposed && connected) {
+          terminal.writeln('\r\n\x1b[90m[Terminal bağlantısı kapandı. Yeniden açmak için pencereyi kapatıp Terminal’e tıklayın.]\x1b[0m');
+        } else if (!disposed) {
+          terminal.writeln('\r\n\x1b[91mFoxOS terminal oturumu açılamadı. Oturumunuzu yenileyip tekrar deneyin.\x1b[0m');
+        }
+      });
+      socket.addEventListener('error', () => {
+        if (!disposed && !connected) {
+          terminal.writeln('\r\n\x1b[91mTerminal WebSocket bağlantısı kurulamadı.\x1b[0m');
+        }
+      });
+    } catch {
+      terminal.writeln('\r\n\x1b[91mTerminal bağlantısı başlatılamadı.\x1b[0m');
     }
+
+    const resizeObserver = new ResizeObserver(() => {
+      window.requestAnimationFrame(fit);
+    });
+    resizeObserver.observe(container);
+    window.addEventListener('resize', fit);
+    window.requestAnimationFrame(fit);
+
+    return () => {
+      disposed = true;
+      resizeObserver.disconnect();
+      window.removeEventListener('resize', fit);
+      inputSubscription.dispose();
+      if (socket && socket.readyState < WebSocket.CLOSING) {
+        socket.close(1000, 'Terminal window closed');
+      }
+      terminal.dispose();
+      if (terminalRef.current === terminal) terminalRef.current = null;
+    };
   }, []);
 
-  const handleCommand = async (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      const cmd = input.trim();
-      
-      if (!cmd) {
-        setHistory(prev => [...prev, { type: 'prompt', content: `root@foxos:${cwd}$ ` }]);
-        return;
-      }
-      
-      if (cmd === 'clear') {
-        setHistory([]);
-        setInput('');
-        return;
-      }
-
-      setCommandHistory(prev => [...prev, cmd]);
-      setHistoryIndex(-1);
-      
-      setHistory(prev => [...prev, { type: 'prompt', content: `root@foxos:${cwd}$ ${cmd}` }]);
-      setInput('');
-      setIsProcessing(true);
-
-      try {
-        const response = await fetch('/api/terminal', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ command: cmd, cwd: cwd })
-        });
-        
-        const data = await response.json();
-        if (!response.ok) {
-          throw new Error(data.error || 'Komut çalıştırılamadı');
-        }
-        
-        if (data.cwd !== undefined) {
-          setCwd(data.cwd);
-        }
-        
-        if (data.output) {
-          setHistory(prev => [...prev, { type: data.success === false ? 'error' : 'output', content: data.output }]);
-        }
-      } catch (err) {
-        setHistory(prev => [...prev, { type: 'error', content: `Bağlantı hatası: ${err.message}` }]);
-      } finally {
-        setIsProcessing(false);
-        setTimeout(() => inputRef.current?.focus(), 10);
-      }
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      if (commandHistory.length > 0) {
-        const newIndex = historyIndex < commandHistory.length - 1 ? historyIndex + 1 : historyIndex;
-        setHistoryIndex(newIndex);
-        setInput(commandHistory[commandHistory.length - 1 - newIndex]);
-      }
-    } else if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      if (historyIndex > 0) {
-        const newIndex = historyIndex - 1;
-        setHistoryIndex(newIndex);
-        setInput(commandHistory[commandHistory.length - 1 - newIndex]);
-      } else if (historyIndex === 0) {
-        setHistoryIndex(-1);
-        setInput('');
-      }
-    }
-  };
+  useEffect(() => {
+    if (focusedWindowId === 'terminal') terminalRef.current?.focus();
+  }, [focusedWindowId]);
 
   return (
-    <div 
-      style={{ 
-        display: 'flex', flexDirection: 'column', height: '100%', width: '100%', 
-        backgroundColor: 'rgba(30,30,30,0.95)', color: '#d4d4d4', 
-        fontFamily: 'Consolas, Monaco, monospace', fontSize: '13px',
-        padding: '16px', overflowY: 'auto'
+    <div
+      ref={containerRef}
+      aria-label="FoxOS Host Terminal"
+      style={{
+        width: '100%',
+        height: '100%',
+        padding: '10px 12px',
+        background: '#1e1e1e',
+        overflow: 'hidden'
       }}
-      onClick={() => inputRef.current?.focus()}
-    >
-      {history.map((entry, idx) => (
-        <div key={idx} style={{ marginBottom: entry.type === 'output' ? '12px' : '4px', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-          {entry.type === 'prompt' && <span style={{ color: '#4ade80' }}>{entry.content.split('$')[0]}$</span>}
-          {entry.type === 'prompt' && <span style={{ color: '#fff' }}>{entry.content.split('$')[1]}</span>}
-          
-          {entry.type === 'output' && <span>{entry.content}</span>}
-          {entry.type === 'error' && <span style={{ color: '#f87171' }}>{entry.content}</span>}
-          {entry.type === 'system' && <span style={{ color: '#60a5fa' }}>{entry.content}</span>}
-        </div>
-      ))}
-      
-      <div style={{ display: 'flex', alignItems: 'flex-start', marginTop: '4px' }}>
-        <span style={{ color: '#4ade80', marginRight: '8px', whiteSpace: 'nowrap' }}>
-          root@foxos:{cwd}$
-        </span>
-        <input
-          ref={inputRef}
-          type="text"
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={handleCommand}
-          disabled={isProcessing}
-          autoComplete="off"
-          autoCorrect="off"
-          autoCapitalize="off"
-          spellCheck="false"
-          style={{
-            flex: 1,
-            background: 'transparent',
-            border: 'none',
-            color: '#fff',
-            fontFamily: 'inherit',
-            fontSize: 'inherit',
-            outline: 'none',
-            padding: 0,
-            margin: 0
-          }}
-        />
-      </div>
-      <div ref={bottomRef} />
-    </div>
+    />
   );
 };
 

@@ -4,6 +4,7 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const WebSocket = require('ws');
 const { APP_CATALOG, getCatalogApp } = require('./appCatalog');
 const { iconCandidatesFromHtml, safeHttpUrl } = require('./appIcon');
 const {
@@ -169,8 +170,80 @@ const dockerMock = http.createServer((req, res) => {
 
 dockerMock.listen(process.env.DOCKER_SOCKET);
 
+const testTerminalPtys = [];
+function spawnTestTerminalPty(size) {
+  const dataListeners = new Set();
+  const exitListeners = new Set();
+  const terminal = {
+    size,
+    writes: [],
+    resizes: [],
+    killedWith: null,
+    onData(listener) {
+      dataListeners.add(listener);
+      return { dispose: () => dataListeners.delete(listener) };
+    },
+    onExit(listener) {
+      exitListeners.add(listener);
+      return { dispose: () => exitListeners.delete(listener) };
+    },
+    write(data) { this.writes.push(data); },
+    resize(cols, rows) { this.resizes.push([cols, rows]); },
+    kill(signal) { this.killedWith = signal; },
+    emitData(data) { for (const listener of dataListeners) listener(data); }
+  };
+  testTerminalPtys.push(terminal);
+  return terminal;
+}
+
+function waitForSocketMessage(socket, type) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error('Timed out waiting for terminal socket message'));
+    }, 2000);
+    const onMessage = (payload) => {
+      const message = JSON.parse(payload.toString('utf8'));
+      if (message.type !== type) return;
+      cleanup();
+      resolve(message);
+    };
+    const cleanup = () => {
+      clearTimeout(timeout);
+      socket.off('message', onMessage);
+    };
+    socket.on('message', onMessage);
+  });
+}
+
+async function waitForCondition(predicate, message) {
+  const deadline = Date.now() + 2000;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error(message);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+function expectWebSocketUpgradeStatus(url, options, expectedStatus) {
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(url, options);
+    socket.once('open', () => reject(new Error('Unexpected terminal WebSocket connection')));
+    socket.once('error', () => {});
+    socket.once('unexpected-response', (_request, response) => {
+      response.resume();
+      try {
+        assert.equal(response.statusCode, expectedStatus);
+        resolve();
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
+}
+
 const app = require('./server');
-const server = app.listen(0, '127.0.0.1');
+const server = app.createHttpServer({ spawnTerminalPty: spawnTestTerminalPty });
+server.listen(0, '127.0.0.1');
 
 const baseUrl = () => {
   const address = server.address();
@@ -432,6 +505,12 @@ test('health is public while management APIs require a session', async () => {
   assert.equal(healthResponse.status, 200);
   assert.deepEqual(await healthResponse.json(), { status: 'ok' });
 
+  await expectWebSocketUpgradeStatus(
+    baseUrl().replace('http:', 'ws:') + '/api/terminal/socket',
+    { headers: { Origin: baseUrl() } },
+    401
+  );
+
   const filesResponse = await fetch(baseUrl() + '/api/files');
   assert.equal(filesResponse.status, 401);
 
@@ -612,6 +691,12 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   assert.equal(setupResponse.status, 201);
   const cookie = setupResponse.headers.get('set-cookie').split(';')[0];
 
+  await expectWebSocketUpgradeStatus(
+    baseUrl().replace('http:', 'ws:') + '/api/terminal/socket',
+    { headers: { Cookie: cookie, Origin: 'https://attacker.example' } },
+    401
+  );
+
   const statusResponse = await fetch(baseUrl() + '/api/auth/status', {
     headers: { Cookie: cookie }
   });
@@ -746,6 +831,34 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   });
   assert.equal(terminalResponse.status, 200);
   assert.equal((await terminalResponse.json()).output, 'foxos-ok');
+
+  const terminalSocket = new WebSocket(
+    baseUrl().replace('http:', 'ws:') + '/api/terminal/socket',
+    { headers: { Cookie: cookie, Origin: baseUrl() } }
+  );
+  const readyMessage = waitForSocketMessage(terminalSocket, 'ready');
+  await new Promise((resolve, reject) => {
+    terminalSocket.once('open', resolve);
+    terminalSocket.once('error', reject);
+  });
+  assert.deepEqual(await readyMessage, { type: 'ready' });
+  const pty = testTerminalPtys.at(-1);
+  assert.deepEqual(pty.size, { cols: 80, rows: 24 });
+  terminalSocket.send(JSON.stringify({ type: 'resize', cols: 120, rows: 40 }));
+  terminalSocket.send(JSON.stringify({ type: 'input', data: 'printf foxos-pty\r' }));
+  await waitForCondition(
+    () => pty.resizes.length === 1 && pty.writes.length === 1,
+    'Timed out waiting for the authenticated terminal PTY'
+  );
+  assert.deepEqual(pty.resizes, [[120, 40]]);
+  assert.deepEqual(pty.writes, ['printf foxos-pty\r']);
+  const ptyOutput = waitForSocketMessage(terminalSocket, 'output');
+  pty.emitData('foxos-pty\r\n');
+  assert.deepEqual(await ptyOutput, { type: 'output', data: 'foxos-pty\r\n' });
+  const terminalClosed = new Promise((resolve) => terminalSocket.once('close', resolve));
+  terminalSocket.close(1000, 'test complete');
+  await terminalClosed;
+  assert.equal(pty.killedWith, 'SIGHUP');
 
   const secretResponse = await fetch(baseUrl() + '/api/secrets', {
     method: 'POST',

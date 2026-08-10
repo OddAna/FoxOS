@@ -23,6 +23,17 @@ owner-only `.foxos-data/sessions.json`; raw cookie values are never persisted.
 Sessions expire after 12 hours, renew only during active use, survive agent
 recreation, and are removed from the persistent store on logout.
 
+The Host Terminal is an authenticated root PTY, not a command-output preview.
+Its WebSocket upgrade requires both a current FoxOS owner session and an exact
+same-origin browser request. Terminal input and output remain process-local and
+are never written to FoxOS logs or persistent state. Each connection receives a
+minimal host-shell environment instead of inheriting agent secrets; input size,
+output backpressure, concurrent sessions and terminal dimensions are bounded.
+Logging out, session expiry, closing the Terminal window or stopping the agent
+closes the socket and sends a hangup to its PTY. Minimizing the window keeps the
+same owner session and PTY attached. Use HTTPS so the browser uses `wss://`, and
+treat everything typed or displayed there as root-equivalent private data.
+
 FoxOS also ships an optional, independently managed Caddy gateway. It keeps the
 direct agent port on loopback, stores certificate state under
 `.foxos-data/gateway/`, uses provider-neutral ACME HTTP-01 and does not use a
