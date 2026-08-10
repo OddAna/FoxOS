@@ -135,11 +135,15 @@ on the server.
 - Run Full Server threads from the real host root (`/`) with root-equivalent
   filesystem, Docker, systemd, package and network access. The default mode
   requests untrusted command and file-change approvals through the authenticated
-  FoxOS interface; the owner can explicitly choose **Tam Erişim — sorma** for a
-  thread to use Codex's `never` approval policy.
+  FoxOS interface; the owner can explicitly choose **Tam Erişim — sorma** to
+  persist Codex's `never` approval policy in owner-only server state. The same
+  choice then applies on every authenticated device and to new, resumed and
+  subsequent turns until the owner changes it.
 - Keep new threads non-ephemeral, list FoxOS app-server conversations in the
   left history panel and resume the selected stored thread after a window or
   browser restart.
+- Keep the approval preference out of browser storage. A legacy browser-side
+  `never` choice is migrated to the server once and then removed locally.
 - Optionally connect a private Google Drive memory folder. Its address stays in
   ignored owner-only server data and is never returned by the API; enabled new
   and resumed conversations load `AGENTS.md` and `index.md` before answering.

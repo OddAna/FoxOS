@@ -217,8 +217,12 @@ function fakeAppServer({ getAccount, setAccount }) {
   return child;
 }
 
-function createFixture({ installed = false, memoryVaultPath = '/private/ana-memory/vault' } = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-codex-'));
+function createFixture({
+  installed = false,
+  memoryVaultPath = '/private/ana-memory/vault',
+  dataRoot = null
+} = {}) {
+  const root = dataRoot || fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-codex-'));
   let cliInstalled = installed;
   let account = null;
   const children = [];
@@ -460,18 +464,37 @@ test('large Codex history resumes through bounded summary pages', async () => {
   fixture.manager.stop();
 });
 
-test('explicit no-approval mode reaches new, resumed and subsequent turns', async () => {
+test('server-owned no-approval mode survives clients and manager recreation', async () => {
   const fixture = createFixture({ installed: true });
   await fixture.manager.startLogin();
   await fixture.manager.setAccessProfile('full-server', FULL_SERVER_CONFIRMATION);
-  const started = await fixture.manager.startThread('gpt-5.6-sol', 'low', 'never');
+  assert.equal((await fixture.manager.status()).approvalPolicy, 'untrusted');
+
+  const configured = await fixture.manager.setApprovalPolicy('never');
+  assert.equal(configured.approvalPolicy, 'never');
+  const configFile = path.join(fixture.root, 'connections', 'codex', 'config.json');
+  assert.equal(fs.statSync(configFile).mode & 0o777, 0o600);
+  assert.equal(JSON.parse(fs.readFileSync(configFile, 'utf8')).approvalPolicy, 'never');
+  await assert.rejects(
+    fixture.manager.setApprovalPolicy('always'),
+    (error) => error.code === 'codex-approval-policy-invalid'
+  );
+  fixture.manager.stop();
+
+  const replacement = createFixture({ installed: true, dataRoot: fixture.root });
+  await replacement.manager.startLogin();
+  assert.equal((await replacement.manager.status()).approvalPolicy, 'never');
+
+  // A stale browser may still send its former local preference. Runtime
+  // operations intentionally use the server-owned value instead.
+  const started = await replacement.manager.startThread('gpt-5.6-sol', 'low', 'untrusted');
   assert.equal(started.approvalPolicy, 'never');
 
-  const resumed = await fixture.manager.resumeThread(started.thread.id, 'never');
+  const resumed = await replacement.manager.resumeThread(started.thread.id, 'untrusted');
   assert.equal(resumed.approvalPolicy, 'never');
-  await fixture.manager.startTurn(started.thread.id, 'İzin istemeden çalış.', 'never');
+  await replacement.manager.startTurn(started.thread.id, 'İzin istemeden çalış.', 'untrusted');
 
-  const child = fixture.children[0];
+  const child = replacement.children[0];
   const threadStart = child.received.find((message) => message.method === 'thread/start');
   const threadResume = child.received.find((message) => message.method === 'thread/resume');
   const turnStart = child.received.find((message) => message.method === 'turn/start');
@@ -480,11 +503,7 @@ test('explicit no-approval mode reaches new, resumed and subsequent turns', asyn
   assert.equal(threadResume.params.sandbox, 'danger-full-access');
   assert.equal(turnStart.params.approvalPolicy, 'never');
 
-  await assert.rejects(
-    fixture.manager.startThread('gpt-5.6-sol', 'low', 'always'),
-    (error) => error.code === 'codex-approval-policy-invalid'
-  );
-  fixture.manager.stop();
+  replacement.manager.stop();
 });
 
 test('private Drive memory is hidden from status and bootstraps new and resumed threads', async () => {

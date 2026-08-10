@@ -24,7 +24,7 @@ import './CodexApp.css';
 
 const MODEL_STORAGE_KEY = 'foxos.codex.model';
 const REASONING_STORAGE_KEY = 'foxos.codex.reasoning-effort';
-const APPROVAL_POLICY_STORAGE_KEY = 'foxos.codex.approval-policy';
+const LEGACY_APPROVAL_POLICY_STORAGE_KEY = 'foxos.codex.approval-policy';
 const ACTIVE_THREAD_STORAGE_KEY = 'foxos.codex.active-thread';
 const DEFAULT_APPROVAL_POLICY = 'untrusted';
 const NO_APPROVAL_POLICY = 'never';
@@ -247,11 +247,7 @@ const CodexApp = () => {
   const [models, setModels] = useState([]);
   const [selectedModel, setSelectedModel] = useState('');
   const [reasoningEffort, setReasoningEffort] = useState('');
-  const [approvalPolicy, setApprovalPolicy] = useState(() => (
-    storedPreference(APPROVAL_POLICY_STORAGE_KEY) === NO_APPROVAL_POLICY
-      ? NO_APPROVAL_POLICY
-      : DEFAULT_APPROVAL_POLICY
-  ));
+  const [approvalPolicy, setApprovalPolicy] = useState(DEFAULT_APPROVAL_POLICY);
   const [activeModel, setActiveModel] = useState('');
   const [activeReasoningEffort, setActiveReasoningEffort] = useState('');
   const [activeApprovalPolicy, setActiveApprovalPolicy] = useState('');
@@ -268,6 +264,7 @@ const CodexApp = () => {
   const [resumingThreadId, setResumingThreadId] = useState(null);
   const [startingTurn, setStartingTurn] = useState(false);
   const [steering, setSteering] = useState(false);
+  const [savingApprovalPolicy, setSavingApprovalPolicy] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(() => !mobileViewport());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -313,8 +310,37 @@ const CodexApp = () => {
   const loadConnection = async () => {
     const response = await apiFetch('/api/connections/codex');
     const payload = await response.json();
-    setConnection(payload.connection);
-    return payload.connection;
+    let nextConnection = payload.connection;
+    const legacyApprovalPolicy = storedPreference(LEGACY_APPROVAL_POLICY_STORAGE_KEY);
+    if (
+      nextConnection.fullServer &&
+      legacyApprovalPolicy === NO_APPROVAL_POLICY &&
+      nextConnection.approvalPolicy !== NO_APPROVAL_POLICY &&
+      nextConnection.supportedApprovalPolicies?.includes(NO_APPROVAL_POLICY)
+    ) {
+      try {
+        const migrationResponse = await apiFetch('/api/connections/codex/approval-policy', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ approvalPolicy: NO_APPROVAL_POLICY })
+        });
+        const migrationPayload = await migrationResponse.json();
+        nextConnection = migrationPayload.connection;
+        removePreference(LEGACY_APPROVAL_POLICY_STORAGE_KEY);
+      } catch (migrationError) {
+        setError(migrationError.message);
+      }
+    } else if (legacyApprovalPolicy !== NO_APPROVAL_POLICY || nextConnection.fullServer) {
+      removePreference(LEGACY_APPROVAL_POLICY_STORAGE_KEY);
+    }
+    const serverApprovalPolicy = nextConnection.supportedApprovalPolicies?.includes(
+      nextConnection.approvalPolicy
+    )
+      ? nextConnection.approvalPolicy
+      : DEFAULT_APPROVAL_POLICY;
+    setApprovalPolicy(serverApprovalPolicy);
+    setConnection(nextConnection);
+    return nextConnection;
   };
 
   const refreshThreads = async () => {
@@ -366,9 +392,7 @@ const CodexApp = () => {
     if (!silent) setError(null);
     try {
       const response = await apiFetch(`/api/codex/threads/${encodeURIComponent(selectedThreadId)}/resume`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ approvalPolicy })
+        method: 'POST'
       });
       const payload = await response.json();
       const resumedThread = payload.thread;
@@ -613,16 +637,40 @@ const CodexApp = () => {
     savePreference(REASONING_STORAGE_KEY, effort);
   };
 
-  const chooseApprovalPolicy = (policy) => {
-    if (![DEFAULT_APPROVAL_POLICY, NO_APPROVAL_POLICY].includes(policy)) return;
+  const chooseApprovalPolicy = async (policy) => {
+    if (
+      savingApprovalPolicy ||
+      ![DEFAULT_APPROVAL_POLICY, NO_APPROVAL_POLICY].includes(policy)
+    ) return;
+    const previousPolicy = approvalPolicy;
+    const previousActivePolicy = activeApprovalPolicy;
     setApprovalPolicy(policy);
-    savePreference(APPROVAL_POLICY_STORAGE_KEY, policy);
+    if (threadId) setActiveApprovalPolicy(policy);
+    setSavingApprovalPolicy(true);
+    setError(null);
+    try {
+      const response = await apiFetch('/api/connections/codex/approval-policy', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ approvalPolicy: policy })
+      });
+      const payload = await response.json();
+      setConnection(payload.connection);
+      setApprovalPolicy(payload.connection.approvalPolicy);
+      if (threadId) setActiveApprovalPolicy(payload.connection.approvalPolicy);
+      removePreference(LEGACY_APPROVAL_POLICY_STORAGE_KEY);
+    } catch (requestError) {
+      setApprovalPolicy(previousPolicy);
+      setActiveApprovalPolicy(previousActivePolicy);
+      setError(requestError.message);
+    } finally {
+      setSavingApprovalPolicy(false);
+    }
   };
 
   const newThreadRequestBody = () => JSON.stringify({
     model: selectedModel,
-    reasoningEffort,
-    approvalPolicy
+    reasoningEffort
   });
 
   const startConversation = () => {
@@ -720,7 +768,7 @@ const CodexApp = () => {
       const response = await apiFetch(`/api/codex/threads/${encodeURIComponent(currentThread)}/turns`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, approvalPolicy })
+        body: JSON.stringify({ text })
       });
       const payload = await response.json();
       if (selectedThreadRef.current === currentThread) {
@@ -944,7 +992,7 @@ const CodexApp = () => {
               )}
               <label className={`codex-config-field is-permission${approvalPolicy === NO_APPROVAL_POLICY ? ' is-unrestricted' : ''}`}>
                 <ShieldCheck size={12} /> <span>İzinler</span>
-                <select aria-label="Codex izin politikası" value={approvalPolicy} onChange={(event) => chooseApprovalPolicy(event.target.value)} disabled={busy || Boolean(resumingThreadId)}>
+                <select aria-label="Codex izin politikası" value={approvalPolicy} onChange={(event) => chooseApprovalPolicy(event.target.value)} disabled={busy || savingApprovalPolicy || Boolean(resumingThreadId)}>
                   <option value={DEFAULT_APPROVAL_POLICY}>Gerektiğinde sor</option>
                   <option value={NO_APPROVAL_POLICY}>Tam Erişim — sorma</option>
                 </select>

@@ -45,10 +45,13 @@ start. In Full Server mode the Codex app-server runs in the real host root with
 `danger-full-access`; `untrusted` asks for approval on untrusted command and
 file changes, but it is not a sandbox. It remains the default. The authenticated
 owner may explicitly choose **Tam Erişim — sorma**, which applies Codex's `never`
-approval policy to the thread and subsequent turns. In that mode Codex can run
-commands and change files without another FoxOS prompt. Read the displayed
-command, working directory and reason in the default mode, and select the
-no-prompt mode only when that delegation is intentional.
+approval policy to new, resumed and subsequent turns. The normalized preference
+is stored in the owner-only server connection record rather than browser
+storage, so another authenticated device cannot silently fall back to a
+different policy. In that mode Codex can run commands and change files without
+another FoxOS prompt. Read the displayed command, working directory and reason
+in the default mode, and select the no-prompt mode only when that delegation is
+intentional.
 
 Codex device authentication and session data stay in an owner-only host path
 under `/var/lib/foxos/codex` by default. FoxOS does not accept an OpenAI API key,

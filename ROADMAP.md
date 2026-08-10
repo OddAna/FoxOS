@@ -482,7 +482,9 @@ target blocks only adoption/migration operations that require restore proof.
   FoxOS API/state. Access defaults to read-only and requires a separate exact
   **Full Server** confirmation before the embedded Codex app can create a thread
   at host `/` with `danger-full-access` and default `untrusted` approvals. The
-  owner can explicitly select per-thread `never` approvals. Non-ephemeral
+  owner can explicitly persist `never` approvals in owner-only server state so
+  every authenticated device uses the same policy for new, resumed and
+  subsequent turns; browser storage is not authoritative. Non-ephemeral
   app-server threads are listed and resumed from the Codex-owned persistent
   history. Active work does not lock the whole Codex window: another thread can
   start independently, and expected-turn-bound `turn/steer` input can be added

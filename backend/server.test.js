@@ -500,6 +500,9 @@ test('health is public while management APIs require a session', async () => {
   assert.equal((await fetch(baseUrl() + '/api/connections/codex/memory', {
     method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{}'
   })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/codex/approval-policy', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
   assert.equal((await fetch(baseUrl() + '/api/connections/antigravity')).status, 401);
   assert.equal((await fetch(baseUrl() + '/api/connections/antigravity/install', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
@@ -720,6 +723,14 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   });
   assert.equal(codexModelsWithoutCli.status, 409);
   assert.equal((await codexModelsWithoutCli.json()).code, 'codex-cli-not-installed');
+
+  const codexApprovalWithoutCli = await fetch(baseUrl() + '/api/connections/codex/approval-policy', {
+    method: 'PUT',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ approvalPolicy: 'never' })
+  });
+  assert.equal(codexApprovalWithoutCli.status, 409);
+  assert.equal((await codexApprovalWithoutCli.json()).code, 'codex-cli-not-installed');
 
   const filesResponse = await fetch(baseUrl() + '/api/files?path=%2F', {
     headers: { Cookie: cookie }

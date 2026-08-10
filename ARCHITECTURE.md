@@ -236,10 +236,14 @@ app-server is a managed process in the real host, parented outside the FoxOS
 agent container and listening only on its `600 root:root` Unix control socket.
 FoxOS opens a disposable WebSocket client directly over that Unix socket. Full
 Server threads use working directory `/`, sandbox policy `danger-full-access` and default
-approval policy `untrusted`. An authenticated owner can explicitly select the per-thread
-**Tam Erişim — sorma** mode, which sends approval policy `never`; this removes
-command and file-change prompts but does not widen the already root-equivalent
-sandbox. The daemon and its command children run in the real host root and
+approval policy `untrusted`. An authenticated owner can explicitly select
+**Tam Erişim — sorma**, which persists approval policy `never` in the owner-only
+Codex connection record. Browser storage is not authoritative; the normalized
+server value is returned through authenticated status and used for new, resumed
+and subsequent turns across devices. A former browser-local `never` selection
+is migrated once and removed locally. This removes command and file-change
+prompts but does not widen the already root-equivalent sandbox. The daemon and
+its command children run in the real host root and
 namespaces, not the FoxOS container filesystem, so this profile is intentionally
 root-equivalent and can change files, Docker, systemd, packages and networking.
 Command and file-change approval requests are represented by short-lived opaque

@@ -683,6 +683,7 @@ function createCodexConnectionManager({
         schemaVersion: CONFIG_SCHEMA_VERSION,
         provider: PROVIDER,
         accessProfile: DEFAULT_ACCESS_PROFILE,
+        approvalPolicy: DEFAULT_APPROVAL_POLICY,
         memory: null,
         configuredAt: null,
         updatedAt: null
@@ -696,20 +697,29 @@ function createCodexConnectionManager({
     }
     return {
       ...config,
+      approvalPolicy: normalizeApprovalPolicy(config.approvalPolicy),
       memory: normalizeMemoryConfig(config.memory)
     };
   }
 
-  function saveConfig(accessProfile, memoryOverride = undefined) {
+  function saveConfig(
+    accessProfile,
+    memoryOverride = undefined,
+    approvalPolicyOverride = undefined
+  ) {
     const previous = loadConfig();
     const timestamp = now();
     const memory = memoryOverride === undefined
       ? previous.memory
       : normalizeMemoryConfig(memoryOverride);
+    const approvalPolicy = approvalPolicyOverride === undefined
+      ? previous.approvalPolicy
+      : normalizeApprovalPolicy(approvalPolicyOverride);
     const config = {
       schemaVersion: CONFIG_SCHEMA_VERSION,
       provider: PROVIDER,
       accessProfile,
+      approvalPolicy,
       ...(memory ? { memory } : {}),
       configuredAt: previous.configuredAt || timestamp,
       updatedAt: timestamp
@@ -842,7 +852,7 @@ function createCodexConnectionManager({
       fullServer,
       rootEquivalent: fullServer,
       workingDirectory: '/',
-      approvalPolicy: DEFAULT_APPROVAL_POLICY,
+      approvalPolicy: config.approvalPolicy,
       supportedApprovalPolicies: [DEFAULT_APPROVAL_POLICY, NO_APPROVAL_POLICY],
       memoryConfigured: Boolean(config.memory),
       memoryEnabled: Boolean(config.memory && config.memory.enabled),
@@ -940,6 +950,13 @@ function createCodexConnectionManager({
     return status();
   }
 
+  async function setApprovalPolicy(requestedApprovalPolicy) {
+    const config = await requireFullServer();
+    const approvalPolicy = normalizeApprovalPolicy(requestedApprovalPolicy);
+    saveConfig(config.accessProfile, undefined, approvalPolicy);
+    return status();
+  }
+
   async function disconnect(confirmation) {
     if (confirmation !== DISCONNECT_CONFIRMATION) {
       throw new CodexConnectionError('Codex bağlantısını kesmek için tam onay gerekli.', 400, 'codex-disconnect-confirmation-required');
@@ -1027,9 +1044,9 @@ function createCodexConnectionManager({
     return { turns: reverseChronological.reverse(), truncated: Boolean(cursor) };
   }
 
-  async function startThread(model, reasoningEffort, requestedApprovalPolicy) {
+  async function startThread(model, reasoningEffort) {
     const config = await requireFullServer();
-    const approvalPolicy = normalizeApprovalPolicy(requestedApprovalPolicy);
+    const approvalPolicy = config.approvalPolicy;
     if (model !== undefined && (typeof model !== 'string' || !model.trim())) {
       throw new CodexConnectionError('Codex modeli geçersiz.', 400, 'codex-model-invalid');
     }
@@ -1087,10 +1104,10 @@ function createCodexConnectionManager({
     };
   }
 
-  async function resumeThread(threadId, requestedApprovalPolicy) {
+  async function resumeThread(threadId) {
     const config = await requireFullServer();
     const normalizedThreadId = normalizeThreadId(threadId);
-    const approvalPolicy = normalizeApprovalPolicy(requestedApprovalPolicy);
+    const approvalPolicy = config.approvalPolicy;
     const developerInstructions = memoryDeveloperInstructions(config, localMemoryVault);
     const result = await client.request('thread/resume', {
       threadId: normalizedThreadId,
@@ -1122,10 +1139,10 @@ function createCodexConnectionManager({
     };
   }
 
-  async function startTurn(threadId, text, requestedApprovalPolicy) {
-    await requireFullServer();
+  async function startTurn(threadId, text) {
+    const config = await requireFullServer();
     const normalizedThreadId = normalizeThreadId(threadId);
-    const approvalPolicy = normalizeApprovalPolicy(requestedApprovalPolicy);
+    const approvalPolicy = config.approvalPolicy;
     const prompt = typeof text === 'string' ? text.trim() : '';
     if (!prompt || prompt.length > MAX_PROMPT_LENGTH) {
       throw new CodexConnectionError('Codex isteği boş veya çok uzun.', 400, 'codex-prompt-invalid');
@@ -1181,18 +1198,21 @@ function createCodexConnectionManager({
     listModels,
     listThreads,
     resolveApproval: (requestId, decision) => client.resolveApproval(requestId, decision),
-    resumeThread: (threadId, approvalPolicy) => serializeRuntimeMutation(
-      () => resumeThread(threadId, approvalPolicy)
+    resumeThread: (threadId) => serializeRuntimeMutation(
+      () => resumeThread(threadId)
+    ),
+    setApprovalPolicy: (approvalPolicy) => serializeRuntimeMutation(
+      () => setApprovalPolicy(approvalPolicy)
     ),
     setAccessProfile: (accessProfile, confirmation) => serializeRuntimeMutation(
       () => setAccessProfile(accessProfile, confirmation)
     ),
     startLogin,
-    startThread: (model, reasoningEffort, approvalPolicy) => serializeRuntimeMutation(
-      () => startThread(model, reasoningEffort, approvalPolicy)
+    startThread: (model, reasoningEffort) => serializeRuntimeMutation(
+      () => startThread(model, reasoningEffort)
     ),
-    startTurn: (threadId, text, approvalPolicy) => serializeRuntimeMutation(
-      () => startTurn(threadId, text, approvalPolicy)
+    startTurn: (threadId, text) => serializeRuntimeMutation(
+      () => startTurn(threadId, text)
     ),
     steerTurn: (threadId, turnId, text) => serializeRuntimeMutation(
       () => steerTurn(threadId, turnId, text)

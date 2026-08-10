@@ -3333,6 +3333,17 @@ app.put('/api/connections/codex/access-profile', async (req, res) => {
   }
 });
 
+app.put('/api/connections/codex/approval-policy', async (req, res) => {
+  try {
+    const connection = await codexConnectionManager.setApprovalPolicy(
+      req.body && req.body.approvalPolicy
+    );
+    res.json({ connection });
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not configure Codex approval policy');
+  }
+});
+
 app.put('/api/connections/codex/memory', async (req, res) => {
   try {
     const connection = await codexConnectionManager.configureMemory(req.body || {});
@@ -3484,8 +3495,7 @@ app.post('/api/codex/threads', async (req, res) => {
   try {
     res.status(201).json(await codexConnectionManager.startThread(
       req.body && req.body.model,
-      req.body && req.body.reasoningEffort,
-      req.body && req.body.approvalPolicy
+      req.body && req.body.reasoningEffort
     ));
   } catch (error) {
     sendConnectionError(res, error, 'Could not start Codex thread');
@@ -3494,10 +3504,7 @@ app.post('/api/codex/threads', async (req, res) => {
 
 app.post('/api/codex/threads/:threadId/resume', async (req, res) => {
   try {
-    res.json(await codexConnectionManager.resumeThread(
-      req.params.threadId,
-      req.body && req.body.approvalPolicy
-    ));
+    res.json(await codexConnectionManager.resumeThread(req.params.threadId));
   } catch (error) {
     sendConnectionError(res, error, 'Could not resume Codex thread');
   }
@@ -3507,8 +3514,7 @@ app.post('/api/codex/threads/:threadId/turns', async (req, res) => {
   try {
     res.status(201).json(await codexConnectionManager.startTurn(
       req.params.threadId,
-      req.body && req.body.text,
-      req.body && req.body.approvalPolicy
+      req.body && req.body.text
     ));
   } catch (error) {
     sendConnectionError(res, error, 'Could not start Codex turn');

@@ -72,8 +72,8 @@
   dependency. Preserve the separate exact confirmations for host installation
   and **Full Server**, the default read-only profile, per-owner device-code
   authentication, real host-root `/` execution, `danger-full-access` plus
-  default `untrusted` approvals, the explicit owner-selected per-thread `never`
-  option, persisted app-server thread history, a host-owned managed app-server
+  default `untrusted` approvals, the explicit owner-selected server-persisted
+  `never` preference, persisted app-server thread history, a host-owned managed app-server
   daemon, its owner-only Unix WebSocket control socket, a count-based in-memory
   event ring without byte-size omission, and owner-authenticated endpoints. The
   optional Drive-memory folder reference
@@ -90,6 +90,11 @@
   plus bounded `thread/turns/list` summary pagination path for efficiency, but
   do not impose a FoxOS byte-size ceiling on the Unix WebSocket or replace a
   large live event with a size-warning placeholder.
+  The approval preference is owner control-plane state, not browser storage:
+  keep it in the owner-only Codex connection config, return only the normalized
+  policy through authenticated status, and apply it to new, resumed and
+  subsequent turns across devices. Browser `localStorage` may be read only for
+  a one-time migration of the former explicit `never` choice.
   Revoking Full Server must stop the runtime and block earlier threads;
   disconnect must revoke access and log out while leaving the CLI optional.
 - Gemini CLI is a third optional **Bağlantılar** adapter, not a clean-install
