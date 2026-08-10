@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { mobileDesktopLayout, paginateDesktopItems } from '../src/utils/mobileDesktopLayout.js';
 
 const read = (relativePath) => readFileSync(new URL(relativePath, import.meta.url), 'utf8');
 
@@ -23,6 +24,21 @@ test('mobile windows fill the usable desktop without drag or resize handles', ()
   assert.match(desktop, /isMobileViewport/);
   assert.match(windowComponent, /isMobileWindow \? '100%'/);
   assert.match(windowComponent, /!win\.isMaximized && !isMobileWindow/);
+});
+
+test('mobile desktop icons paginate into stable iPhone-style grid pages', () => {
+  const desktop = read('../src/App.jsx');
+  const css = read('../src/index.css');
+  const layout = mobileDesktopLayout({ width: 390, height: 844, itemCount: 50 });
+  const pages = paginateDesktopItems(Array.from({ length: 50 }, (_, index) => index), layout.itemsPerPage);
+
+  assert.deepEqual(layout, { columns: 4, rows: 6, itemsPerPage: 24, pageCount: 3 });
+  assert.deepEqual(pages.map((page) => page.length), [24, 24, 2]);
+  assert.match(desktop, /className={`desktop-grid\$\{isMobileViewport \? ' is-mobile' : ''\}`}/);
+  assert.match(desktop, /data-mobile-desktop-page/);
+  assert.match(desktop, /isMobileViewport \|\| e\.pointerType === 'touch'/);
+  assert.match(css, /scroll-snap-type: x mandatory/);
+  assert.match(css, /grid-template-columns: repeat\(var\(--mobile-desktop-columns\)/);
 });
 
 test('fixed desktop sidebars and grids expose responsive hooks', () => {
