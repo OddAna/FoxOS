@@ -67,7 +67,10 @@ const TopBar = () => {
         <span className="topbar-item">Docker</span>
       </div>
       <div className="topbar-right">
-        <span className="topbar-item" style={{ marginLeft: '12px' }}>{formatDate(time)} {formatTime(time)}</span>
+        <span className="topbar-item" style={{ marginLeft: '12px' }}>
+          <span className="topbar-date">{formatDate(time)} </span>
+          <span className="topbar-time">{formatTime(time)}</span>
+        </span>
       </div>
     </div>
   );

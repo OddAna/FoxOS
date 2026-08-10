@@ -112,6 +112,7 @@ const Desktop = () => {
   const suppressDesktopClick = useRef(false);
 
   const [windowSize, setWindowSize] = useState({ width: window.innerWidth, height: window.innerHeight });
+  const isMobileViewport = windowSize.width <= 720;
 
   const [positions, setPositions] = useState(() => {
     try {
@@ -147,7 +148,10 @@ const Desktop = () => {
         if (position.col !== undefined) occupied.add(`${position.col},${position.row}`);
       });
 
-      const availableHeight = window.innerHeight - 30 - 80 - 40;
+      const mobileViewport = window.innerWidth <= 720;
+      const topbarHeight = mobileViewport ? 40 : 30;
+      const dockReserve = mobileViewport ? 72 : 80;
+      const availableHeight = window.innerHeight - topbarHeight - dockReserve - 32;
       const maxRows = Math.max(1, Math.floor(availableHeight / 100));
       let nextIndex = 0;
       let changed = false;
@@ -173,11 +177,12 @@ const Desktop = () => {
   };
 
   const getDesktopItemPosition = (item) => {
-    const MARGIN_X = 20;
-    const MARGIN_Y = 20;
-    const TASKBAR_H = 80;
+    const MARGIN_X = isMobileViewport ? 8 : 20;
+    const MARGIN_Y = isMobileViewport ? 8 : 20;
+    const TOPBAR_H = isMobileViewport ? 40 : 30;
+    const TASKBAR_H = isMobileViewport ? 72 : 80;
     const desktopW = windowSize.width;
-    const desktopH = windowSize.height - 30;
+    const desktopH = windowSize.height - TOPBAR_H;
     
     const availableW = desktopW - (2 * MARGIN_X);
     const availableH = desktopH - TASKBAR_H - (2 * MARGIN_Y);
@@ -189,7 +194,11 @@ const Desktop = () => {
     const cellH = availableH / maxRows;
 
     let col, row;
-    if (positions[item.positionKey] && positions[item.positionKey].col !== undefined) {
+    if (isMobileViewport) {
+      const index = Math.max(0, desktopItems.findIndex((candidate) => candidate.desktopId === item.desktopId));
+      col = Math.min(Math.floor(index / maxRows), maxCols - 1);
+      row = index % maxRows;
+    } else if (positions[item.positionKey] && positions[item.positionKey].col !== undefined) {
       col = Math.min(positions[item.positionKey].col, maxCols - 1);
       row = Math.min(positions[item.positionKey].row, maxRows - 1);
     } else {
@@ -584,11 +593,18 @@ const Desktop = () => {
     });
   };
 
-  const handleDesktopItemClick = (e, id) => {
+  const handleDesktopItemClick = (e, item) => {
     e.stopPropagation();
     if (suppressDesktopClick.current) {
       suppressDesktopClick.current = false;
       e.preventDefault();
+      return;
+    }
+    const id = item.desktopId;
+    if (isMobileViewport && !e.ctrlKey && !e.metaKey) {
+      setSelectedIds([id]);
+      setDesktopMenu(null);
+      handleDesktopItemDoubleClick(item);
       return;
     }
     if (e.ctrlKey || e.metaKey) {
@@ -913,8 +929,8 @@ const Desktop = () => {
               onDrop={item.desktopKind === 'file' && item.type === 'folder'
                 ? (e) => handleDesktopFolderDrop(e, item.file)
                 : undefined}
-              onClick={(e) => handleDesktopItemClick(e, item.desktopId)}
-              onDoubleClick={() => handleDesktopItemDoubleClick(item)}
+              onClick={(e) => handleDesktopItemClick(e, item)}
+              onDoubleClick={() => { if (!isMobileViewport) handleDesktopItemDoubleClick(item); }}
               onContextMenu={(e) => handleContextMenu(e, item)}
               style={{
                 position: 'absolute',
@@ -1009,7 +1025,7 @@ const Desktop = () => {
       </div>
 
       {/* Pencereler (Windows) alanı */}
-      <div style={{ position: 'absolute', top: 30, left: 0, width: '100%', height: 'calc(100vh - 30px)', zIndex: 10, pointerEvents: 'none' }}>
+      <div className="window-layer" style={{ position: 'absolute', top: 30, left: 0, width: '100%', height: 'calc(100vh - 30px)', zIndex: 10, pointerEvents: 'none' }}>
         {windows.map(win => (
           <div key={win.id} style={{ pointerEvents: 'none', width: '100%', height: '100%', position: 'absolute', top: 0, left: 0 }}>
             <Window win={win}>

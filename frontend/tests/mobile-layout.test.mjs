@@ -1,0 +1,50 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import test from 'node:test';
+
+const read = (relativePath) => readFileSync(new URL(relativePath, import.meta.url), 'utf8');
+
+test('the shell uses the dynamic viewport and device safe areas', () => {
+  const html = read('../index.html');
+  const css = read('../src/index.css');
+
+  assert.match(html, /viewport-fit=cover/);
+  assert.match(css, /@supports \(height: 100dvh\)/);
+  assert.match(css, /@media \(max-width: 720px\)/);
+  assert.match(css, /env\(safe-area-inset-top\)/);
+  assert.match(css, /env\(safe-area-inset-bottom\)/);
+});
+
+test('mobile windows fill the usable desktop without drag or resize handles', () => {
+  const desktop = read('../src/App.jsx');
+  const windowComponent = read('../src/components/Window.jsx');
+
+  assert.match(desktop, /className="window-layer"/);
+  assert.match(desktop, /isMobileViewport/);
+  assert.match(windowComponent, /isMobileWindow \? '100%'/);
+  assert.match(windowComponent, /!win\.isMaximized && !isMobileWindow/);
+});
+
+test('fixed desktop sidebars and grids expose responsive hooks', () => {
+  const settings = read('../src/apps/SettingsApp.jsx');
+  const files = read('../src/apps/FilesApp.jsx');
+  const store = read('../src/apps/AppStoreApp.jsx');
+  const server = read('../src/apps/ServerApp.jsx');
+  const css = read('../src/index.css');
+
+  assert.match(settings, /className="settings-sidebar"/);
+  assert.match(files, /className="files-toolbar"/);
+  assert.match(store, /className="store-grid"/);
+  assert.match(server, /className="server-metrics"/);
+  assert.match(css, /\.store-grid\s*\{[\s\S]*grid-template-columns: minmax\(0, 1fr\)/);
+});
+
+test('Codex starts with a closed mobile drawer and provides a dismiss backdrop', () => {
+  const app = read('../src/apps/CodexApp.jsx');
+  const css = read('../src/apps/CodexApp.css');
+
+  assert.match(app, /useState\(\(\) => !mobileViewport\(\)\)/);
+  assert.match(app, /className="codex-sidebar-backdrop"/);
+  assert.match(css, /\.codex-sidebar-backdrop\s*\{/);
+  assert.match(css, /width: min\(86vw, 300px\)/);
+});

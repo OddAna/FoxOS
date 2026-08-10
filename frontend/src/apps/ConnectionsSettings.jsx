@@ -692,13 +692,13 @@ const ConnectionsSettings = () => {
   const cloudflareBusy = Boolean(saving && saving.startsWith('cloudflare'));
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+    <div className="connections-settings" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
       <div style={{ color: '#888', fontSize: '13px', lineHeight: 1.5 }}>
         Sunucunun kullanacağı dış hesapları buradan bağlayın. Bağlantılar isteğe bağlıdır; FoxOS bağlı hesap olmadan da çalışır.
       </div>
 
       <section style={CARD_STYLE}>
-        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '16px', marginBottom: '16px' }}>
+        <div className="connection-card-header" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '16px', marginBottom: '16px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>
             <div style={{ width: '46px', height: '38px', borderRadius: '10px', background: '#111', border: '1px solid rgba(255,255,255,0.13)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
               <Bot size={23} color="#fff" />
@@ -726,7 +726,7 @@ const ConnectionsSettings = () => {
 
         {codexInstalled && !codexConnected && (
           <>
-            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 170px) minmax(0, 1fr)', rowGap: '10px', columnGap: '16px', fontSize: '13px', marginBottom: '16px', wordBreak: 'break-word' }}>
+            <div className="connections-detail-grid" style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 170px) minmax(0, 1fr)', rowGap: '10px', columnGap: '16px', fontSize: '13px', marginBottom: '16px', wordBreak: 'break-word' }}>
               <div style={{ color: '#888' }}>CLI sürümü</div>
               <div style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '12px' }}>{codex.version || 'Bilinmiyor'}</div>
               <div style={{ color: '#888' }}>Erişim</div>
@@ -759,7 +759,7 @@ const ConnectionsSettings = () => {
 
         {codexConnected && (
           <>
-            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 170px) minmax(0, 1fr)', rowGap: '10px', columnGap: '16px', fontSize: '13px', marginBottom: '16px', wordBreak: 'break-word' }}>
+            <div className="connections-detail-grid" style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 170px) minmax(0, 1fr)', rowGap: '10px', columnGap: '16px', fontSize: '13px', marginBottom: '16px', wordBreak: 'break-word' }}>
               <div style={{ color: '#888' }}>Hesap</div>
               <div>{codex.email || 'ChatGPT hesabı'}</div>
               <div style={{ color: '#888' }}>Plan</div>
@@ -844,7 +844,7 @@ const ConnectionsSettings = () => {
       </section>
 
       <section style={CARD_STYLE}>
-        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '16px', marginBottom: '16px' }}>
+        <div className="connection-card-header" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '16px', marginBottom: '16px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>
             <div style={{ width: '46px', height: '38px', borderRadius: '10px', background: 'linear-gradient(135deg, #0f172a 0%, #2563eb 45%, #a855f7 100%)', border: '1px solid rgba(255,255,255,0.18)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
               <Sparkles size={22} color="#fff" />
@@ -921,7 +921,7 @@ const ConnectionsSettings = () => {
 
         {antigravityConnected && (
           <>
-            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 170px) minmax(0, 1fr)', rowGap: '10px', columnGap: '16px', fontSize: '13px', marginBottom: '16px', wordBreak: 'break-word' }}>
+            <div className="connections-detail-grid" style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 170px) minmax(0, 1fr)', rowGap: '10px', columnGap: '16px', fontSize: '13px', marginBottom: '16px', wordBreak: 'break-word' }}>
               <div style={{ color: '#888' }}>CLI sürümü</div>
               <div style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '12px' }}>{antigravity.version || 'Bilinmiyor'}</div>
               <div style={{ color: '#888' }}>Kimlik doğrulama</div>
@@ -964,7 +964,7 @@ const ConnectionsSettings = () => {
       </section>
 
       <section style={CARD_STYLE}>
-        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '16px', marginBottom: '16px' }}>
+        <div className="connection-card-header" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '16px', marginBottom: '16px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>
             <div style={{ width: '46px', height: '38px', borderRadius: '10px', background: 'linear-gradient(135deg, #4285f4 0%, #9b72cb 52%, #d96570 100%)', border: '1px solid rgba(255,255,255,0.18)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
               <Sparkles size={22} color="#fff" />
@@ -992,7 +992,7 @@ const ConnectionsSettings = () => {
 
         {geminiConnected && !editingGemini && (
           <>
-            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 170px) minmax(0, 1fr)', rowGap: '10px', columnGap: '16px', fontSize: '13px', marginBottom: '16px', wordBreak: 'break-word' }}>
+            <div className="connections-detail-grid" style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 170px) minmax(0, 1fr)', rowGap: '10px', columnGap: '16px', fontSize: '13px', marginBottom: '16px', wordBreak: 'break-word' }}>
               <div style={{ color: '#888' }}>CLI sürümü</div>
               <div style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '12px' }}>{gemini.version || 'Bilinmiyor'}</div>
               <div style={{ color: '#888' }}>Kimlik doğrulama</div>
@@ -1049,7 +1049,7 @@ const ConnectionsSettings = () => {
       </section>
 
       <section style={CARD_STYLE}>
-        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '16px', marginBottom: '16px' }}>
+        <div className="connection-card-header" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '16px', marginBottom: '16px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>
             <div style={{ width: '88px', height: '38px', padding: '0 7px', boxSizing: 'border-box', borderRadius: '10px', background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
               <img src={cloudflareLogo} alt="Cloudflare" style={{ display: 'block', width: '74px', height: 'auto' }} />
@@ -1064,7 +1064,7 @@ const ConnectionsSettings = () => {
 
         {cloudflareConnected && !editingCloudflare && (
           <>
-            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 170px) minmax(0, 1fr)', rowGap: '10px', columnGap: '16px', fontSize: '13px', marginBottom: '16px', wordBreak: 'break-word' }}>
+            <div className="connections-detail-grid" style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 170px) minmax(0, 1fr)', rowGap: '10px', columnGap: '16px', fontSize: '13px', marginBottom: '16px', wordBreak: 'break-word' }}>
               <div style={{ color: '#888' }}>DNS bölgeleri</div>
               <div>{cloudflare.zones.join(', ')}</div>
               <div style={{ color: '#888' }}>Sunucu IPv4</div>

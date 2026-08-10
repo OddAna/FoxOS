@@ -28,6 +28,8 @@ const APPROVAL_POLICY_STORAGE_KEY = 'foxos.codex.approval-policy';
 const ACTIVE_THREAD_STORAGE_KEY = 'foxos.codex.active-thread';
 const DEFAULT_APPROVAL_POLICY = 'untrusted';
 const NO_APPROVAL_POLICY = 'never';
+const mobileViewport = () => typeof window !== 'undefined'
+  && window.matchMedia('(max-width: 720px)').matches;
 const REASONING_LABELS = {
   none: 'None',
   low: 'Low',
@@ -266,7 +268,7 @@ const CodexApp = () => {
   const [resumingThreadId, setResumingThreadId] = useState(null);
   const [startingTurn, setStartingTurn] = useState(false);
   const [steering, setSteering] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(() => !mobileViewport());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [historyError, setHistoryError] = useState(null);
@@ -359,6 +361,7 @@ const CodexApp = () => {
     setEntries([]);
     setActiveTurnId(null);
     setBusy(false);
+    if (!silent && mobileViewport()) setSidebarOpen(false);
     cursorRef.current = 0;
     if (!silent) setError(null);
     try {
@@ -412,6 +415,13 @@ const CodexApp = () => {
     loadConnection()
       .catch((requestError) => setError(requestError.message))
       .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    const query = window.matchMedia('(max-width: 720px)');
+    const syncSidebar = (event) => setSidebarOpen(!event.matches);
+    query.addEventListener('change', syncSidebar);
+    return () => query.removeEventListener('change', syncSidebar);
   }, []);
 
   useEffect(() => {
@@ -630,6 +640,7 @@ const CodexApp = () => {
     setError(null);
     cursorRef.current = 0;
     removePreference(ACTIVE_THREAD_STORAGE_KEY);
+    if (mobileViewport()) setSidebarOpen(false);
   };
 
   const submitPrompt = async () => {
@@ -838,7 +849,14 @@ const CodexApp = () => {
       ) : (
         <div className="codex-workspace">
           {sidebarOpen && (
-            <aside className="codex-sidebar">
+            <>
+              <button
+                type="button"
+                className="codex-sidebar-backdrop"
+                aria-label="Konuşma geçmişini kapat"
+                onClick={() => setSidebarOpen(false)}
+              />
+              <aside className="codex-sidebar">
               <div className="codex-sidebar-top">
                 <button
                   type="button"
@@ -897,7 +915,8 @@ const CodexApp = () => {
                 )}
                 {historyError && <div className="codex-sidebar-message is-error">{historyError}</div>}
               </div>
-            </aside>
+              </aside>
+            </>
           )}
 
           <section className="codex-main">

@@ -32,7 +32,7 @@ const SetupScreen = () => {
   };
 
   return (
-    <div style={{
+    <div className="auth-screen setup-screen" style={{
       width: '100vw', height: '100vh',
       backgroundImage: `url(${foxWallpaper})`,
       backgroundSize: 'cover', backgroundPosition: 'center',
@@ -40,7 +40,7 @@ const SetupScreen = () => {
       color: '#fff',
       position: 'relative'
     }}>
-      <div style={{
+      <div className="setup-card" style={{
         position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
         background: 'rgba(0,0,0,0.3)', backdropFilter: 'blur(20px)'
       }} />
@@ -67,7 +67,7 @@ const SetupScreen = () => {
             onChange={(e) => setUsername(e.target.value)}
             style={{
               background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.1)',
-              padding: '14px 16px', borderRadius: '12px', color: '#fff', fontSize: '14px',
+              padding: '14px 16px', borderRadius: '12px', color: '#fff', fontSize: '16px',
               outline: 'none', transition: 'border-color 0.2s'
             }}
             onFocus={(e) => e.target.style.borderColor = 'rgba(255,255,255,0.4)'}
@@ -80,7 +80,7 @@ const SetupScreen = () => {
             onChange={(e) => setPassword(e.target.value)}
             style={{
               background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.1)',
-              padding: '14px 16px', borderRadius: '12px', color: '#fff', fontSize: '14px',
+              padding: '14px 16px', borderRadius: '12px', color: '#fff', fontSize: '16px',
               outline: 'none', transition: 'border-color 0.2s'
             }}
             onFocus={(e) => e.target.style.borderColor = 'rgba(255,255,255,0.4)'}

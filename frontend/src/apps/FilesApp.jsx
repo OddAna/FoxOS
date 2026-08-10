@@ -225,6 +225,11 @@ const FilesApp = ({ initialPath = 'Masaüstü' }) => {
 
   const handleSingleClick = (e, file) => {
     e.stopPropagation();
+    if (window.innerWidth <= 720 && !e.ctrlKey && !e.metaKey) {
+      setSelectedFileIds([file.id]);
+      handleDoubleClick(e, file);
+      return;
+    }
     if (e.ctrlKey || e.metaKey) {
       setSelectedFileIds(prev => 
         prev.includes(file.id) ? prev.filter(id => id !== file.id) : [...prev, file.id]
@@ -738,19 +743,21 @@ const FilesApp = ({ initialPath = 'Masaüstü' }) => {
 
   return (
     <div 
+      className="files-app"
       ref={containerRef}
       tabIndex={0}
       onKeyDown={handleKeyDown}
       style={{ display: 'flex', height: '100%', width: '100%', color: '#fff', position: 'relative', outline: 'none' }}
     >
       {/* Sidebar */}
-      <div style={{ width: '180px', background: 'rgba(0,0,0,0.3)', borderRight: '1px solid rgba(255,255,255,0.1)', padding: '16px 8px' }}>
-        <div style={{ fontSize: '11px', color: '#ccc', fontWeight: 'bold', padding: '0 12px 8px', textTransform: 'uppercase' }}>Favoriler</div>
+      <div className="files-sidebar" style={{ width: '180px', background: 'rgba(0,0,0,0.3)', borderRight: '1px solid rgba(255,255,255,0.1)', padding: '16px 8px' }}>
+        <div className="files-sidebar-title" style={{ fontSize: '11px', color: '#ccc', fontWeight: 'bold', padding: '0 12px 8px', textTransform: 'uppercase' }}>Favoriler</div>
         {sidebarItems.map(item => {
           const isActive = currentPath === item.path || currentPath.startsWith(item.path + '/');
           return (
           <div 
             key={item.id}
+            className="files-sidebar-item"
             onClick={(e) => { e.stopPropagation(); navigateTo(item.path); }}
             style={{
               display: 'flex', alignItems: 'center', gap: '10px', padding: '6px 12px', borderRadius: '6px',
@@ -765,14 +772,14 @@ const FilesApp = ({ initialPath = 'Masaüstü' }) => {
       </div>
       
       {/* Content */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div className="files-main" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         {/* Toolbar */}
-        <div style={{ 
+        <div className="files-toolbar" style={{
           height: '56px', borderBottom: '1px solid rgba(255,255,255,0.1)', 
           display: 'flex', alignItems: 'center', padding: '0 16px', gap: '16px', background: 'rgba(0,0,0,0.2)'
         }}>
           {/* Nav Buttons */}
-          <div style={{ display: 'flex', gap: '4px' }}>
+          <div className="files-nav" style={{ display: 'flex', gap: '4px' }}>
             <button 
               onClick={handleBack} 
               disabled={historyIndex === 0}
@@ -803,7 +810,7 @@ const FilesApp = ({ initialPath = 'Masaüstü' }) => {
           </div>
           
           {/* Path Display */}
-          <div style={{ 
+          <div className="files-path" style={{
             flex: 1, background: 'rgba(0,0,0,0.3)', borderRadius: '6px', padding: '6px 12px', 
             fontSize: '13px', display: 'flex', alignItems: 'center', border: '1px solid rgba(255,255,255,0.1)',
             overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis'
@@ -813,7 +820,7 @@ const FilesApp = ({ initialPath = 'Masaüstü' }) => {
           </div>
           
           {/* Search Box */}
-          <div style={{
+          <div className="files-search" style={{
             position: 'relative', display: 'flex', alignItems: 'center', background: 'rgba(0,0,0,0.3)', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.1)', width: '160px'
           }}>
             <Search size={14} color="#ccc" style={{ margin: '0 8px' }} />
@@ -827,7 +834,7 @@ const FilesApp = ({ initialPath = 'Masaüstü' }) => {
           </div>
           
           {/* View Modes and Sorting */}
-          <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+          <div className="files-view-controls" style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
             <div ref={sortBtnRef} style={{ position: 'relative' }}>
               <button 
                 onClick={(e) => { e.stopPropagation(); setSortMenuOpen(!sortMenuOpen); }}
@@ -881,6 +888,7 @@ const FilesApp = ({ initialPath = 'Masaüstü' }) => {
         
         {/* File Container */}
         <div 
+          className="files-grid"
           ref={gridRef}
           data-foxos-drop-path={currentPath}
           onPointerDown={startSelection}
@@ -909,7 +917,7 @@ const FilesApp = ({ initialPath = 'Masaüstü' }) => {
           {!loading && !error && viewMode === 'list' && entries.length > 0 && (
             <div style={{ display: 'flex', width: '100%', padding: '0 12px 8px 12px', borderBottom: '1px solid rgba(255,255,255,0.1)', color: '#ccc', fontSize: '12px', fontWeight: 'bold' }}>
               <span style={{ flex: 1, paddingLeft: '32px' }}>Ad</span>
-              <div style={{ display: 'flex', minWidth: '280px', textAlign: 'left' }}>
+              <div className="files-list-header-meta" style={{ display: 'flex', minWidth: '280px', textAlign: 'left' }}>
                 <span style={{ width: '100px' }}>Tür</span>
                 <span style={{ width: '60px', textAlign: 'right' }}>Boyut</span>
                 <span style={{ width: '120px', textAlign: 'right' }}>Değiştirilme Tarihi</span>
@@ -943,7 +951,7 @@ const FilesApp = ({ initialPath = 'Masaüstü' }) => {
                 onDragOver={file.type === 'folder' ? handleDragOver : undefined}
                 onDrop={file.type === 'folder' ? (e) => handleFolderDrop(e, file) : undefined}
                 onClick={(e) => handleSingleClick(e, file)}
-                onDoubleClick={(e) => handleDoubleClick(e, file)}
+                onDoubleClick={(e) => { if (window.innerWidth > 720) handleDoubleClick(e, file); }}
                 onContextMenu={(e) => handleContextMenu(e, file)}
                 style={{ 
                   display: 'flex', 
@@ -1018,7 +1026,7 @@ const FilesApp = ({ initialPath = 'Masaüstü' }) => {
                 </span>
                 
                 {viewMode === 'list' && (
-                  <div style={{ display: 'flex', minWidth: '280px', color: '#ccc', fontSize: '12px', textAlign: 'left', alignItems: 'center' }}>
+                  <div className="files-list-meta" style={{ display: 'flex', minWidth: '280px', color: '#ccc', fontSize: '12px', textAlign: 'left', alignItems: 'center' }}>
                     <span style={{ width: '100px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.type === 'folder' ? 'Klasör' : file.desktopKind === 'application' ? 'Uygulama' : file.ext?.toUpperCase().replace('.', '') || 'Dosya'}</span>
                     <span style={{ width: '60px', textAlign: 'right' }}>{file.type === 'folder' || file.desktopKind === 'application' ? '--' : formatSize(file.size)}</span>
                     <span style={{ width: '120px', textAlign: 'right' }}>{formatDate(file.mtime)}</span>

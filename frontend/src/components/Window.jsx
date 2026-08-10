@@ -6,6 +6,8 @@ const Window = ({ win, children }) => {
   const { closeWindow, minimizeWindow, maximizeWindow, focusWindow, updateWindowPosition, updateWindowDimensions, focusedWindowId } = useWindowManager();
   const isFocused = focusedWindowId === win.id;
   const [contextMenu, setContextMenu] = useState(null);
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
+  const isMobileWindow = viewportWidth <= 720;
 
   useEffect(() => {
     const closeContextMenu = () => setContextMenu(null);
@@ -17,14 +19,24 @@ const Window = ({ win, children }) => {
     };
   }, []);
 
+  useEffect(() => {
+    const updateViewport = () => setViewportWidth(window.innerWidth);
+    window.addEventListener('resize', updateViewport);
+    window.addEventListener('orientationchange', updateViewport);
+    return () => {
+      window.removeEventListener('resize', updateViewport);
+      window.removeEventListener('orientationchange', updateViewport);
+    };
+  }, []);
+
   const handleContextMenu = (event) => {
     if (event.target.closest('[data-foxos-context-menu]')) return;
     event.preventDefault();
     event.stopPropagation();
     focusWindow(win.id);
     setContextMenu({
-      x: Math.min(event.clientX, window.innerWidth - 190),
-      y: Math.min(event.clientY, window.innerHeight - 120)
+      x: Math.max(8, Math.min(event.clientX, window.innerWidth - 190)),
+      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 120))
     });
   };
 
@@ -35,7 +47,7 @@ const Window = ({ win, children }) => {
 
   const handlePointerDown = (e) => {
     if (e.target.closest('.window-controls')) return;
-    if (win.isMaximized) return;
+    if (win.isMaximized || isMobileWindow) return;
 
     focusWindow(win.id);
     const startX = e.clientX;
@@ -63,7 +75,7 @@ const Window = ({ win, children }) => {
 
   const handleResizePointerDown = (e, direction) => {
     e.stopPropagation();
-    if (win.isMaximized) return;
+    if (win.isMaximized || isMobileWindow) return;
     
     focusWindow(win.id);
     const startX = e.clientX;
@@ -118,17 +130,17 @@ const Window = ({ win, children }) => {
 
   const style = {
     position: 'absolute',
-    left: win.isMaximized ? 0 : win.x,
-    top: win.isMaximized ? 0 : win.y, 
-    width: win.isMaximized ? '100vw' : win.width,
-    height: win.isMaximized ? 'calc(100vh - 30px - 85px)' : win.height, // 30px topbar, 85px for dock
+    left: win.isMaximized || isMobileWindow ? 0 : win.x,
+    top: win.isMaximized || isMobileWindow ? 0 : win.y,
+    width: win.isMaximized || isMobileWindow ? '100%' : win.width,
+    height: isMobileWindow ? '100%' : win.isMaximized ? 'calc(100vh - 30px - 85px)' : win.height, // 30px topbar, 85px for dock
     zIndex: win.zIndex,
     display: 'flex',
     flexDirection: 'column',
-    borderRadius: win.isMaximized ? '0' : '12px',
+    borderRadius: win.isMaximized || isMobileWindow ? '0' : '12px',
     overflow: 'hidden',
     boxShadow: isFocused ? '0 20px 50px rgba(0,0,0,0.5)' : '0 10px 30px rgba(0,0,0,0.3)',
-    transition: win.isMaximized ? 'width 0.3s, height 0.3s, left 0.3s, top 0.3s, border-radius 0.3s' : 'none',
+    transition: win.isMaximized && !isMobileWindow ? 'width 0.3s, height 0.3s, left 0.3s, top 0.3s, border-radius 0.3s' : 'none',
     pointerEvents: 'auto'
   };
 
@@ -137,7 +149,7 @@ const Window = ({ win, children }) => {
     <div
       className={`window glass ${isFocused ? 'focused' : ''}`}
       style={style}
-      onMouseDown={() => { if (!isFocused) focusWindow(win.id); }}
+      onPointerDown={() => { if (!isFocused) focusWindow(win.id); }}
       onContextMenu={handleContextMenu}
     >
       <div 
@@ -154,11 +166,11 @@ const Window = ({ win, children }) => {
         position: 'relative'
       }}>
         <div className="window-controls" style={{ display: 'flex', gap: '8px', zIndex: 10 }}>
-          <div onClick={() => closeWindow(win.id)} style={{ width: '12px', height: '12px', borderRadius: '50%', background: '#ff5f56', cursor: 'pointer' }}></div>
-          <div onClick={() => minimizeWindow(win.id)} style={{ width: '12px', height: '12px', borderRadius: '50%', background: '#ffbd2e', cursor: 'pointer' }}></div>
-          <div onClick={() => maximizeWindow(win.id)} style={{ width: '12px', height: '12px', borderRadius: '50%', background: '#27c93f', cursor: 'pointer' }}></div>
+          <button type="button" className="window-control" aria-label="Pencereyi kapat" title="Kapat" onClick={() => closeWindow(win.id)} style={{ width: '12px', height: '12px', borderRadius: '50%', background: '#ff5f56', cursor: 'pointer' }} />
+          <button type="button" className="window-control" aria-label="Pencereyi simge durumuna küçült" title="Simge Durumuna Küçült" onClick={() => minimizeWindow(win.id)} style={{ width: '12px', height: '12px', borderRadius: '50%', background: '#ffbd2e', cursor: 'pointer' }} />
+          <button type="button" className="window-control" aria-label={win.isMaximized ? 'Pencereyi önceki boyutuna döndür' : 'Pencereyi tam ekran yap'} title={win.isMaximized ? 'Önceki Boyut' : 'Tam Ekran'} onClick={() => maximizeWindow(win.id)} style={{ width: '12px', height: '12px', borderRadius: '50%', background: '#27c93f', cursor: 'pointer' }} />
         </div>
-        <div style={{ position: 'absolute', width: '100%', textAlign: 'center', fontWeight: '500', fontSize: '13px', color: isFocused ? '#fff' : '#aaa' }}>
+        <div className="window-title" style={{ position: 'absolute', width: '100%', textAlign: 'center', fontWeight: '500', fontSize: '13px', color: isFocused ? '#fff' : '#aaa' }}>
           {win.title}
         </div>
       </div>
@@ -167,7 +179,7 @@ const Window = ({ win, children }) => {
       </div>
 
       {/* Resize Handles */}
-      {!win.isMaximized && (
+      {!win.isMaximized && !isMobileWindow && (
         <>
           <div onPointerDown={(e) => handleResizePointerDown(e, 'n')} style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '6px', cursor: 'ns-resize', zIndex: 100 }} />
           <div onPointerDown={(e) => handleResizePointerDown(e, 's')} style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: '6px', cursor: 'ns-resize', zIndex: 100 }} />

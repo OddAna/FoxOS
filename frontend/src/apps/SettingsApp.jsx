@@ -28,9 +28,9 @@ const SettingsApp = ({ target }) => {
   ];
 
   return (
-    <div style={{ display: 'flex', height: '100%', width: '100%', color: '#fff' }}>
+    <div className="settings-app" style={{ display: 'flex', height: '100%', width: '100%', color: '#fff' }}>
       {/* Sidebar */}
-      <div style={{ 
+      <div className="settings-sidebar" style={{
         width: '200px', 
         background: 'rgba(0,0,0,0.3)', 
         borderRight: '1px solid rgba(255,255,255,0.1)',
@@ -39,6 +39,7 @@ const SettingsApp = ({ target }) => {
         {tabs.map(tab => (
           <div 
             key={tab.id}
+            className="settings-tab"
             onClick={() => {
               setActiveTab(tab.id);
               if (tab.id === 'applications') setApplicationTarget(null);
@@ -62,7 +63,7 @@ const SettingsApp = ({ target }) => {
       </div>
       
       {/* Content */}
-      <div data-settings-content style={{ flex: 1, padding: '32px', overflowY: 'auto' }}>
+      <div className="settings-content" data-settings-content style={{ flex: 1, padding: '32px', overflowY: 'auto' }}>
         <h2 style={{ fontSize: '24px', fontWeight: 'bold', marginBottom: '24px' }}>
           {tabs.find(t => t.id === activeTab)?.label}
         </h2>

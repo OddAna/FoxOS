@@ -133,8 +133,8 @@ const ServerApp = () => {
   const runningCount = containers.filter((container) => container.state === 'running').length;
 
   return (
-    <div style={{ height: '100%', overflowY: 'auto', color: '#fff', background: 'rgba(16,18,22,0.96)', padding: '24px', boxSizing: 'border-box' }}>
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '16px', marginBottom: '22px' }}>
+    <div className="server-app" style={{ height: '100%', overflowY: 'auto', color: '#fff', background: 'rgba(16,18,22,0.96)', padding: '24px', boxSizing: 'border-box' }}>
+      <div className="server-header" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '16px', marginBottom: '22px' }}>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <Server size={24} color="#38bdf8" />
@@ -158,14 +158,14 @@ const ServerApp = () => {
         </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '12px', marginBottom: '24px' }}>
+      <div className="server-metrics" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '12px', marginBottom: '24px' }}>
         <MetricCard icon={Activity} label="Çalışma süresi" value={formatUptime(system?.uptimeSeconds || 0)} detail={'Load: ' + (system?.loadAverage || []).join(' / ')} />
         <MetricCard icon={MemoryStick} label="Bellek" value={memoryUsage + '%'} detail={formatBytes(system?.memory.used) + ' / ' + formatBytes(system?.memory.total)} progress={memoryUsage} />
         <MetricCard icon={HardDrive} label="Disk" value={diskUsage + '%'} detail={formatBytes(system?.disk.used) + ' / ' + formatBytes(system?.disk.total)} progress={diskUsage} />
         <MetricCard icon={Cpu} label="Mimari" value={system?.architecture || '—'} detail={'Yürütme: ' + (system?.executionMode || '—')} />
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+      <div className="server-section-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '9px' }}>
           <Box size={19} color="#38bdf8" />
           <h2 style={{ fontSize: '17px', margin: 0 }}>Docker Containerları</h2>
@@ -187,7 +187,7 @@ const ServerApp = () => {
             .join(', ');
 
           return (
-            <div key={container.id} style={{ ...cardStyle, display: 'flex', alignItems: 'center', gap: '14px' }}>
+            <div key={container.id} className="server-container-row" style={{ ...cardStyle, display: 'flex', alignItems: 'center', gap: '14px' }}>
               <div style={{ width: '10px', height: '10px', borderRadius: '50%', flex: '0 0 auto', background: isRunning ? '#27c93f' : '#6b7280', boxShadow: isRunning ? '0 0 12px rgba(39,201,63,0.45)' : 'none' }} />
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -200,7 +200,7 @@ const ServerApp = () => {
               </div>
 
               {!container.protected && (
-                <div style={{ display: 'flex', gap: '6px' }}>
+                <div className="server-container-actions" style={{ display: 'flex', gap: '6px' }}>
                   {!isRunning && (
                     <button type="button" disabled={isBusy} onClick={() => runContainerAction(container, 'start')} style={actionButtonStyle}>
                       <Play size={13} /> Başlat
