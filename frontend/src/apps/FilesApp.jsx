@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { HardDrive, Download, Image as ImageIcon, FileText, Monitor, Trash2, ArrowLeft, ArrowUp, ArrowRight, RefreshCw, Grid, List, Search, ArrowDownAZ, Play, RotateCw, Settings as SettingsIcon, Square, X } from 'lucide-react';
+import { HardDrive, Download, Image as ImageIcon, FileText, Monitor, Trash2, ArrowLeft, ArrowUp, ArrowRight, RefreshCw, Grid, List, Search, ArrowDownAZ, Play, RotateCw, Settings as SettingsIcon, Square, X, PlayCircle } from 'lucide-react';
 import { useWindowManager } from '../contexts/WindowContext';
 import { useDialog } from '../contexts/DialogContext';
 import { getFileIcon } from '../utils/fileIcons';
@@ -20,6 +20,80 @@ import {
   checkAndPlanApplicationUpdate,
   updateConfirmationMessage
 } from '../utils/applicationUpdates';
+
+const IMAGE_PREVIEW_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp']);
+const VIDEO_PREVIEW_EXTENSIONS = new Set(['.mp4', '.mov', '.webm']);
+
+const staticFileUrl = (currentPath, fileName) => {
+  const parts = [...String(currentPath).split('/'), fileName].filter(Boolean);
+  return `/api/static/${parts.map(encodeURIComponent).join('/')}`;
+};
+
+const FilePreview = ({ file, currentPath, viewMode }) => {
+  const [failed, setFailed] = useState(false);
+  const size = viewMode === 'list' ? 24 : 64;
+  const ext = file.ext?.toLowerCase();
+  const isImage = IMAGE_PREVIEW_EXTENSIONS.has(ext);
+  const isVideo = VIDEO_PREVIEW_EXTENSIONS.has(ext);
+
+  if (viewMode === 'list' || failed || (!isImage && !isVideo)) {
+    return getFileIcon(file, viewMode === 'list' ? 24 : 48);
+  }
+
+  const mediaStyle = {
+    width: '100%',
+    height: '100%',
+    display: 'block',
+    objectFit: 'cover'
+  };
+
+  return (
+    <div
+      className="file-preview"
+      style={{
+        position: 'relative',
+        width: `${size}px`,
+        height: `${size}px`,
+        overflow: 'hidden',
+        borderRadius: '8px',
+        background: 'rgba(0,0,0,0.28)',
+        border: '1px solid rgba(255,255,255,0.16)',
+        boxShadow: '0 3px 9px rgba(0,0,0,0.22)'
+      }}
+    >
+      {isImage ? (
+        <img
+          src={staticFileUrl(currentPath, file.name)}
+          alt=""
+          loading="lazy"
+          draggable="false"
+          onError={() => setFailed(true)}
+          style={mediaStyle}
+        />
+      ) : (
+        <>
+          <video
+            src={`${staticFileUrl(currentPath, file.name)}#t=0.1`}
+            aria-hidden="true"
+            muted
+            playsInline
+            preload="metadata"
+            draggable="false"
+            onError={() => setFailed(true)}
+            style={mediaStyle}
+          />
+          <PlayCircle
+            size={22}
+            fill="rgba(0,0,0,0.55)"
+            color="#fff"
+            strokeWidth={1.5}
+            style={{ position: 'absolute', inset: 0, margin: 'auto', filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.7))' }}
+          />
+        </>
+      )}
+    </div>
+  );
+};
 
 const FilesApp = ({ initialPath = 'Masaüstü' }) => {
   const { showDialog } = useDialog();
@@ -958,8 +1032,8 @@ const FilesApp = ({ initialPath = 'Masaüstü' }) => {
                   flexDirection: viewMode === 'list' ? 'row' : 'column', 
                   alignItems: 'center', 
                   justifyContent: 'flex-start',
-                  width: viewMode === 'list' ? '100%' : '90px', 
-                  height: viewMode === 'list' ? '40px' : '110px',
+                  width: viewMode === 'list' ? '100%' : '100px',
+                  height: viewMode === 'list' ? '40px' : '126px',
                   cursor: 'pointer', 
                   gap: viewMode === 'list' ? '12px' : '8px', 
                   padding: viewMode === 'list' ? '4px 12px' : '10px 6px', 
@@ -1003,7 +1077,9 @@ const FilesApp = ({ initialPath = 'Masaüstü' }) => {
                         title={`Klasör durumu: ${folderState}`}
                       />
                     </div>
-                  ) : getFileIcon(file, viewMode === 'list' ? 24 : 48)}
+                  ) : (
+                    <FilePreview file={file} currentPath={currentPath} viewMode={viewMode} />
+                  )}
                 </div>
                 <span style={{ 
                   fontSize: '13px', 
