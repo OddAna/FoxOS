@@ -824,6 +824,25 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   const workspace = await filesResponse.json();
   assert.ok(workspace.items.some((entry) => entry.name === 'Sunucu' && entry.symlink));
 
+  const externalPreviewDirectory = path.join(testRoot, 'external-preview-directory');
+  const externalPreview = path.join(externalPreviewDirectory, 'linked-preview.jpg');
+  const previewLink = path.join(process.env.DATA_ROOT, 'files', 'Masaüstü', 'linked-previews');
+  fs.mkdirSync(externalPreviewDirectory);
+  fs.writeFileSync(externalPreview, 'preview-bytes');
+  fs.symlinkSync(externalPreviewDirectory, previewLink);
+  const previewResponse = await fetch(
+    baseUrl() + '/api/file-content?path=Masa%C3%BCst%C3%BC%2Flinked-previews%2Flinked-preview.jpg',
+    { headers: { Cookie: cookie } }
+  );
+  assert.equal(previewResponse.status, 200);
+  assert.equal(await previewResponse.text(), 'preview-bytes');
+
+  const escapedPreviewResponse = await fetch(
+    baseUrl() + '/api/file-content?path=..%2Fexternal-preview.jpg',
+    { headers: { Cookie: cookie } }
+  );
+  assert.equal(escapedPreviewResponse.status, 404);
+
   const terminalResponse = await fetch(baseUrl() + '/api/terminal', {
     method: 'POST',
     headers: { Cookie: cookie, 'Content-Type': 'application/json' },

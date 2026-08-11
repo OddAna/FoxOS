@@ -14,6 +14,6 @@ test('grid files render lazy image and video previews with icon fallback', () =>
 });
 
 test('preview URLs encode every file path segment', () => {
-  assert.match(filesApp, /parts\.map\(encodeURIComponent\)\.join\('\/'\)/);
-  assert.match(filesApp, /`\/api\/static\/\$\{/);
+  assert.match(filesApp, /encodeURIComponent\(parts\.join\('\/'\)\)/);
+  assert.match(filesApp, /`\/api\/file-content\?path=\$\{/);
 });

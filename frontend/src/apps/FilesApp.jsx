@@ -26,7 +26,7 @@ const VIDEO_PREVIEW_EXTENSIONS = new Set(['.mp4', '.mov', '.webm']);
 
 const staticFileUrl = (currentPath, fileName) => {
   const parts = [...String(currentPath).split('/'), fileName].filter(Boolean);
-  return `/api/static/${parts.map(encodeURIComponent).join('/')}`;
+  return `/api/file-content?path=${encodeURIComponent(parts.join('/'))}`;
 };
 
 const FilePreview = ({ file, currentPath, viewMode }) => {

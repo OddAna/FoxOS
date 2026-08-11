@@ -2301,6 +2301,24 @@ app.post('/api/auth/logout', requireAuth, (req, res) => {
 
 app.use('/api', requireAuth);
 
+app.get('/api/file-content', (req, res) => {
+  try {
+    const requestedPath = req.query.path;
+    const targetFile = resolveWorkspacePath(requestedPath);
+    const stats = fs.statSync(targetFile);
+    if (!stats.isFile()) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+    const resolvedFile = fs.realpathSync(targetFile);
+    res.sendFile(resolvedFile, (error) => {
+      if (!error || res.headersSent) return;
+      res.status(error.statusCode || 404).json({ error: 'File not found' });
+    });
+  } catch {
+    res.status(404).json({ error: 'File not found' });
+  }
+});
+
 app.use('/api/static', express.static(DISK_ROOT, { dotfiles: 'deny', fallthrough: false }));
 
 app.get('/api/files', (req, res) => {
