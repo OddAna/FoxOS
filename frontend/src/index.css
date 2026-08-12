@@ -672,6 +672,35 @@ body, html {
     width: min(100%, 320px) !important;
   }
 
+  .onboarding-screen {
+    padding: 12px !important;
+  }
+
+  .onboarding-card {
+    height: 100% !important;
+    border-radius: 16px !important;
+  }
+
+  .onboarding-header,
+  .onboarding-footer {
+    padding: 18px !important;
+  }
+
+  .onboarding-footer {
+    align-items: stretch !important;
+    flex-direction: column;
+    gap: 12px !important;
+  }
+
+  .onboarding-actions,
+  .onboarding-actions button {
+    flex: 1 1 auto;
+  }
+
+  .onboarding-actions {
+    width: 100%;
+  }
+
   .lock-avatar {
     width: 96px !important;
     height: 96px !important;
