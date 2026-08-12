@@ -84,11 +84,12 @@ function createDockerClient(socketPath) {
     });
   }
 
-  async function request(method, requestPath, payload = null) {
+  async function request(method, requestPath, payload = null, options = {}) {
     const body = payload === null ? null : JSON.stringify(payload);
     const response = await requestRaw(method, requestPath, body, {
       contentType: 'application/json',
-      maxResponseBytes: DEFAULT_JSON_LIMIT
+      maxResponseBytes: options.maxResponseBytes || DEFAULT_JSON_LIMIT,
+      timeoutMs: options.timeoutMs || 0
     });
     if (!response.length) return null;
     const text = response.toString('utf8');
@@ -150,7 +151,7 @@ function createDockerClient(socketPath) {
     };
   }
 
-  return { exec, request, requestBuffer, requestBuild };
+  return { exec, request, requestBuffer, requestBuild, requestRaw };
 }
 
 module.exports = {

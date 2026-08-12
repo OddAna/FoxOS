@@ -1,0 +1,328 @@
+.application-observability {
+  padding: 26px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.application-observability-heading,
+.application-observability-block-title,
+.application-health-summary,
+.application-health-facts,
+.application-alert,
+.application-metric-label {
+  display: flex;
+  align-items: center;
+}
+
+.application-observability-heading {
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.application-observability-heading h3 {
+  margin: 0 0 6px;
+  font-size: 16px;
+}
+
+.application-observability-heading p {
+  margin: 0;
+  color: #888;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.application-observability-heading > button,
+.application-observability-error button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 0 auto;
+  padding: 8px 11px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.application-observability-heading > button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.application-observability-placeholder,
+.application-observability-note,
+.application-observability-empty,
+.application-observability-stale {
+  color: #888;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.application-observability-placeholder {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 90px;
+}
+
+.application-observability-error,
+.application-observability-stale {
+  padding: 10px 12px;
+  border-radius: 8px;
+}
+
+.application-observability-error {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  background: rgba(255, 95, 86, 0.12);
+  border: 1px solid rgba(255, 95, 86, 0.35);
+  color: #ff8a84;
+  font-size: 13px;
+}
+
+.application-observability-error span {
+  flex: 1;
+}
+
+.application-observability-error button {
+  color: #ffaaa5;
+}
+
+.application-observability-stale {
+  margin-bottom: 14px;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.28);
+  color: #fbbf24;
+}
+
+.application-health-summary {
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.application-health-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.application-health-state > span {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #737373;
+  box-shadow: 0 0 0 3px rgba(115, 115, 115, 0.14);
+}
+
+.application-health-state.is-healthy > span { background: #27c93f; box-shadow: 0 0 0 3px rgba(39, 201, 63, 0.14); }
+.application-health-state.is-warning > span { background: #f59e0b; box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.14); }
+.application-health-state.is-critical > span { background: #ff5f56; box-shadow: 0 0 0 3px rgba(255, 95, 86, 0.14); }
+.application-health-state.is-stopped > span { background: #8b8b93; }
+
+.application-health-facts {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px 14px;
+  color: #888;
+  font-size: 12px;
+}
+
+.application-alerts {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.application-alert {
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.application-alert > svg { flex: 0 0 auto; margin-top: 2px; }
+.application-alert > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.application-alert strong { font-size: 12px; }
+.application-alert span { color: #aaa; font-size: 12px; line-height: 1.45; }
+.application-alert.is-critical { border-color: rgba(255, 95, 86, 0.32); color: #ff8a84; background: rgba(255, 95, 86, 0.09); }
+.application-alert.is-warning { border-color: rgba(245, 158, 11, 0.3); color: #fbbf24; background: rgba(245, 158, 11, 0.08); }
+.application-alert.is-clear { border-color: rgba(39, 201, 63, 0.25); color: #75da85; background: rgba(39, 201, 63, 0.07); }
+
+.application-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.application-metric-card {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.application-metric-label {
+  gap: 6px;
+  margin-bottom: 10px;
+  color: #888;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.application-metric-card > strong {
+  display: block;
+  overflow: hidden;
+  color: #f4f4f5;
+  font-size: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.application-metric-card > span {
+  display: block;
+  overflow: hidden;
+  margin-top: 4px;
+  color: #777;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.application-observability-note { margin-top: 14px; }
+
+.application-observability-block {
+  margin-top: 18px;
+}
+
+.application-observability-block-title {
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 9px;
+  color: #bbb;
+}
+
+.application-observability-block-title > svg { flex: 0 0 auto; margin-top: 2px; }
+.application-observability-block-title > div { display: flex; flex-direction: column; gap: 2px; }
+.application-observability-block-title strong { font-size: 12px; }
+.application-observability-block-title span { color: #777; font-size: 11px; line-height: 1.4; }
+
+.application-health-timeline {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  min-height: 22px;
+  padding: 5px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: #17171b;
+}
+
+.application-health-timeline > span {
+  flex: 1 1 5px;
+  min-width: 3px;
+  max-width: 16px;
+  border-radius: 3px;
+  background: #55555d;
+}
+
+.application-health-timeline > span.is-healthy { background: #27c93f; }
+.application-health-timeline > span.is-warning { background: #f59e0b; }
+.application-health-timeline > span.is-critical { background: #ff5f56; }
+.application-health-timeline > span.is-stopped { background: #777780; }
+
+.application-metric-trends {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.application-metric-trend {
+  min-width: 0;
+  padding: 11px 12px 9px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 9px;
+  background: #17171b;
+}
+
+.application-metric-trend > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.application-metric-trend strong { color: #d7d7dc; font-size: 11px; }
+.application-metric-trend span { overflow: hidden; color: #777; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+
+.application-metric-trend svg {
+  display: block;
+  width: 100%;
+  height: 42px;
+  margin-top: 8px;
+  overflow: visible;
+}
+
+.application-metric-trend line { stroke: rgba(255, 255, 255, 0.08); stroke-width: 1; }
+.application-metric-trend polyline { fill: none; stroke: #6d9bff; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; vector-effect: non-scaling-stroke; }
+.application-metric-trend.is-memory polyline { stroke: #c084fc; }
+
+.application-log-view {
+  max-height: 290px;
+  overflow: auto;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 9px;
+  background: #111114;
+  scrollbar-color: #555 transparent;
+}
+
+.application-log-line {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 10px;
+  padding: 4px 9px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.035);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.application-log-line:last-child { border-bottom: 0; }
+.application-log-line time { color: #62626a; user-select: none; }
+.application-log-line > span { min-width: 0; color: #c8c8cf; overflow-wrap: anywhere; white-space: pre-wrap; }
+.application-log-line.is-stderr > span { color: #ffaaa5; }
+
+.application-log-notice {
+  margin-top: 7px;
+  color: #777;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+@media (max-width: 900px) {
+  .application-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 560px) {
+  .application-observability-heading { align-items: flex-start; }
+  .application-health-summary { align-items: flex-start; flex-direction: column; }
+  .application-health-facts { justify-content: flex-start; }
+  .application-metric-grid { grid-template-columns: 1fr; }
+  .application-metric-trends { grid-template-columns: 1fr; }
+  .application-log-line { grid-template-columns: 58px minmax(0, 1fr); gap: 7px; padding-inline: 7px; }
+}

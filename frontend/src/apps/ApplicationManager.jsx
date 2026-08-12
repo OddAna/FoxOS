@@ -17,6 +17,7 @@ import {
 import { apiFetch } from '../api';
 import ApplicationLogo from '../components/ApplicationLogo';
 import ApplicationStatus from '../components/ApplicationStatus';
+import ApplicationObservability from './ApplicationObservability';
 import { useApplicationInventory } from '../contexts/ApplicationContext';
 import { useDialog } from '../contexts/DialogContext';
 import {
@@ -751,6 +752,8 @@ const ApplicationManager = ({ target }) => {
             </div>
           )}
         </section>
+
+        <ApplicationObservability application={selectedApplication} />
 
         <section style={{ padding: '26px 0', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
           <h3 style={{ margin: '0 0 6px 0', fontSize: '16px' }}>Erişim Linkleri</h3>

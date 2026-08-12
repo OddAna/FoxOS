@@ -45,6 +45,14 @@ let lastContainerPayload = null;
 const dockerRequestLog = [];
 const mockContainerId = 'b'.repeat(64);
 
+function dockerLogFrame(streamType, text) {
+  const body = Buffer.from(text, 'utf8');
+  const header = Buffer.alloc(8);
+  header[0] = streamType;
+  header.writeUInt32BE(body.length, 4);
+  return Buffer.concat([header, body]);
+}
+
 const dockerMock = http.createServer((req, res) => {
   dockerRequestLog.push({ method: req.method, url: req.url });
   const respond = (status, payload = null) => {
@@ -128,6 +136,32 @@ const dockerMock = http.createServer((req, res) => {
     });
     return;
   }
+  if (req.method === 'GET' && mockContainer && req.url.startsWith('/containers/' + mockContainer.Id + '/stats?')) {
+    return respond(200, {
+      read: '2026-08-12T12:00:00.000Z',
+      cpu_stats: {
+        cpu_usage: { total_usage: 300, percpu_usage: [150, 150] },
+        system_cpu_usage: 2000,
+        online_cpus: 2
+      },
+      precpu_stats: {
+        cpu_usage: { total_usage: 200 },
+        system_cpu_usage: 1000
+      },
+      memory_stats: { usage: 512, limit: 1024, stats: { inactive_file: 0 } },
+      networks: { eth0: { rx_bytes: 1000, tx_bytes: 2000 } },
+      blkio_stats: { io_service_bytes_recursive: [{ op: 'Read', value: 4096 }] },
+      pids_stats: { current: 4 }
+    });
+  }
+  if (req.method === 'GET' && mockContainer && req.url.startsWith('/containers/' + mockContainer.Id + '/logs?')) {
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/vnd.docker.raw-stream');
+    return res.end(Buffer.concat([
+      dockerLogFrame(1, '2026-08-12T11:59:59.000000000Z application ready\n'),
+      dockerLogFrame(2, `2026-08-12T12:00:00.000000000Z API_TOKEN=${mockContainer.LogSecret || 'test-secret-value'}\n`)
+    ]));
+  }
   if (req.method === 'GET' && mockContainer && req.url === '/containers/' + mockContainer.Id + '/json') {
     return respond(200, {
       Id: mockContainer.Id,
@@ -149,8 +183,13 @@ const dockerMock = http.createServer((req, res) => {
       State: {
         Status: mockContainer.State || 'unknown',
         Running: mockContainer.State === 'running',
-        Health: mockContainer.HealthStatus ? { Status: mockContainer.HealthStatus } : null
-      }
+        Health: mockContainer.HealthStatus ? { Status: mockContainer.HealthStatus } : null,
+        ExitCode: mockContainer.ExitCode || 0,
+        OOMKilled: mockContainer.OOMKilled === true,
+        StartedAt: mockContainer.StartedAt || '2026-08-12T11:55:00.000Z',
+        FinishedAt: mockContainer.FinishedAt || '0001-01-01T00:00:00Z'
+      },
+      RestartCount: mockContainer.RestartCount || 0
     });
   }
   if (req.method === 'POST' && mockContainer && req.url === '/containers/' + mockContainer.Id + '/update') {
@@ -645,6 +684,7 @@ test('health is public while management APIs require a session', async () => {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
   })).status, 401);
   assert.equal((await fetch(baseUrl() + '/api/applications/' + applicationOperationsId + '/update-status')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/applications/' + applicationOperationsId + '/observability')).status, 401);
   assert.equal((await fetch(baseUrl() + '/api/application-update-plans/auplan_' + '8'.repeat(32) + '/apply', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
   })).status, 401);
@@ -1339,6 +1379,7 @@ test('setup creates an authenticated session and server-owned onboarding state',
     Env: [`API_TOKEN=${registrySecret}`, 'NODE_ENV=production'],
     Healthcheck: { Test: ['CMD-SHELL', `curl -H 'Authorization: ${registrySecret}' http://localhost/`] },
     HealthStatus: 'healthy',
+    LogSecret: registrySecret,
     Mounts: [{
       Type: 'volume',
       Name: 'registry-data',
@@ -1378,6 +1419,22 @@ test('setup creates an authenticated session and server-owned onboarding state',
   assert.equal(scanPayload.snapshot.guarantees.runtimeMutated, false);
   assert.equal(dockerRequestLog.every((request) => request.method === 'GET'), true);
   assert.equal(JSON.stringify(scanPayload).includes(registrySecret), false);
+
+  const observabilityResponse = await fetch(
+    baseUrl() + '/api/applications/' + scanPayload.snapshot.resources[0].id + '/observability?tail=120',
+    { headers: { Cookie: cookie } }
+  );
+  assert.equal(observabilityResponse.status, 200);
+  const observability = (await observabilityResponse.json()).observability;
+  assert.equal(observability.schemaVersion, 2);
+  assert.equal(observability.available, true);
+  assert.equal(observability.health.healthStatus, 'healthy');
+  assert.equal(observability.metrics.sample.cpuPercent, 20);
+  assert.equal(observability.metrics.history.length, 1);
+  assert.equal(observability.metrics.historyPolicy.minimumIntervalSeconds, 300);
+  assert.equal(observability.logs.lines.at(-1).message, 'API_TOKEN=[REDACTED]');
+  assert.equal(observability.logs.redacted, true);
+  assert.equal(JSON.stringify(observability).includes(registrySecret), false);
 
   const registryResponse = await fetch(baseUrl() + '/api/resources', {
     headers: { Cookie: cookie }
