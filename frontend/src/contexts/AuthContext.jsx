@@ -7,7 +7,7 @@ const AuthContext = createContext();
 export const useAuth = () => useContext(AuthContext);
 
 export const AuthProvider = ({ children }) => {
-  const [authState, setAuthState] = useState('loading'); // 'loading', 'needs_setup', 'locked', 'authenticated'
+  const [authState, setAuthState] = useState('loading'); // 'loading', 'needs_setup', 'needs_onboarding', 'locked', 'authenticated'
   const [username, setUsername] = useState(null);
 
   useEffect(() => {
@@ -26,7 +26,9 @@ export const AuthProvider = ({ children }) => {
       const data = await res.json();
       if (data.isSetup) {
         setUsername(data.username);
-        setAuthState(data.authenticated ? 'authenticated' : 'locked');
+        setAuthState(data.authenticated
+          ? data.onboardingRequired ? 'needs_onboarding' : 'authenticated'
+          : 'locked');
       } else {
         setAuthState('needs_setup');
       }
@@ -46,7 +48,7 @@ export const AuthProvider = ({ children }) => {
       const data = await res.json();
       if (data.success) {
         setUsername(data.username);
-        setAuthState('authenticated');
+        setAuthState(data.onboardingRequired ? 'needs_onboarding' : 'authenticated');
         return { success: true };
       } else {
         return { success: false, error: data.error };
@@ -66,7 +68,7 @@ export const AuthProvider = ({ children }) => {
       const data = await res.json();
       if (data.success) {
         setUsername(data.username);
-        setAuthState('authenticated');
+        setAuthState(data.onboardingRequired ? 'needs_onboarding' : 'authenticated');
         return { success: true };
       } else {
         return { success: false, error: data.error };
@@ -85,8 +87,32 @@ export const AuthProvider = ({ children }) => {
     setAuthState('locked');
   };
 
+  const completeOnboarding = async (resolution) => {
+    try {
+      const res = await fetch('/api/setup/onboarding/complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          resolution,
+          confirmation: 'COMPLETE INITIAL SETUP'
+        })
+      });
+      const data = await res.json();
+      if (res.status === 401) {
+        setAuthState('locked');
+      }
+      if (!res.ok || !data.success) {
+        return { success: false, error: data.error || 'İlk kurulum tamamlanamadı.' };
+      }
+      setAuthState('authenticated');
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  };
+
   return (
-    <AuthContext.Provider value={{ authState, username, setup, login, logout }}>
+    <AuthContext.Provider value={{ authState, username, setup, login, logout, completeOnboarding }}>
       {children}
     </AuthContext.Provider>
   );

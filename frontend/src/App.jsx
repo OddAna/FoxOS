@@ -29,6 +29,7 @@ import { ApplicationRemovalProvider, useApplicationRemoval } from './contexts/Ap
 import { useAuth } from './contexts/AuthContext';
 import SetupScreen from './components/auth/SetupScreen';
 import LockScreen from './components/auth/LockScreen';
+import ServerOnboarding from './components/auth/ServerOnboarding';
 import { apiFetch } from './api';
 import {
   applyApplicationUpdate,
@@ -1219,6 +1220,7 @@ function App() {
 
   if (authState === 'loading') return <div style={{ background: '#000', width: '100vw', height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>Loading...</div>;
   if (authState === 'needs_setup') return <SetupScreen />;
+  if (authState === 'needs_onboarding') return <ServerOnboarding />;
   if (authState === 'locked') return <LockScreen />;
 
   return (

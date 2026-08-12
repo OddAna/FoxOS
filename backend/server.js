@@ -190,6 +190,8 @@ const SESSIONS_FILE = path.join(DATA_ROOT, 'sessions.json');
 const PUBLIC_DIR = path.resolve(process.env.PUBLIC_DIR || path.join(__dirname, 'public'));
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const SESSION_RENEWAL_WINDOW_MS = Math.floor(SESSION_TTL_MS / 2);
+const INITIAL_SETUP_SCHEMA_VERSION = 1;
+const COMPLETE_INITIAL_SETUP_CONFIRMATION = 'COMPLETE INITIAL SETUP';
 const COMMAND_TIMEOUT_MS = Number.parseInt(process.env.COMMAND_TIMEOUT_MS || '120000', 10);
 const COMMAND_MAX_BUFFER = 2 * 1024 * 1024;
 const CODEX_HOST_STATE_ROOT = process.env.FOXOS_CODEX_HOST_STATE_ROOT || '/var/lib/foxos/codex';
@@ -413,6 +415,14 @@ function writeAuthRecord(record) {
   fs.writeFileSync(temporaryFile, JSON.stringify(record), { mode: 0o600 });
   fs.renameSync(temporaryFile, AUTH_FILE);
   fs.chmodSync(AUTH_FILE, 0o600);
+}
+
+function initialSetupRequired(authRecord) {
+  return Boolean(
+    authRecord && authRecord.initialSetup &&
+    authRecord.initialSetup.schemaVersion === INITIAL_SETUP_SCHEMA_VERSION &&
+    authRecord.initialSetup.status === 'pending'
+  );
 }
 
 function derivePassword(password, salt) {
@@ -2226,7 +2236,8 @@ app.get('/api/auth/status', (req, res) => {
   res.json({
     isSetup: Boolean(authRecord),
     authenticated: Boolean(session),
-    username: session ? session.username : authRecord ? authRecord.username : null
+    username: session ? session.username : authRecord ? authRecord.username : null,
+    onboardingRequired: Boolean(session && initialSetupRequired(authRecord))
   });
 });
 
@@ -2241,15 +2252,21 @@ app.post('/api/auth/setup', (req, res) => {
   }
 
   const salt = crypto.randomBytes(16).toString('hex');
+  const createdAt = new Date().toISOString();
   writeAuthRecord({
-    version: 2,
+    version: 3,
     username,
     salt,
     passwordHash: derivePassword(password, salt),
-    createdAt: new Date().toISOString()
+    createdAt,
+    initialSetup: {
+      schemaVersion: INITIAL_SETUP_SCHEMA_VERSION,
+      status: 'pending',
+      startedAt: createdAt
+    }
   });
   createSession(res, username);
-  res.status(201).json({ success: true, username });
+  res.status(201).json({ success: true, username, onboardingRequired: true });
 });
 
 app.post('/api/auth/login', (req, res) => {
@@ -2272,7 +2289,11 @@ app.post('/api/auth/login', (req, res) => {
 
   loginAttempts.delete(loginKey(req));
   createSession(res, authRecord.username);
-  res.json({ success: true, username: authRecord.username });
+  res.json({
+    success: true,
+    username: authRecord.username,
+    onboardingRequired: initialSetupRequired(authRecord)
+  });
 });
 
 app.post('/api/auth/maintenance-session', (req, res) => {
@@ -2282,7 +2303,12 @@ app.post('/api/auth/maintenance-session', (req, res) => {
     if (!authRecord) return res.status(409).json({ error: 'FoxOS has not been configured' });
     maintenanceSessionManager.consume(req.body && req.body.token);
     createSession(res, authRecord.username);
-    res.json({ success: true, username: authRecord.username, localOnly: true });
+    res.json({
+      success: true,
+      username: authRecord.username,
+      localOnly: true,
+      onboardingRequired: initialSetupRequired(authRecord)
+    });
   } catch (error) {
     const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
     res.status(status).json({
@@ -2300,6 +2326,76 @@ app.post('/api/auth/logout', requireAuth, (req, res) => {
 });
 
 app.use('/api', requireAuth);
+
+app.post('/api/setup/onboarding/complete', (req, res) => {
+  const resolution = req.body && req.body.resolution;
+  if (!['reviewed', 'deferred'].includes(resolution)) {
+    return res.status(400).json({
+      error: 'Choose whether the initial server review was completed or deferred',
+      code: 'initial-setup-resolution-invalid'
+    });
+  }
+  if (!req.body || req.body.confirmation !== COMPLETE_INITIAL_SETUP_CONFIRMATION) {
+    return res.status(400).json({
+      error: 'Exact initial setup confirmation is required',
+      code: 'initial-setup-confirmation-required'
+    });
+  }
+
+  try {
+    const authRecord = readAuthRecord();
+    if (!authRecord) {
+      return res.status(409).json({
+        error: 'FoxOS has not been configured',
+        code: 'initial-setup-auth-missing'
+      });
+    }
+    if (!initialSetupRequired(authRecord)) {
+      return res.json({ success: true, onboardingRequired: false, alreadyComplete: true });
+    }
+
+    let review = null;
+    if (resolution === 'reviewed') {
+      const snapshot = resourceRegistry.getLatest();
+      const latestPlan = migrationOrchestrator.status().latest;
+      const startedAtMs = Date.parse(authRecord.initialSetup.startedAt);
+      const scannedAtMs = Date.parse(snapshot && snapshot.generatedAt);
+      if (
+        !snapshot || !latestPlan || latestPlan.sourceSnapshotId !== snapshot.snapshotId ||
+        !Number.isFinite(startedAtMs) || !Number.isFinite(scannedAtMs) || scannedAtMs < startedAtMs
+      ) {
+        return res.status(409).json({
+          error: 'Complete a fresh server scan before finishing the initial review',
+          code: 'initial-setup-review-incomplete'
+        });
+      }
+      review = {
+        sourceSnapshotId: snapshot.snapshotId,
+        serverPlanId: latestPlan.planId,
+        scannedAt: snapshot.generatedAt
+      };
+    }
+
+    const completedAt = new Date().toISOString();
+    writeAuthRecord({
+      ...authRecord,
+      initialSetup: {
+        ...authRecord.initialSetup,
+        status: 'completed',
+        resolution,
+        completedAt,
+        ...(review ? { review } : {})
+      }
+    });
+    res.json({ success: true, onboardingRequired: false, resolution, completedAt });
+  } catch (error) {
+    console.error('Could not complete initial server setup:', error.message);
+    res.status(500).json({
+      error: 'Could not complete initial server setup',
+      code: 'initial-setup-write-failed'
+    });
+  }
+});
 
 app.get('/api/file-content', (req, res) => {
   try {

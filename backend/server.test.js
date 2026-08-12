@@ -651,6 +651,12 @@ test('health is public while management APIs require a session', async () => {
     baseUrl() + '/api/migration-runs/mrun_' + '1'.repeat(32)
   );
   assert.equal(migrationRunResponse.status, 401);
+  const initialSetupCompleteResponse = await fetch(baseUrl() + '/api/setup/onboarding/complete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}'
+  });
+  assert.equal(initialSetupCompleteResponse.status, 401);
   const statelessMigrationsResponse = await fetch(baseUrl() + '/api/stateless-migrations');
   assert.equal(statelessMigrationsResponse.status, 401);
   const statelessMigrationPlanResponse = await fetch(baseUrl() + '/api/stateless-migrations/plans', {
@@ -675,7 +681,7 @@ test('health is public while management APIs require a session', async () => {
   assert.equal(statelessMigrationRunResponse.status, 401);
 });
 
-test('setup creates an authenticated session and unlocks the workspace', async () => {
+test('setup creates an authenticated session and server-owned onboarding state', async () => {
   const weakPasswordResponse = await fetch(baseUrl() + '/api/auth/setup', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -689,6 +695,11 @@ test('setup creates an authenticated session and unlocks the workspace', async (
     body: JSON.stringify({ username: 'tester', password: 'correct-horse-battery' })
   });
   assert.equal(setupResponse.status, 201);
+  assert.deepEqual(await setupResponse.json(), {
+    success: true,
+    username: 'tester',
+    onboardingRequired: true
+  });
   const cookie = setupResponse.headers.get('set-cookie').split(';')[0];
 
   await expectWebSocketUpgradeStatus(
@@ -703,8 +714,69 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   assert.deepEqual(await statusResponse.json(), {
     isSetup: true,
     authenticated: true,
-    username: 'tester'
+    username: 'tester',
+    onboardingRequired: true
   });
+
+  const invalidOnboardingResponse = await fetch(baseUrl() + '/api/setup/onboarding/complete', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ resolution: 'deferred', confirmation: 'WRONG' })
+  });
+  assert.equal(invalidOnboardingResponse.status, 400);
+  assert.equal(
+    (await invalidOnboardingResponse.json()).code,
+    'initial-setup-confirmation-required'
+  );
+
+  const incompleteReviewResponse = await fetch(baseUrl() + '/api/setup/onboarding/complete', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      resolution: 'reviewed',
+      confirmation: 'COMPLETE INITIAL SETUP'
+    })
+  });
+  assert.equal(incompleteReviewResponse.status, 409);
+  assert.equal((await incompleteReviewResponse.json()).code, 'initial-setup-review-incomplete');
+
+  const completeOnboardingResponse = await fetch(baseUrl() + '/api/setup/onboarding/complete', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      resolution: 'deferred',
+      confirmation: 'COMPLETE INITIAL SETUP'
+    })
+  });
+  assert.equal(completeOnboardingResponse.status, 200);
+  assert.deepEqual(
+    (({ success, onboardingRequired, resolution }) => ({ success, onboardingRequired, resolution }))(
+      await completeOnboardingResponse.json()
+    ),
+    { success: true, onboardingRequired: false, resolution: 'deferred' }
+  );
+  const authFile = path.join(process.env.DATA_ROOT, 'auth.json');
+  assert.equal(fs.statSync(authFile).mode & 0o777, 0o600);
+  assert.equal(JSON.parse(fs.readFileSync(authFile, 'utf8')).initialSetup.status, 'completed');
+
+  const completedStatusResponse = await fetch(baseUrl() + '/api/auth/status', {
+    headers: { Cookie: cookie }
+  });
+  assert.deepEqual(await completedStatusResponse.json(), {
+    isSetup: true,
+    authenticated: true,
+    username: 'tester',
+    onboardingRequired: false
+  });
+
+  const legacyAuthRecord = JSON.parse(fs.readFileSync(authFile, 'utf8'));
+  delete legacyAuthRecord.initialSetup;
+  legacyAuthRecord.version = 2;
+  fs.writeFileSync(authFile, JSON.stringify(legacyAuthRecord), { mode: 0o600 });
+  const legacyStatusResponse = await fetch(baseUrl() + '/api/auth/status', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal((await legacyStatusResponse.json()).onboardingRequired, false);
 
   const removalPlanId = 'arplan_' + '1'.repeat(32);
   const wrongRemovalPassword = await fetch(baseUrl() + '/api/application-removal-plans/' + removalPlanId + '/apply', {
@@ -1268,6 +1340,29 @@ test('setup creates an authenticated session and unlocks the workspace', async (
     serverMigrationPlan.planId + '.json'
   );
   assert.equal(fs.statSync(migrationPlanFile).mode & 0o777, 0o600);
+
+  const reviewedAuthRecord = JSON.parse(fs.readFileSync(authFile, 'utf8'));
+  reviewedAuthRecord.version = 3;
+  reviewedAuthRecord.initialSetup = {
+    schemaVersion: 1,
+    status: 'pending',
+    startedAt: new Date(Date.parse(scanPayload.snapshot.generatedAt) - 1000).toISOString()
+  };
+  fs.writeFileSync(authFile, JSON.stringify(reviewedAuthRecord), { mode: 0o600 });
+  const reviewedOnboardingResponse = await fetch(baseUrl() + '/api/setup/onboarding/complete', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      resolution: 'reviewed',
+      confirmation: 'COMPLETE INITIAL SETUP'
+    })
+  });
+  assert.equal(reviewedOnboardingResponse.status, 200);
+  assert.equal((await reviewedOnboardingResponse.json()).resolution, 'reviewed');
+  const reviewedInitialSetup = JSON.parse(fs.readFileSync(authFile, 'utf8')).initialSetup;
+  assert.equal(reviewedInitialSetup.status, 'completed');
+  assert.equal(reviewedInitialSetup.review.sourceSnapshotId, scanPayload.snapshot.snapshotId);
+  assert.equal(reviewedInitialSetup.review.serverPlanId, serverMigrationPlan.planId);
 
   const migrationSelectionStatusResponse = await fetch(
     baseUrl() + '/api/migration-selections/current',

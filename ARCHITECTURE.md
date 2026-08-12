@@ -129,6 +129,27 @@ be atomic, schema-versioned, permission-restricted and included in backup and
 restore procedures. Redacted exports must be sufficient to inspect the resource
 graph without exposing secret values.
 
+## First-run server review
+
+A new owner account stores a versioned `pending` initial-setup marker in the
+owner-only authentication record. The authenticated desktop remains behind that
+gate while FoxOS performs a fresh Resource Registry scan and compiles the
+current whole-server migration plan. Observation and planning are read-only:
+they do not stop applications, switch routes, configure or mutate an optional
+provider, or grant migration execution authority. A previously configured
+migration reader may contribute only its bounded GET-only observation.
+
+The owner may select eligible resources and use the existing migration-run
+coordinator, finish the review without selecting a resource, or explicitly
+defer migration and continue to the desktop. Both `reviewed` and `deferred`
+outcomes are persisted atomically on the server; browser storage is never the
+authority. Deferred work remains available under **Ayarlar → Sunucu Geçişi**
+with the same preflight, one-use approval, health and rollback gates.
+
+Authentication records created before this gate have no `pending` marker and
+are treated as already complete. An upgrade therefore never interrupts an
+existing owner's session with a first-install workflow.
+
 ## Migration safety gates
 
 A provider cannot be detached from a resource until FoxOS has verified:

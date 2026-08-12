@@ -282,8 +282,9 @@ function DetailSection({ title, description, children, last = false }) {
   );
 }
 
-const MigrationSettings = () => {
+const MigrationSettings = ({ autoScan = false, onScanComplete = null }) => {
   const rootRef = useRef(null);
+  const autoScanStartedRef = useRef(false);
   const [snapshot, setSnapshot] = useState(null);
   const [plan, setPlan] = useState(null);
   const [selectionStatus, setSelectionStatus] = useState(null);
@@ -460,7 +461,7 @@ const MigrationSettings = () => {
     return result;
   }, { ready: 0, blocked: 0, unsupported: 0, managed: 0, grouped: 0, retirement: 0, protected: 0 }), [resources]);
 
-  const scanServer = async () => {
+  const scanServer = useCallback(async () => {
     setScanning(true);
     setMessage(null);
     try {
@@ -486,12 +487,24 @@ const MigrationSettings = () => {
         type: 'success',
         text: `${planPayload.plan.summary.resources} kaynak salt okunur olarak tarandı. Hiçbir çalışma durumu değiştirilmedi.`
       });
+      onScanComplete?.({
+        success: true,
+        snapshot: scanPayload.snapshot,
+        plan: planPayload.plan
+      });
     } catch (error) {
       setMessage({ type: 'error', text: error.message });
+      onScanComplete?.({ success: false, error: error.message });
     } finally {
       setScanning(false);
     }
-  };
+  }, [applyLoadedState, onScanComplete]);
+
+  useEffect(() => {
+    if (!autoScan || loading || autoScanStartedRef.current) return;
+    autoScanStartedRef.current = true;
+    scanServer();
+  }, [autoScan, loading, scanServer]);
 
   const toggleResource = (resourceId) => {
     setSelectedIds((current) => current.includes(resourceId)
