@@ -706,6 +706,28 @@ migration produces a server-owned manifest/source. Direct-container updates,
 writable-bind restoration, scaled Compose services and host-service updates
 remain incomplete safety contracts.
 
+Application observability is a separate authenticated, read-only surface over
+the same canonical application identity. The client supplies an application ID,
+never a Docker ID; the server resolves the current exact runtime from the
+canonical inventory and rejects runtime drift before reading Docker. An
+observation combines inspect state, one non-streaming stats sample and at most
+500 recent log lines. Raw log responses are capped at 512 KiB, Docker multiplex
+frames are decoded server-side, terminal controls are removed, and known
+sensitive environment/label values plus common credential patterns are
+redacted before JSON leaves the server. This is defense in depth for the
+owner-only surface, not a claim that arbitrary application output can be
+proven secret-free.
+
+Health state changes and 15-minute unchanged heartbeats are persisted under
+`.foxos-data/observability/health-history/` as schema-versioned owner-only
+`700/600` state. Seven days and 1,024 samples per stable application ID are the
+hard bounds. Current CPU, effective memory, network, block-I/O and PID readings
+remain ephemeral. Threshold-derived alerts explain unhealthy/error, restart,
+OOM, CPU, memory and PID pressure without changing a runtime or provider. A
+missing container or inactive definition still receives truthful health
+history and an explicit unavailable reason. systemd journal/cgroup metrics,
+long-term metric retention and external alert delivery remain later contracts.
+
 ### Implemented boundary: Application Manifest
 
 Application Manifest joins the previously separate resource, environment,

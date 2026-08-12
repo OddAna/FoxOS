@@ -160,6 +160,10 @@ const {
   createApplicationRemovalManager
 } = require('./applicationRemovalManager');
 const {
+  ApplicationObservabilityError,
+  createApplicationObservabilityManager
+} = require('./applicationObservabilityManager');
+const {
   DESKTOP_ROOT,
   DesktopShortcutError,
   createDesktopShortcutManager
@@ -1602,6 +1606,12 @@ const applicationUpdateManager = createApplicationUpdateManager({
   volumeSnapshots: applicationUpdateVolumeSnapshots,
   routeRuntime: ingressAuthorityManager
 });
+const applicationObservabilityManager = createApplicationObservabilityManager({
+  dataRoot: DATA_ROOT,
+  dockerRequest,
+  dockerRawRequest: dockerClient.requestRaw,
+  getApplicationInventory
+});
 const productionStatelessMigrationAdapter = createProductionStatelessMigrationAdapter({
   dataRoot: DATA_ROOT,
   dockerRequest,
@@ -1860,6 +1870,17 @@ function sendApplicationUpdateError(res, error, action) {
       ? 'Güncelleme denetimi tamamlanamadı'
       : error.message,
     code: error.code || 'application-update-error'
+  });
+}
+
+function sendApplicationObservabilityError(res, error, action) {
+  const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+  if (status >= 500) console.error(action + ':', error.message);
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof ApplicationObservabilityError)
+      ? 'Uygulama gözlem verisi okunamadı'
+      : error.message,
+    code: error.code || 'application-observability-error'
   });
 }
 
@@ -2202,7 +2223,7 @@ async function getApplicationInventory() {
     snapshot = await resourceRegistry.scan();
   }
 
-  return {
+  const inventory = {
     schemaVersion: APPLICATION_INVENTORY_SCHEMA_VERSION,
     snapshotId: snapshot && snapshot.snapshotId || null,
     generatedAt: snapshot && snapshot.generatedAt || null,
@@ -2230,6 +2251,12 @@ async function getApplicationInventory() {
       };
     })
   };
+  try {
+    applicationObservabilityManager.recordInventory(inventory);
+  } catch (error) {
+    console.error('Could not record application health history:', error.message);
+  }
+  return inventory;
 }
 
 app.get('/api/health', (req, res) => {
@@ -3816,6 +3843,19 @@ app.get('/api/applications', async (req, res) => {
   } catch (error) {
     console.error('Could not build the server application inventory:', error.message);
     res.status(503).json({ error: 'Sunucu uygulamaları okunamadı' });
+  }
+});
+
+app.get('/api/applications/:applicationId/observability', async (req, res) => {
+  try {
+    res.json({
+      observability: await applicationObservabilityManager.observe(
+        req.params.applicationId,
+        { tail: req.query.tail }
+      )
+    });
+  } catch (error) {
+    sendApplicationObservabilityError(res, error, 'Could not read application observability');
   }
 });
 
