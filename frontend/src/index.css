@@ -3,6 +3,8 @@
   --bg-light: rgba(255, 255, 255, 0.2);
   --border-glass: rgba(255, 255, 255, 0.1);
   --text-primary: #ffffff;
+  --foxos-topbar-height: 30px;
+  --foxos-dock-reserve: 80px;
 }
 
 * {
@@ -11,18 +13,25 @@
   padding: 0;
 }
 
+body, html, #root {
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+}
+
 body, html {
-  width: 100vw;
-  height: 100vh;
   overflow: hidden;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   background-color: #000;
   color: var(--text-primary);
+  overscroll-behavior: none;
 }
 
 .desktop {
-  width: 100vw;
-  height: 100vh;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
   background-image: url('./assets/fox-wallpaper.jpg');
   background-size: cover;
   background-position: center;
@@ -127,4 +136,564 @@ body, html {
 
 .dock-indicator.active {
   opacity: 1;
+}
+
+.window-control {
+  appearance: none;
+  border: 0;
+  padding: 0;
+}
+
+.desktop-pages-track.is-desktop,
+.desktop-page.is-desktop {
+  display: contents;
+}
+
+.desktop-page-indicator {
+  display: none;
+}
+
+@supports (height: 100dvh) {
+  body,
+  html,
+  #root,
+  .desktop,
+  .auth-screen,
+  .dialog-layer,
+  .application-removal-layer {
+    height: 100dvh !important;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .dock-item:hover {
+    transform: scale(1.2) translateY(-5px);
+  }
+}
+
+@media (max-width: 720px) {
+  :root {
+    --foxos-topbar-height: calc(40px + env(safe-area-inset-top));
+    --foxos-dock-reserve: calc(72px + env(safe-area-inset-bottom));
+  }
+
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+
+  .topbar {
+    height: var(--foxos-topbar-height);
+    padding: env(safe-area-inset-top) 12px 0;
+    background: rgba(15, 15, 19, 0.55);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+  }
+
+  .topbar-left,
+  .topbar-right {
+    min-width: 0;
+    gap: 8px;
+  }
+
+  .topbar-left > .topbar-item:not(.brand),
+  .topbar-date {
+    display: none;
+  }
+
+  .topbar-item.brand {
+    min-height: 40px;
+  }
+
+  .topbar-right .topbar-item {
+    margin-left: 0 !important;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .dock-container {
+    right: 0;
+    bottom: max(6px, env(safe-area-inset-bottom));
+    left: 0;
+    width: auto;
+    padding: 0 8px;
+    pointer-events: none;
+  }
+
+  .dock {
+    width: min(100%, 430px);
+    gap: 0;
+    justify-content: space-between;
+    padding: 6px 7px;
+    border-radius: 20px;
+    pointer-events: auto;
+  }
+
+  .dock-item-wrapper {
+    min-width: 0;
+    flex: 1 1 0;
+  }
+
+  .dock-item {
+    width: 100%;
+    height: 44px;
+  }
+
+  .dock-item:hover {
+    transform: none;
+  }
+
+  [data-foxos-desktop-grid="true"] {
+    top: var(--foxos-topbar-height) !important;
+    bottom: var(--foxos-dock-reserve) !important;
+    padding: 8px !important;
+  }
+
+  .desktop-grid.is-mobile {
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    padding: 0 !important;
+    scroll-behavior: smooth;
+    scroll-snap-type: x mandatory;
+    scrollbar-width: none;
+    overscroll-behavior-x: contain;
+    touch-action: pan-x;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .desktop-grid.is-mobile::-webkit-scrollbar {
+    display: none;
+  }
+
+  .desktop-pages-track:not(.is-desktop) {
+    width: 100%;
+    height: 100%;
+    display: flex;
+  }
+
+  .desktop-page:not(.is-desktop) {
+    min-width: 100%;
+    height: 100%;
+    flex: 0 0 100%;
+    display: grid;
+    grid-template-columns: repeat(var(--mobile-desktop-columns), minmax(0, 1fr));
+    grid-template-rows: repeat(var(--mobile-desktop-rows), minmax(0, 1fr));
+    grid-auto-flow: row;
+    align-items: stretch;
+    padding: 8px max(8px, env(safe-area-inset-right)) 28px max(8px, env(safe-area-inset-left));
+    scroll-snap-align: start;
+    scroll-snap-stop: always;
+  }
+
+  .desktop-file {
+    min-width: 0;
+    height: 100%;
+    overflow: hidden;
+    touch-action: pan-x;
+  }
+
+  .desktop-page-indicator {
+    position: absolute;
+    right: 12px;
+    bottom: calc(var(--foxos-dock-reserve) + 2px);
+    left: 12px;
+    z-index: 2;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    pointer-events: none;
+  }
+
+  .desktop-page-indicator button {
+    appearance: none;
+    width: 22px;
+    height: 22px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+    pointer-events: auto;
+  }
+
+  .desktop-page-indicator button::after {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.45);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+    content: '';
+    transition: width 140ms ease, background 140ms ease;
+  }
+
+  .desktop-page-indicator button.is-active::after {
+    width: 15px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.92);
+  }
+
+  .desktop-page-indicator button:focus-visible {
+    outline: 2px solid rgba(255, 255, 255, 0.9);
+    outline-offset: -2px;
+    border-radius: 999px;
+  }
+
+  .window-layer {
+    top: var(--foxos-topbar-height) !important;
+    height: calc(100dvh - var(--foxos-topbar-height) - var(--foxos-dock-reserve)) !important;
+  }
+
+  .window.glass {
+    border-right: 0;
+    border-left: 0;
+    background: rgba(20, 20, 25, 0.98);
+  }
+
+  .window-header {
+    height: 44px !important;
+    min-height: 44px;
+    padding: 0 12px !important;
+  }
+
+  .window-controls {
+    gap: 10px !important;
+  }
+
+  .window-control {
+    width: 16px !important;
+    height: 16px !important;
+    border: 0;
+    padding: 0;
+  }
+
+  .window-title {
+    right: 58px;
+    left: 58px;
+    width: auto !important;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .window-content {
+    min-height: 0;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .settings-app,
+  .files-app,
+  .app-store {
+    flex-direction: column;
+  }
+
+  .settings-sidebar,
+  .files-sidebar,
+  .store-sidebar {
+    width: 100% !important;
+    flex: 0 0 auto !important;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-right: 0 !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .settings-sidebar::-webkit-scrollbar,
+  .files-sidebar::-webkit-scrollbar,
+  .store-sidebar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .settings-sidebar {
+    display: flex;
+    gap: 4px;
+    padding: 6px 8px !important;
+  }
+
+  .settings-tab {
+    min-height: 40px;
+    margin-bottom: 0 !important;
+    flex: 0 0 auto;
+    padding: 8px 11px !important;
+  }
+
+  .settings-content {
+    min-width: 0;
+    padding: 16px !important;
+  }
+
+  .settings-content > h2 {
+    margin-bottom: 16px !important;
+    font-size: 20px !important;
+  }
+
+  .connections-settings section {
+    padding: 14px !important;
+  }
+
+  .connection-card-header {
+    flex-wrap: wrap;
+    gap: 12px !important;
+  }
+
+  .connection-card-header > :last-child {
+    margin-left: 58px;
+  }
+
+  .connections-detail-grid {
+    grid-template-columns: minmax(96px, 0.7fr) minmax(0, 1.3fr) !important;
+    column-gap: 10px !important;
+  }
+
+  .files-sidebar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 8px !important;
+  }
+
+  .files-sidebar-title {
+    display: none;
+  }
+
+  .files-sidebar-item {
+    min-height: 40px;
+    margin-bottom: 0 !important;
+    flex: 0 0 auto;
+    padding: 8px 10px !important;
+  }
+
+  .files-main {
+    min-height: 0;
+  }
+
+  .files-toolbar {
+    height: auto !important;
+    min-height: 96px;
+    display: grid !important;
+    grid-template-columns: auto minmax(80px, 1fr) auto;
+    gap: 8px !important;
+    padding: 8px !important;
+  }
+
+  .files-path {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    min-width: 0;
+  }
+
+  .files-nav {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .files-search {
+    grid-column: 2;
+    grid-row: 2;
+    width: auto !important;
+    min-width: 0;
+  }
+
+  .files-view-controls {
+    grid-column: 3;
+    grid-row: 2;
+  }
+
+  .files-grid {
+    padding: 12px !important;
+    gap: 8px !important;
+  }
+
+  .files-list-meta,
+  .files-list-header-meta {
+    display: none !important;
+  }
+
+  .store-sidebar {
+    padding-top: 8px !important;
+  }
+
+  .store-search {
+    margin-bottom: 8px !important;
+    padding: 0 10px !important;
+  }
+
+  .store-categories {
+    flex-direction: row !important;
+    gap: 4px !important;
+    overflow-x: auto;
+    padding: 0 8px 8px !important;
+  }
+
+  .store-categories-title {
+    display: none;
+  }
+
+  .store-category {
+    min-height: 40px;
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .store-main {
+    min-height: 0;
+  }
+
+  .store-feature-wrap,
+  .store-updates-header,
+  .store-grid-wrap {
+    padding-right: 16px !important;
+    padding-left: 16px !important;
+  }
+
+  .store-feature-wrap {
+    padding-top: 18px !important;
+  }
+
+  .store-feature-card {
+    align-items: flex-start !important;
+    gap: 18px;
+    padding: 22px !important;
+  }
+
+  .store-feature-copy {
+    max-width: calc(100% - 82px) !important;
+  }
+
+  .store-feature-copy h1 {
+    font-size: 24px !important;
+  }
+
+  .store-feature-copy p {
+    margin-bottom: 14px !important;
+    font-size: 14px !important;
+  }
+
+  .store-feature-icon {
+    width: 64px !important;
+    height: 64px !important;
+    padding: 11px !important;
+    border-radius: 16px !important;
+  }
+
+  .store-updates-header {
+    flex-wrap: wrap;
+    gap: 12px;
+    padding-top: 20px !important;
+  }
+
+  .store-grid-wrap {
+    padding-top: 16px !important;
+  }
+
+  .store-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .server-app {
+    padding: 16px !important;
+  }
+
+  .server-header,
+  .server-section-header,
+  .server-container-row {
+    flex-wrap: wrap;
+  }
+
+  .server-header > :first-child,
+  .server-section-header > :first-child {
+    min-width: 0;
+  }
+
+  .server-header h1 {
+    overflow-wrap: anywhere;
+    font-size: 20px !important;
+  }
+
+  .server-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .server-container-actions {
+    width: 100%;
+    flex-wrap: wrap;
+    padding-left: 24px;
+  }
+
+  .server-container-actions button {
+    min-height: 40px;
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+
+  .dialog-layer,
+  .application-removal-layer {
+    padding: 12px;
+  }
+
+  .dialog-card,
+  .application-removal-dialog {
+    width: 100% !important;
+    max-width: 440px !important;
+    max-height: calc(100dvh - 24px);
+    overflow-y: auto;
+    padding: 20px !important;
+  }
+
+  .dialog-actions,
+  .application-removal-actions {
+    flex-wrap: wrap;
+  }
+
+  .dialog-actions button,
+  .application-removal-actions button {
+    min-height: 44px;
+    flex: 1 1 auto;
+  }
+
+  .auth-screen {
+    min-height: 100dvh;
+    padding: 24px 16px;
+  }
+
+  .setup-card {
+    width: 100% !important;
+    max-width: 400px !important;
+    padding: 28px 22px !important;
+  }
+
+  .lock-card {
+    width: min(100%, 320px) !important;
+  }
+
+  .lock-avatar {
+    width: 96px !important;
+    height: 96px !important;
+  }
+}
+
+@media (max-width: 380px) {
+  .settings-tab span,
+  .files-sidebar-item span,
+  .store-category span {
+    font-size: 12px;
+  }
+
+  .store-feature-card {
+    flex-direction: column-reverse !important;
+  }
+
+  .store-feature-copy {
+    max-width: 100% !important;
+  }
+
+  .server-metrics {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
 }

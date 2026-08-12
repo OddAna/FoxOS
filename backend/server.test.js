@@ -4,6 +4,7 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const WebSocket = require('ws');
 const { APP_CATALOG, getCatalogApp } = require('./appCatalog');
 const { iconCandidatesFromHtml, safeHttpUrl } = require('./appIcon');
 const {
@@ -169,8 +170,80 @@ const dockerMock = http.createServer((req, res) => {
 
 dockerMock.listen(process.env.DOCKER_SOCKET);
 
+const testTerminalPtys = [];
+function spawnTestTerminalPty(size) {
+  const dataListeners = new Set();
+  const exitListeners = new Set();
+  const terminal = {
+    size,
+    writes: [],
+    resizes: [],
+    killedWith: null,
+    onData(listener) {
+      dataListeners.add(listener);
+      return { dispose: () => dataListeners.delete(listener) };
+    },
+    onExit(listener) {
+      exitListeners.add(listener);
+      return { dispose: () => exitListeners.delete(listener) };
+    },
+    write(data) { this.writes.push(data); },
+    resize(cols, rows) { this.resizes.push([cols, rows]); },
+    kill(signal) { this.killedWith = signal; },
+    emitData(data) { for (const listener of dataListeners) listener(data); }
+  };
+  testTerminalPtys.push(terminal);
+  return terminal;
+}
+
+function waitForSocketMessage(socket, type) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error('Timed out waiting for terminal socket message'));
+    }, 2000);
+    const onMessage = (payload) => {
+      const message = JSON.parse(payload.toString('utf8'));
+      if (message.type !== type) return;
+      cleanup();
+      resolve(message);
+    };
+    const cleanup = () => {
+      clearTimeout(timeout);
+      socket.off('message', onMessage);
+    };
+    socket.on('message', onMessage);
+  });
+}
+
+async function waitForCondition(predicate, message) {
+  const deadline = Date.now() + 2000;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error(message);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+function expectWebSocketUpgradeStatus(url, options, expectedStatus) {
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(url, options);
+    socket.once('open', () => reject(new Error('Unexpected terminal WebSocket connection')));
+    socket.once('error', () => {});
+    socket.once('unexpected-response', (_request, response) => {
+      response.resume();
+      try {
+        assert.equal(response.statusCode, expectedStatus);
+        resolve();
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
+}
+
 const app = require('./server');
-const server = app.listen(0, '127.0.0.1');
+const server = app.createHttpServer({ spawnTerminalPty: spawnTestTerminalPty });
+server.listen(0, '127.0.0.1');
 
 const baseUrl = () => {
   const address = server.address();
@@ -432,6 +505,12 @@ test('health is public while management APIs require a session', async () => {
   assert.equal(healthResponse.status, 200);
   assert.deepEqual(await healthResponse.json(), { status: 'ok' });
 
+  await expectWebSocketUpgradeStatus(
+    baseUrl().replace('http:', 'ws:') + '/api/terminal/socket',
+    { headers: { Origin: baseUrl() } },
+    401
+  );
+
   const filesResponse = await fetch(baseUrl() + '/api/files');
   assert.equal(filesResponse.status, 401);
 
@@ -493,6 +572,56 @@ test('health is public while management APIs require a session', async () => {
   assert.equal(migrationRunsResponse.status, 401);
   const connectionsResponse = await fetch(baseUrl() + '/api/connections');
   assert.equal(connectionsResponse.status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/codex')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/codex/install', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/codex/memory', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/codex/approval-policy', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/antigravity')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/antigravity/install', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/antigravity/login', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/antigravity/login/complete', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/antigravity/login/cancel', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/antigravity/access-profile', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/antigravity/verify', {
+    method: 'POST'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/antigravity', {
+    method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/gemini')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/gemini/install', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/gemini', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/gemini/verify', {
+    method: 'POST'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/gemini', {
+    method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/codex/models')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/codex/events')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/codex/threads/thr_1/turns/turn_1/steer', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
   const applicationOperationsId = 'res_' + '7'.repeat(32);
   assert.equal((await fetch(baseUrl() + '/api/applications/' + applicationOperationsId + '/update-check')).status, 401);
   assert.equal((await fetch(baseUrl() + '/api/applications/' + applicationOperationsId + '/update-plans', {
@@ -562,6 +691,12 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   assert.equal(setupResponse.status, 201);
   const cookie = setupResponse.headers.get('set-cookie').split(';')[0];
 
+  await expectWebSocketUpgradeStatus(
+    baseUrl().replace('http:', 'ws:') + '/api/terminal/socket',
+    { headers: { Cookie: cookie, Origin: 'https://attacker.example' } },
+    401
+  );
+
   const statusResponse = await fetch(baseUrl() + '/api/auth/status', {
     headers: { Cookie: cookie }
   });
@@ -593,10 +728,94 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   });
   assert.equal(connectionsResponse.status, 200);
   const connections = (await connectionsResponse.json()).connections;
-  assert.equal(connections.length, 1);
-  assert.equal(connections[0].id, 'cloudflare');
+  assert.equal(connections.length, 4);
+  assert.equal(connections[0].id, 'codex');
+  assert.equal(connections[0].installed, false);
   assert.equal(connections[0].connected, false);
-  assert.equal(connections[0].tokenIncluded, false);
+  assert.equal(connections[0].accessProfile, 'read-only');
+  assert.equal(connections[0].credentialIncluded, false);
+  assert.equal(connections[1].id, 'antigravity-cli');
+  assert.equal(connections[1].installed, false);
+  assert.equal(connections[1].connected, false);
+  assert.equal(connections[1].accessProfile, 'read-only');
+  assert.equal(connections[1].credentialIncluded, false);
+  assert.equal(connections[1].oauthAuthorizationUrlIncluded, false);
+  assert.equal(connections[2].id, 'gemini-cli');
+  assert.equal(connections[2].installed, false);
+  assert.equal(connections[2].connected, false);
+  assert.equal(connections[2].credentialIncluded, false);
+  assert.equal(connections[3].id, 'cloudflare');
+  assert.equal(connections[3].connected, false);
+  assert.equal(connections[3].tokenIncluded, false);
+
+  const unconfirmedCodexInstall = await fetch(baseUrl() + '/api/connections/codex/install', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ confirmation: 'yes' })
+  });
+  assert.equal(unconfirmedCodexInstall.status, 400);
+  assert.equal((await unconfirmedCodexInstall.json()).code, 'codex-install-confirmation-required');
+
+  const unconfirmedAntigravityInstall = await fetch(baseUrl() + '/api/connections/antigravity/install', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ confirmation: 'yes' })
+  });
+  assert.equal(unconfirmedAntigravityInstall.status, 400);
+  assert.equal((await unconfirmedAntigravityInstall.json()).code, 'antigravity-install-confirmation-required');
+
+  const antigravityFullServerWithoutCli = await fetch(
+    baseUrl() + '/api/connections/antigravity/access-profile',
+    {
+      method: 'PUT',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        accessProfile: 'full-server',
+        confirmation: 'ENABLE ANTIGRAVITY FULL SERVER'
+      })
+    }
+  );
+  assert.equal(antigravityFullServerWithoutCli.status, 409);
+  assert.equal((await antigravityFullServerWithoutCli.json()).code, 'antigravity-cli-not-installed');
+
+  const unconfirmedGeminiInstall = await fetch(baseUrl() + '/api/connections/gemini/install', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ confirmation: 'yes' })
+  });
+  assert.equal(unconfirmedGeminiInstall.status, 400);
+  assert.equal((await unconfirmedGeminiInstall.json()).code, 'gemini-install-confirmation-required');
+
+  const testGeminiApiKey = 'AIza' + 'x'.repeat(35);
+  const geminiWithoutCli = await fetch(baseUrl() + '/api/connections/gemini', {
+    method: 'PUT',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ apiKey: testGeminiApiKey })
+  });
+  assert.equal(geminiWithoutCli.status, 409);
+  const geminiWithoutCliPayload = await geminiWithoutCli.json();
+  assert.equal(geminiWithoutCliPayload.code, 'gemini-cli-not-installed');
+  assert.equal(JSON.stringify(geminiWithoutCliPayload).includes(testGeminiApiKey), false);
+
+  const codexThreadWithoutCli = await fetch(baseUrl() + '/api/codex/threads', {
+    method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json' }, body: '{}'
+  });
+  assert.equal(codexThreadWithoutCli.status, 409);
+  assert.equal((await codexThreadWithoutCli.json()).code, 'codex-cli-not-installed');
+
+  const codexModelsWithoutCli = await fetch(baseUrl() + '/api/codex/models', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(codexModelsWithoutCli.status, 409);
+  assert.equal((await codexModelsWithoutCli.json()).code, 'codex-cli-not-installed');
+
+  const codexApprovalWithoutCli = await fetch(baseUrl() + '/api/connections/codex/approval-policy', {
+    method: 'PUT',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ approvalPolicy: 'never' })
+  });
+  assert.equal(codexApprovalWithoutCli.status, 409);
+  assert.equal((await codexApprovalWithoutCli.json()).code, 'codex-cli-not-installed');
 
   const filesResponse = await fetch(baseUrl() + '/api/files?path=%2F', {
     headers: { Cookie: cookie }
@@ -605,6 +824,25 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   const workspace = await filesResponse.json();
   assert.ok(workspace.items.some((entry) => entry.name === 'Sunucu' && entry.symlink));
 
+  const externalPreviewDirectory = path.join(testRoot, 'external-preview-directory');
+  const externalPreview = path.join(externalPreviewDirectory, 'linked-preview.jpg');
+  const previewLink = path.join(process.env.DATA_ROOT, 'files', 'Masaüstü', 'linked-previews');
+  fs.mkdirSync(externalPreviewDirectory);
+  fs.writeFileSync(externalPreview, 'preview-bytes');
+  fs.symlinkSync(externalPreviewDirectory, previewLink);
+  const previewResponse = await fetch(
+    baseUrl() + '/api/file-content?path=Masa%C3%BCst%C3%BC%2Flinked-previews%2Flinked-preview.jpg',
+    { headers: { Cookie: cookie } }
+  );
+  assert.equal(previewResponse.status, 200);
+  assert.equal(await previewResponse.text(), 'preview-bytes');
+
+  const escapedPreviewResponse = await fetch(
+    baseUrl() + '/api/file-content?path=..%2Fexternal-preview.jpg',
+    { headers: { Cookie: cookie } }
+  );
+  assert.equal(escapedPreviewResponse.status, 404);
+
   const terminalResponse = await fetch(baseUrl() + '/api/terminal', {
     method: 'POST',
     headers: { Cookie: cookie, 'Content-Type': 'application/json' },
@@ -612,6 +850,34 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   });
   assert.equal(terminalResponse.status, 200);
   assert.equal((await terminalResponse.json()).output, 'foxos-ok');
+
+  const terminalSocket = new WebSocket(
+    baseUrl().replace('http:', 'ws:') + '/api/terminal/socket',
+    { headers: { Cookie: cookie, Origin: baseUrl() } }
+  );
+  const readyMessage = waitForSocketMessage(terminalSocket, 'ready');
+  await new Promise((resolve, reject) => {
+    terminalSocket.once('open', resolve);
+    terminalSocket.once('error', reject);
+  });
+  assert.deepEqual(await readyMessage, { type: 'ready' });
+  const pty = testTerminalPtys.at(-1);
+  assert.deepEqual(pty.size, { cols: 80, rows: 24 });
+  terminalSocket.send(JSON.stringify({ type: 'resize', cols: 120, rows: 40 }));
+  terminalSocket.send(JSON.stringify({ type: 'input', data: 'printf foxos-pty\r' }));
+  await waitForCondition(
+    () => pty.resizes.length === 1 && pty.writes.length === 1,
+    'Timed out waiting for the authenticated terminal PTY'
+  );
+  assert.deepEqual(pty.resizes, [[120, 40]]);
+  assert.deepEqual(pty.writes, ['printf foxos-pty\r']);
+  const ptyOutput = waitForSocketMessage(terminalSocket, 'output');
+  pty.emitData('foxos-pty\r\n');
+  assert.deepEqual(await ptyOutput, { type: 'output', data: 'foxos-pty\r\n' });
+  const terminalClosed = new Promise((resolve) => terminalSocket.once('close', resolve));
+  terminalSocket.close(1000, 'test complete');
+  await terminalClosed;
+  assert.equal(pty.killedWith, 'SIGHUP');
 
   const secretResponse = await fetch(baseUrl() + '/api/secrets', {
     method: 'POST',

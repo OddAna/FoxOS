@@ -97,6 +97,7 @@ export const ApplicationRemovalProvider = ({ children }) => {
       {children}
       {state && createPortal(
         <div
+          className="application-removal-layer"
           role="presentation"
           onMouseDown={(event) => {
             if (event.target === event.currentTarget) close();
@@ -108,6 +109,7 @@ export const ApplicationRemovalProvider = ({ children }) => {
           }}
         >
           <div
+            className="application-removal-dialog"
             role="dialog"
             aria-modal="true"
             aria-labelledby="application-removal-title"
@@ -203,7 +205,7 @@ export const ApplicationRemovalProvider = ({ children }) => {
                     }}
                     style={{
                       background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.2)',
-                      borderRadius: '6px', padding: '10px', color: '#fff', fontSize: '14px',
+                      borderRadius: '6px', padding: '10px', color: '#fff', fontSize: '16px',
                       outline: 'none', width: '100%', boxSizing: 'border-box'
                     }}
                   />
@@ -217,7 +219,7 @@ export const ApplicationRemovalProvider = ({ children }) => {
               </div>
             )}
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '4px' }}>
+            <div className="application-removal-actions" style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '4px' }}>
               <button
                 type="button"
                 onClick={close}

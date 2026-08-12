@@ -1,5 +1,5 @@
 import React from 'react';
-import { Settings, Terminal, Gauge, FolderOpen, Trash2, Box } from 'lucide-react';
+import { Bot, Settings, Terminal, Gauge, FolderOpen, Trash2, Box } from 'lucide-react';
 import { useWindowManager } from '../contexts/WindowContext';
 
 const Dock = () => {
@@ -61,6 +61,17 @@ const Dock = () => {
     });
   };
 
+  const handleOpenCodex = () => {
+    openWindow({
+      id: 'codex',
+      type: 'codex',
+      title: 'Codex',
+      component: null,
+      width: 900,
+      height: 650
+    });
+  };
+
   const isAppOpen = (id) => windows.some(w => w.id === id);
 
   return (
@@ -85,6 +96,13 @@ const Dock = () => {
             <Terminal size={26} color="#ffffff" strokeWidth={1.5} />
           </div>
           <div className={`dock-indicator ${isAppOpen('terminal') ? 'active' : ''}`}></div>
+        </div>
+
+        <div className="dock-item-wrapper">
+          <div className="dock-item app-codex" title="Codex" onClick={handleOpenCodex}>
+            <Bot size={26} color="#ffffff" strokeWidth={1.5} />
+          </div>
+          <div className={`dock-indicator ${isAppOpen('codex') ? 'active' : ''}`}></div>
         </div>
 
         <div className="dock-item-wrapper">

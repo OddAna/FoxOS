@@ -17,8 +17,8 @@ const LockScreen = () => {
   const inputRef = useRef(null);
 
   useEffect(() => {
-    // Focus password input on mount
-    if (inputRef.current) {
+    // Avoid opening the software keyboard before the user asks for it on touch devices.
+    if (inputRef.current && !window.matchMedia('(pointer: coarse)').matches) {
       inputRef.current.focus();
     }
   }, []);
@@ -38,7 +38,7 @@ const LockScreen = () => {
   };
 
   return (
-    <div style={{
+    <div className="auth-screen lock-screen" style={{
       width: '100vw', height: '100vh',
       backgroundImage: `url(${foxWallpaper})`,
       backgroundSize: 'cover', backgroundPosition: 'center',
@@ -46,7 +46,7 @@ const LockScreen = () => {
       color: '#fff',
       position: 'relative'
     }}>
-      <div style={{
+      <div className="lock-card" style={{
         position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
         background: 'rgba(0,0,0,0.3)', backdropFilter: 'blur(30px)'
       }} />
@@ -57,7 +57,7 @@ const LockScreen = () => {
         width: '300px', maxWidth: '90%'
       }}>
         {/* User Avatar */}
-        <div style={{
+        <div className="lock-avatar" style={{
           width: '120px', height: '120px', borderRadius: '50%',
           background: 'rgba(255,255,255,0.1)', border: '2px solid rgba(255,255,255,0.2)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -83,7 +83,7 @@ const LockScreen = () => {
             style={{
               width: '100%',
               background: 'rgba(255,255,255,0.2)', border: `1px solid ${error ? '#ff5f56' : 'rgba(255,255,255,0.4)'}`,
-              padding: '12px 40px 12px 16px', borderRadius: '20px', color: '#fff', fontSize: '15px',
+              padding: '12px 40px 12px 16px', borderRadius: '20px', color: '#fff', fontSize: '16px',
               outline: 'none', transition: 'all 0.2s', backdropFilter: 'blur(10px)',
               boxShadow: '0 4px 12px rgba(0,0,0,0.2)'
             }}

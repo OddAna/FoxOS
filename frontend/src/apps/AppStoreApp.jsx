@@ -297,9 +297,9 @@ const AppStoreApp = () => {
   );
 
   return (
-    <div style={{ display: 'flex', height: '100%', width: '100%', color: '#fff', background: 'rgba(20, 20, 25, 0.95)', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif' }}>
-      <div style={{ width: '220px', flex: '0 0 220px', background: 'rgba(255,255,255,0.03)', borderRight: '1px solid rgba(255,255,255,0.08)', display: 'flex', flexDirection: 'column', paddingTop: '20px' }}>
-        <div style={{ padding: '0 15px', marginBottom: '20px' }}>
+    <div className="app-store" style={{ display: 'flex', height: '100%', width: '100%', color: '#fff', background: 'rgba(20, 20, 25, 0.95)', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif' }}>
+      <div className="store-sidebar" style={{ width: '220px', flex: '0 0 220px', background: 'rgba(255,255,255,0.03)', borderRight: '1px solid rgba(255,255,255,0.08)', display: 'flex', flexDirection: 'column', paddingTop: '20px' }}>
+        <div className="store-search" style={{ padding: '0 15px', marginBottom: '20px' }}>
           <div style={{ display: 'flex', alignItems: 'center', background: 'rgba(255,255,255,0.08)', borderRadius: '8px', padding: '6px 10px' }}>
             <Search size={16} color="#888" style={{ marginRight: '8px' }} />
             <input
@@ -314,11 +314,12 @@ const AppStoreApp = () => {
           </div>
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', padding: '0 10px' }}>
-          <div style={{ fontSize: '11px', color: '#888', fontWeight: 'bold', padding: '8px 10px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Kategoriler</div>
+        <div className="store-categories" style={{ display: 'flex', flexDirection: 'column', gap: '4px', padding: '0 10px' }}>
+          <div className="store-categories-title" style={{ fontSize: '11px', color: '#888', fontWeight: 'bold', padding: '8px 10px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Kategoriler</div>
           {CATEGORIES.map((category) => (
             <div
               key={category.id}
+              className="store-category"
               onClick={() => {
                 setActiveCategory(category.id);
                 setSearchQuery('');
@@ -337,12 +338,12 @@ const AppStoreApp = () => {
         </div>
       </div>
 
-      <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: '0 0 40px 0' }}>
+      <div className="store-main" style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: '0 0 40px 0' }}>
         {activeCategory === 'kesfet' && !searchQuery && featuredApp && (
-          <div style={{ padding: '30px 40px 10px 40px' }}>
+          <div className="store-feature-wrap" style={{ padding: '30px 40px 10px 40px' }}>
             <div style={{ fontSize: '12px', color: '#888', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '10px' }}>Öne Çıkan</div>
-            <div style={{ background: featuredApp.banner, borderRadius: '16px', padding: '30px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 10px 30px rgba(0,0,0,0.3)', position: 'relative', overflow: 'hidden' }}>
-              <div style={{ zIndex: 1, maxWidth: '70%' }}>
+            <div className="store-feature-card" style={{ background: featuredApp.banner, borderRadius: '16px', padding: '30px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 10px 30px rgba(0,0,0,0.3)', position: 'relative', overflow: 'hidden' }}>
+              <div className="store-feature-copy" style={{ zIndex: 1, maxWidth: '70%' }}>
                 <h1 style={{ margin: '0 0 10px 0', fontSize: '32px', fontWeight: 'bold' }}>{featuredApp.name}</h1>
                 <p style={{ margin: '0 0 20px 0', fontSize: '16px', opacity: 0.9, lineHeight: '1.5' }}>{featuredApp.description}</p>
                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center', position: 'relative' }}>
@@ -359,7 +360,7 @@ const AppStoreApp = () => {
                   )}
                 </div>
               </div>
-              <div style={{ width: '120px', height: '120px', background: 'rgba(255,255,255,0.9)', padding: '20px', borderRadius: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 20px 40px rgba(0,0,0,0.2)', zIndex: 1 }}>
+              <div className="store-feature-icon" style={{ width: '120px', height: '120px', background: 'rgba(255,255,255,0.9)', padding: '20px', borderRadius: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 20px 40px rgba(0,0,0,0.2)', zIndex: 1 }}>
                 <ApplicationLogo app={featuredApp} size={80} />
               </div>
             </div>
@@ -367,7 +368,7 @@ const AppStoreApp = () => {
         )}
 
         {activeCategory === 'guncellemeler' && (
-          <div style={{ padding: '30px 40px 10px 40px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div className="store-updates-header" style={{ padding: '30px 40px 10px 40px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
               <h1 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: 'bold' }}>Güncellemeler</h1>
               <div style={{ fontSize: '14px', color: '#888' }}>Yüklü uygulamaların canlı durumu Docker üzerinden okunuyor.</div>
@@ -378,11 +379,11 @@ const AppStoreApp = () => {
           </div>
         )}
 
-        <div style={{ padding: '20px 40px' }}>
+        <div className="store-grid-wrap" style={{ padding: '20px 40px' }}>
           {loading ? (
             <div style={{ padding: '40px', color: '#888', textAlign: 'center' }}><Loader2 size={20} className="spin" /> Katalog yükleniyor...</div>
           ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
+            <div className="store-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
               {displayedApps.map((app) => (
                 <div key={app.id} style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '16px', padding: '20px', display: 'flex', flexDirection: 'column', minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '16px' }}>

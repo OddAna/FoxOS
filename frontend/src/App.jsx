@@ -14,6 +14,7 @@ import TextEditorApp from './apps/TextEditorApp';
 import ImageViewerApp from './apps/ImageViewerApp';
 import MediaPlayerApp from './apps/MediaPlayerApp';
 import TerminalApp from './apps/TerminalApp';
+import CodexApp from './apps/CodexApp';
 import AppStoreApp from './apps/AppStoreApp';
 import ApplicationLogo from './components/ApplicationLogo';
 import { APPLICATION_STATUS, applicationOperationalState } from './utils/applicationStatus';
@@ -34,6 +35,7 @@ import {
   checkAndPlanApplicationUpdate,
   updateConfirmationMessage
 } from './utils/applicationUpdates';
+import { mobileDesktopLayout, paginateDesktopItems } from './utils/mobileDesktopLayout';
 
 const createDesktopPointerPreview = (draggedItems, fileElements) => {
   const sources = draggedItems.map((item) => ({
@@ -109,8 +111,11 @@ const Desktop = () => {
   const isDraggingMarquee = useRef(false);
   const activePointerDrag = useRef(null);
   const suppressDesktopClick = useRef(false);
+  const mobileDesktopPageRef = useRef(0);
+  const [mobileDesktopPage, setMobileDesktopPage] = useState(0);
 
   const [windowSize, setWindowSize] = useState({ width: window.innerWidth, height: window.innerHeight });
+  const isMobileViewport = windowSize.width <= 720;
 
   const [positions, setPositions] = useState(() => {
     try {
@@ -138,7 +143,17 @@ const Desktop = () => {
     }))
   ];
 
+  const mobileLayout = mobileDesktopLayout({
+    width: windowSize.width,
+    height: windowSize.height,
+    itemCount: desktopItems.length
+  });
+  const desktopPageGroups = isMobileViewport
+    ? paginateDesktopItems(desktopItems, mobileLayout.itemsPerPage)
+    : [desktopItems];
+
   const persistNewItemPositions = (items) => {
+    if (window.innerWidth <= 720) return;
     setPositions((current) => {
       const updated = { ...current };
       const occupied = new Set();
@@ -146,7 +161,7 @@ const Desktop = () => {
         if (position.col !== undefined) occupied.add(`${position.col},${position.row}`);
       });
 
-      const availableHeight = window.innerHeight - 30 - 80 - 40;
+      const availableHeight = window.innerHeight - 30 - 80 - 32;
       const maxRows = Math.max(1, Math.floor(availableHeight / 100));
       let nextIndex = 0;
       let changed = false;
@@ -174,9 +189,10 @@ const Desktop = () => {
   const getDesktopItemPosition = (item) => {
     const MARGIN_X = 20;
     const MARGIN_Y = 20;
+    const TOPBAR_H = 30;
     const TASKBAR_H = 80;
     const desktopW = windowSize.width;
-    const desktopH = windowSize.height - 30;
+    const desktopH = windowSize.height - TOPBAR_H;
     
     const availableW = desktopW - (2 * MARGIN_X);
     const availableH = desktopH - TASKBAR_H - (2 * MARGIN_Y);
@@ -249,6 +265,31 @@ const Desktop = () => {
       positionKey: `application:${application.id}`
     })));
   }, [desktopApplications]);
+
+  useEffect(() => {
+    if (isMobileViewport) return;
+    persistNewItemPositions([
+      ...desktopFiles.map((file) => ({ positionKey: file.name })),
+      ...desktopApplications.map((application) => ({ positionKey: `application:${application.id}` }))
+    ]);
+  }, [isMobileViewport, desktopFiles, desktopApplications]);
+
+  useEffect(() => {
+    const page = Math.min(mobileDesktopPageRef.current, mobileLayout.pageCount - 1);
+    mobileDesktopPageRef.current = page;
+    setMobileDesktopPage((current) => current === page ? current : page);
+    if (!isMobileViewport || !gridRef.current) return undefined;
+
+    const frame = window.requestAnimationFrame(() => {
+      const grid = gridRef.current;
+      const firstPage = grid?.querySelector('[data-mobile-desktop-page="0"]');
+      const targetPage = grid?.querySelector(`[data-mobile-desktop-page="${page}"]`);
+      if (grid && firstPage && targetPage) {
+        grid.scrollLeft = targetPage.offsetLeft - firstPage.offsetLeft;
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [isMobileViewport, mobileLayout.pageCount, windowSize.width, windowSize.height]);
 
   useEffect(() => {
     const closeMenu = () => setDesktopMenu(null);
@@ -441,6 +482,7 @@ const Desktop = () => {
   };
 
   const handleDesktopPointerDown = (e, item) => {
+    if (isMobileViewport || e.pointerType === 'touch') return;
     if (e.button !== 0 || e.ctrlKey || e.metaKey) return;
     const data = desktopDragData(item, e.clientX, e.clientY);
     if (!data) return;
@@ -583,11 +625,18 @@ const Desktop = () => {
     });
   };
 
-  const handleDesktopItemClick = (e, id) => {
+  const handleDesktopItemClick = (e, item) => {
     e.stopPropagation();
     if (suppressDesktopClick.current) {
       suppressDesktopClick.current = false;
       e.preventDefault();
+      return;
+    }
+    const id = item.desktopId;
+    if (isMobileViewport && !e.ctrlKey && !e.metaKey) {
+      setSelectedIds([]);
+      setDesktopMenu(null);
+      handleDesktopItemDoubleClick(item);
       return;
     }
     if (e.ctrlKey || e.metaKey) {
@@ -773,7 +822,37 @@ const Desktop = () => {
     }
   };
 
+  const scrollToMobileDesktopPage = (pageIndex) => {
+    const grid = gridRef.current;
+    const firstPage = grid?.querySelector('[data-mobile-desktop-page="0"]');
+    const targetPage = grid?.querySelector(`[data-mobile-desktop-page="${pageIndex}"]`);
+    if (!grid || !firstPage || !targetPage) return;
+    grid.scrollTo({
+      left: targetPage.offsetLeft - firstPage.offsetLeft,
+      behavior: 'smooth'
+    });
+  };
+
+  const handleMobileDesktopScroll = (event) => {
+    if (!isMobileViewport) return;
+    const pages = Array.from(event.currentTarget.querySelectorAll('[data-mobile-desktop-page]'));
+    if (!pages.length) return;
+    const firstOffset = pages[0].offsetLeft;
+    const scrollLeft = event.currentTarget.scrollLeft;
+    const nextPage = pages.reduce((closest, page, index) => {
+      const distance = Math.abs(page.offsetLeft - firstOffset - scrollLeft);
+      return distance < closest.distance ? { index, distance } : closest;
+    }, { index: 0, distance: Number.POSITIVE_INFINITY }).index;
+    mobileDesktopPageRef.current = nextPage;
+    setMobileDesktopPage((current) => current === nextPage ? current : nextPage);
+  };
+
   const startSelection = (e) => {
+    if (isMobileViewport || e.pointerType === 'touch') {
+      setSelectedIds([]);
+      setSelectionBox(null);
+      return;
+    }
     if (e.button !== 0) return;
     if (e.target.closest('.window') || e.target.closest('.dock-container') || e.target.closest('.topbar') || e.target.closest('.desktop-file')) {
       return;
@@ -852,10 +931,11 @@ const Desktop = () => {
       case 'server': return <ServerApp />;
       case 'settings': return <SettingsApp target={win.navigation} />;
       case 'files': return <FilesApp initialPath={win.initialPath} />;
-      case 'text-viewer': return <TextEditorApp filePath={win.filePath} />;
+      case 'text-viewer': return <TextEditorApp filePath={win.filePath} initialLine={win.initialLine} />;
       case 'image-viewer': return <ImageViewerApp filePath={win.filePath} />;
       case 'media-player': return <MediaPlayerApp filePath={win.filePath} ext={win.ext} />;
       case 'terminal': return <TerminalApp />;
+      case 'codex': return <CodexApp />;
       case 'store': return <AppStoreApp />;
       default: return <div style={{ padding: 20, color: '#fff' }}>Bilinmeyen Uygulama: {win.title}</div>;
     }
@@ -873,9 +953,11 @@ const Desktop = () => {
       
       {/* Masaüstü İkon Izgarası (Grid) */}
       <div 
+        className={`desktop-grid${isMobileViewport ? ' is-mobile' : ''}`}
         ref={gridRef}
         data-foxos-desktop-grid="true"
         onPointerDown={startSelection}
+        onScroll={handleMobileDesktopScroll}
         style={{
           position: 'absolute',
           top: '30px',
@@ -886,9 +968,23 @@ const Desktop = () => {
           zIndex: 1,
           overflow: 'hidden'
       }}>
-        {desktopItems.map((item) => {
+        <div
+          className={`desktop-pages-track${isMobileViewport ? '' : ' is-desktop'}`}
+          style={isMobileViewport ? {
+            '--mobile-desktop-columns': mobileLayout.columns,
+            '--mobile-desktop-rows': mobileLayout.rows
+          } : undefined}
+        >
+          {desktopPageGroups.map((pageItems, pageIndex) => (
+            <section
+              key={`desktop-page-${pageIndex}`}
+              className={`desktop-page${isMobileViewport ? '' : ' is-desktop'}`}
+              data-mobile-desktop-page={isMobileViewport ? pageIndex : undefined}
+              aria-label={isMobileViewport ? `Masaüstü sayfası ${pageIndex + 1} / ${mobileLayout.pageCount}` : undefined}
+            >
+        {pageItems.map((item) => {
           const isSelected = selectedIds.includes(item.desktopId);
-          const pos = getDesktopItemPosition(item);
+          const pos = isMobileViewport ? null : getDesktopItemPosition(item);
           const folderState = item.desktopKind === 'file' && item.type === 'folder'
             ? folderApplicationOperationalState(
                 canonicalDesktopPath(`/Masaüstü/${item.name}`),
@@ -911,15 +1007,15 @@ const Desktop = () => {
               onDrop={item.desktopKind === 'file' && item.type === 'folder'
                 ? (e) => handleDesktopFolderDrop(e, item.file)
                 : undefined}
-              onClick={(e) => handleDesktopItemClick(e, item.desktopId)}
-              onDoubleClick={() => handleDesktopItemDoubleClick(item)}
+              onClick={(e) => handleDesktopItemClick(e, item)}
+              onDoubleClick={() => { if (!isMobileViewport) handleDesktopItemDoubleClick(item); }}
               onContextMenu={(e) => handleContextMenu(e, item)}
               style={{
-                position: 'absolute',
-                left: `${pos.left}px`,
-                top: `${pos.top}px`,
-                width: `${pos.width}px`,
-                minHeight: `${pos.height}px`,
+                position: isMobileViewport ? 'relative' : 'absolute',
+                left: pos ? `${pos.left}px` : undefined,
+                top: pos ? `${pos.top}px` : undefined,
+                width: pos ? `${pos.width}px` : '100%',
+                minHeight: pos ? `${pos.height}px` : 0,
                 display: 'flex',
                 flexDirection: 'column',
                 alignItems: 'center',
@@ -989,9 +1085,12 @@ const Desktop = () => {
             </div>
           );
         })}
+            </section>
+          ))}
+        </div>
 
         {/* Marquee Selection Box */}
-        {selectionBox && (
+        {!isMobileViewport && selectionBox && (
           <div style={{
             position: 'absolute',
             left: selectionBox.left,
@@ -1006,8 +1105,26 @@ const Desktop = () => {
         )}
       </div>
 
+      {isMobileViewport && mobileLayout.pageCount > 1 && (
+        <nav className="desktop-page-indicator" aria-label="Masaüstü sayfaları">
+          {desktopPageGroups.map((_, pageIndex) => (
+            <button
+              key={`desktop-page-dot-${pageIndex}`}
+              type="button"
+              className={pageIndex === mobileDesktopPage ? 'is-active' : ''}
+              aria-label={`${pageIndex + 1}. masaüstü sayfasına git`}
+              aria-current={pageIndex === mobileDesktopPage ? 'page' : undefined}
+              onClick={(event) => {
+                event.stopPropagation();
+                scrollToMobileDesktopPage(pageIndex);
+              }}
+            />
+          ))}
+        </nav>
+      )}
+
       {/* Pencereler (Windows) alanı */}
-      <div style={{ position: 'absolute', top: 30, left: 0, width: '100%', height: 'calc(100vh - 30px)', zIndex: 10, pointerEvents: 'none' }}>
+      <div className="window-layer" style={{ position: 'absolute', top: 30, left: 0, width: '100%', height: 'calc(100vh - 30px)', zIndex: 10, pointerEvents: 'none' }}>
         {windows.map(win => (
           <div key={win.id} style={{ pointerEvents: 'none', width: '100%', height: '100%', position: 'absolute', top: 0, left: 0 }}>
             <Window win={win}>

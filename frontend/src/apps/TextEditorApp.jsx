@@ -1,13 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Save, CheckCircle } from 'lucide-react';
 import { apiFetch } from '../api';
 
-const TextEditorApp = ({ filePath }) => {
+const TextEditorApp = ({ filePath, initialLine = null }) => {
   const [content, setContent] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState(null);
+  const editorRef = useRef(null);
+  const highlightedLocationRef = useRef(null);
 
   useEffect(() => {
     const fetchContent = async () => {
@@ -27,6 +29,20 @@ const TextEditorApp = ({ filePath }) => {
       fetchContent();
     }
   }, [filePath]);
+
+  useEffect(() => {
+    if (loading || !Number.isInteger(initialLine) || initialLine < 1 || !editorRef.current) return;
+    const locationKey = `${filePath}:${initialLine}`;
+    if (highlightedLocationRef.current === locationKey) return;
+    const lines = content.split('\n');
+    const lineIndex = Math.min(initialLine - 1, Math.max(0, lines.length - 1));
+    const start = lines.slice(0, lineIndex).reduce((total, line) => total + line.length + 1, 0);
+    const end = start + (lines[lineIndex]?.length || 0);
+    editorRef.current.focus();
+    editorRef.current.setSelectionRange(start, end);
+    editorRef.current.scrollTop = Math.max(0, lineIndex * 21 - 84);
+    highlightedLocationRef.current = locationKey;
+  }, [content, filePath, initialLine, loading]);
 
   const handleSave = async () => {
     if (saving) return;
@@ -98,6 +114,7 @@ const TextEditorApp = ({ filePath }) => {
           <div style={{ color: '#888', fontSize: '14px' }}>Yükleniyor...</div>
         ) : (
           <textarea
+            ref={editorRef}
             value={content}
             onChange={(e) => setContent(e.target.value)}
             onKeyDown={(e) => {

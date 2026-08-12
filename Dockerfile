@@ -6,6 +6,16 @@ RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
+FROM node:22-bookworm-slim@sha256:f32b81066cde10a75dbac96646099533316d94bac4150c55da1636e1f0ffdc46 AS backend-deps
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends g++ make python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build/backend
+COPY backend/package*.json ./
+RUN npm ci --omit=dev
+
 FROM node:22-bookworm-slim@sha256:f32b81066cde10a75dbac96646099533316d94bac4150c55da1636e1f0ffdc46 AS runtime
 
 ENV NODE_ENV=production
@@ -16,7 +26,7 @@ RUN apt-get update \
 
 WORKDIR /app
 COPY backend/package*.json ./
-RUN npm ci --omit=dev
+COPY --from=backend-deps /build/backend/node_modules ./node_modules
 COPY backend/ ./
 COPY --from=frontend-builder /build/frontend/dist ./public
 

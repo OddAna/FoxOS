@@ -66,14 +66,14 @@ export const DialogProvider = ({ children }) => {
       {children}
       
       {dialogs.length > 0 && createPortal(
-        <div style={{
+        <div className="dialog-layer" style={{
           position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           zIndex: 99999999,
           pointerEvents: 'none'
         }}>
           {dialogs.map(dialog => (
-            <div key={dialog.id} style={{
+            <div key={dialog.id} className="dialog-card" style={{
               pointerEvents: 'auto',
               background: 'rgba(30, 30, 30, 0.95)',
               border: '1px solid rgba(255, 255, 255, 0.1)',
@@ -111,13 +111,13 @@ export const DialogProvider = ({ children }) => {
                   }}
                   style={{
                     background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.2)',
-                    borderRadius: '6px', padding: '10px', color: '#fff', fontSize: '14px',
+                    borderRadius: '6px', padding: '10px', color: '#fff', fontSize: '16px',
                     outline: 'none', width: '100%', boxSizing: 'border-box'
                   }}
                 />
               )}
 
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '8px' }}>
+              <div className="dialog-actions" style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '8px' }}>
                 {(dialog.type === 'confirm' || dialog.type === 'warning' || dialog.type === 'prompt') && (
                   <button 
                     onClick={() => closeDialog(dialog.id)}

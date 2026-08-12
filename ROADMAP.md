@@ -476,6 +476,56 @@ target blocks only adoption/migration operations that require restore proof.
   failure or explicit rollback. CNAME conflicts and ambiguous A records fail
   closed. The adapter requires neither Cloudflare proxying nor a paid plan and
   does not make Cloudflare the owner of application or route state.
+- [x] Add Codex as a second optional **Bağlantılar** adapter. Installation uses
+  OpenAI's official host installer only after exact confirmation; account login
+  uses each server owner's device-code flow and keeps Codex credentials outside
+  FoxOS API/state. Access defaults to read-only and requires a separate exact
+  **Full Server** confirmation before the embedded Codex app can create a thread
+  at host `/` with `danger-full-access` and default `untrusted` approvals. The
+  owner can explicitly persist `never` approvals in owner-only server state so
+  every authenticated device uses the same policy for new, resumed and
+  subsequent turns; browser storage is not authoritative. Non-ephemeral
+  app-server threads are listed and resumed from the Codex-owned persistent
+  history. Active work does not lock the whole Codex window: another thread can
+  start independently, and expected-turn-bound `turn/steer` input can be added
+  to the selected in-flight turn. Agent Markdown, fenced code and links render
+  as safe interactive content instead of raw notation. An optional server-private Drive memory reference injects an
+  `AGENTS.md` then `index.md` bootstrap into new and resumed threads without
+  returning the folder location or committing it to Git. OpenAI's managed
+  app-server daemon runs on the host behind an
+  owner-only Unix WebSocket control socket; FoxOS owns only a disposable socket
+  client, so agent recreation does not terminate the daemon or active turn.
+  There is no app-server TCP listener, events are memory-bounded, every endpoint is
+  owner-authenticated, profile revocation stops the host daemon and blocks old
+  threads, and disconnect logs out while returning the profile to read-only.
+  Clean install and ordinary FoxOS management remain Codex/account/subscription-
+  free.
+- [x] Add Gemini CLI as a third optional **Bağlantılar** adapter. Exact owner
+  confirmation installs Google's current stable `@google/gemini-cli` package
+  into a dedicated owner-only host root without changing the system npm prefix.
+  The first supported headless authentication method is a Gemini API key: a
+  bounded CLI request with extensions disabled and read-only `plan` approvals
+  verifies the key, then FoxOS stores it only as server-keyed AES-256-GCM
+  ciphertext. Status and ordinary page loads spend no quota and return no key
+  or fingerprint. Disconnect deletes only the encrypted local credential and
+  config while preserving the optional CLI. The card truthfully reports that
+  individual Google-account Gemini CLI service ended on 2026-06-18; Vertex AI,
+  enterprise login and any prompt/execution UI remain separate future work.
+- [x] Add Antigravity CLI as a fourth, separate optional **Bağlantılar**
+  adapter. Exact confirmation runs Google's official native installer in a
+  dedicated owner-only host root. Remote OAuth exposes only a short-lived,
+  allowlisted Google authorization link to the authenticated owner and passes
+  the returned code directly to the waiting CLI; neither value is persisted.
+  A fresh quota-free `/usage` process proves session persistence. Protected
+  `plan` + `strict` + sandbox settings are the default. A separate **Full
+  Server** confirmation atomically selects `accept-edits`, tool and artifact
+  `always-proceed`, workspace-external access, sandbox off and explicit
+  allow-all file/URL/command/unsandboxed/MCP permissions with empty ask/deny
+  lists, so later native CLI work does not request individual approvals.
+  Revocation remains available without a working account check, disconnect
+  downgrades before proven logout, ordinary status is local and clean install
+  remains Google/Antigravity-free. An embedded execution/chat surface remains
+  separate future work.
 - [x] Persist per-application desktop shortcut visibility on the server. The
   desktop context menu removes the projection without deleting a file,
   container or application; the same application's Settings page can recreate

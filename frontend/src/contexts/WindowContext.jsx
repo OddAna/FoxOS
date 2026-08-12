@@ -1,5 +1,6 @@
 /* oxlint-disable react/only-export-components -- context hook and provider intentionally share a module */
 import React, { createContext, useState, useContext } from 'react';
+import { activateExistingWindow, focusWindowById, topWindowZIndex } from '../utils/windowState';
 
 const WindowContext = createContext();
 
@@ -13,23 +14,15 @@ export const WindowProvider = ({ children }) => {
   const dialog = useDialog();
 
   const openWindow = (appConfig) => {
+    setFocusedWindowId(appConfig.id);
     setWindows(prev => {
-      const existing = prev.find(w => w.id === appConfig.id);
-      if (existing) {
-        focusWindow(appConfig.id);
-        return prev.map(w => w.id === appConfig.id ? {
-          ...w,
-          isMinimized: false,
-          ...(appConfig.navigation ? { navigation: appConfig.navigation } : {})
-        } : w);
-      }
+      const activated = activateExistingWindow(prev, appConfig);
+      if (activated) return activated;
       
       const availableWidth = Math.max(280, window.innerWidth - 16);
       const availableHeight = Math.max(240, window.innerHeight - 116);
       const defaultWidth = Math.min(appConfig.width || 800, availableWidth);
       const defaultHeight = Math.min(appConfig.height || 600, availableHeight);
-      
-      const maxZ = prev.length > 0 ? Math.max(...prev.map(w => w.zIndex)) : 100;
       
       const newWindow = {
         ...appConfig,
@@ -45,36 +38,38 @@ export const WindowProvider = ({ children }) => {
         height: defaultHeight,
         isMinimized: false,
         isMaximized: false,
-        zIndex: maxZ + 1
+        zIndex: topWindowZIndex(prev) + 1
       };
-      setFocusedWindowId(newWindow.id);
       return [...prev, newWindow];
     });
   };
 
   const closeWindow = (id) => {
     const win = windows.find(w => w.id === id);
-    if (win && win.type === 'terminal' && dialog) {
+    if (win && ['terminal', 'codex'].includes(win.type) && dialog) {
       dialog.showDialog({
-        title: 'Terminali Kapat',
-        message: 'Arka planda çalışan bir işlem olabilir. Terminali kapatmak istediğinize emin misiniz?',
+        title: win.type === 'codex' ? 'Codex’i Kapat' : 'Terminali Kapat',
+        message: win.type === 'codex'
+          ? 'Codex çalışması arka planda devam ediyor olabilir. Pencereyi kapatmak istediğinize emin misiniz?'
+          : 'Arka planda çalışan bir işlem olabilir. Terminali kapatmak istediğinize emin misiniz?',
         type: 'warning',
         confirmText: 'Evet, Kapat',
         cancelText: 'Vazgeç',
         onConfirm: () => {
           setWindows(prev => prev.filter(w => w.id !== id));
-          if (focusedWindowId === id) setFocusedWindowId(null);
+          setFocusedWindowId(current => current === id ? null : current);
         }
       });
       return;
     }
 
     setWindows(prev => prev.filter(w => w.id !== id));
-    if (focusedWindowId === id) setFocusedWindowId(null);
+    setFocusedWindowId(current => current === id ? null : current);
   };
 
   const minimizeWindow = (id) => {
     setWindows(prev => prev.map(w => w.id === id ? { ...w, isMinimized: true } : w));
+    setFocusedWindowId(current => current === id ? null : current);
   };
 
   const maximizeWindow = (id) => {
@@ -83,10 +78,7 @@ export const WindowProvider = ({ children }) => {
 
   const focusWindow = (id) => {
     setFocusedWindowId(id);
-    setWindows(prev => {
-      const maxZ = Math.max(...prev.map(w => w.zIndex), 100);
-      return prev.map(w => w.id === id ? { ...w, zIndex: maxZ + 1 } : w);
-    });
+    setWindows(prev => focusWindowById(prev, id));
   };
 
   const updateWindowPosition = (id, x, y) => {

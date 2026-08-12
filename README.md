@@ -41,6 +41,10 @@ backup evidence and rollback history live on the server.
   discovering legacy and inactive definitions.
 - Cloudflare is an optional DNS adapter. FoxOS does not require Cloudflare, a
   paid plan, a domain or an API token to install or run.
+- Gemini CLI is an optional AI adapter. FoxOS does not install it or require a
+  Google API key during base setup.
+- Antigravity CLI is a separate optional AI adapter. FoxOS does not install it,
+  start Google login or grant host access during base setup.
 - S3-compatible storage is an optional, provider-neutral recovery adapter. Base
   installation and ordinary server management work without it.
 - The installer never signs up for, provisions or enables a remote or billable
@@ -68,7 +72,9 @@ agent is still required to perform management operations.
   interfaces without reading unit contents, WireGuard configuration or keys.
 - Start, stop, restart and change boot enablement for verified host services
   through fixed, Registry-bound operations.
-- Use a host terminal and browse the host filesystem from the web interface.
+- Use a real interactive host PTY from the web interface, including ANSI/TUI
+  programs, Ctrl/key input, live resize and long-running shell state while the
+  Terminal window is open or minimized; browse the host filesystem separately.
 
 ### Desktop and Application Manager
 
@@ -119,6 +125,89 @@ storage where persistence is required.
 Cloudflare is not part of the normal request path. If it is connected, it is
 used to manage DNS records; the applications, routes and desired state remain
 on the server.
+
+### Codex Full Server
+
+- Optionally install Codex CLI on the Linux host from **Settings → Connections**
+  using OpenAI's official installer.
+- Connect each server owner's own eligible ChatGPT account with the Codex
+  device-code flow. FoxOS does not ask for or return an OpenAI API key.
+- Keep access read-only after installation and login. The owner must separately
+  confirm **Full Server** before the Codex application can run.
+- Run Full Server threads from the real host root (`/`) with root-equivalent
+  filesystem, Docker, systemd, package and network access. The default mode
+  requests untrusted command and file-change approvals through the authenticated
+  FoxOS interface; the owner can explicitly choose **Tam Erişim — sorma** to
+  persist Codex's `never` approval policy in owner-only server state. The same
+  choice then applies on every authenticated device and to new, resumed and
+  subsequent turns until the owner changes it.
+- Keep new threads non-ephemeral, list FoxOS app-server conversations in the
+  left history panel and resume the selected stored thread after a window or
+  browser restart.
+- Keep the approval preference out of browser storage. A legacy browser-side
+  `never` choice is migrated to the server once and then removed locally.
+- Optionally connect a private Google Drive memory folder. Its address stays in
+  ignored owner-only server data and is never returned by the API; enabled new
+  and resumed conversations load `AGENTS.md` and `index.md` before answering.
+- Keep the Codex app-server as a managed host daemon independent of the FoxOS
+  agent container. FoxOS talks to it directly through its owner-only Unix
+  WebSocket control socket, so an agent rebuild/recreate does not kill the
+  active server-side turn.
+- Reverting to read-only stops the active Codex runtime and blocks turns on old
+  Full Server threads. Disconnecting also logs the ChatGPT account out while
+  leaving the optional CLI installed.
+
+Codex authentication and session state are owned by Codex under
+`/var/lib/foxos/codex` by default. The app-server daemon and its Unix control
+socket live in that owner-only host state; the FoxOS container holds only a
+disposable socket client. No app-server TCP listener is exposed. Account
+eligibility and usage limits remain those of the connected ChatGPT account;
+FoxOS does not create a subscription or make Codex a base-install dependency.
+
+### Antigravity CLI connection
+
+- Optionally install Google's native `agy` CLI from **Settings → Connections**
+  with the official Linux installer and a separate exact confirmation.
+- Connect the server owner's Google account through the documented remote OAuth
+  link and browser-returned code. The short-lived link and code are never
+  persisted or logged by FoxOS; credentials remain managed by Antigravity. The
+  connector drives the real `agy` TUI through a private pseudo-terminal because
+  non-interactive `/usage` can verify a login but cannot start one.
+- Start in a protected `plan` + `strict` profile with workspace confinement and
+  terminal sandboxing. Explicit account checks use `/usage` and make no model
+  request, while ordinary status reads stay fully local.
+- Separately confirm **Full Server** to enable root-equivalent host work from
+  `/` with workspace-external access and terminal sandboxing disabled. This
+  profile uses `always-proceed` for tools and artifacts plus explicit wildcard
+  permissions, so it does not ask again for individual commands, file changes
+  or artifact review.
+- Return to salt-okunur at any time. Disconnect first applies the protected
+  profile, then logs the Google account out and verifies the result while
+  leaving the optional CLI installed.
+
+This connector prepares Antigravity's native CLI and persistent permission
+profile. It does not yet add an Antigravity chat window, daemon or autonomous
+background agent inside FoxOS. Full Server should therefore be treated exactly
+like granting an authenticated root shell to later `agy` executions.
+
+### Gemini CLI connection
+
+- Optionally install Google's stable `@google/gemini-cli` package from
+  **Settings → Connections** after exact confirmation.
+- Connect a Gemini API key for the documented headless-server path. FoxOS
+  verifies it through the installed CLI in read-only plan mode, then stores it
+  only as server-keyed encrypted data; the key is never written to a `.env`
+  file or returned through the API.
+- Recheck the real CLI/API path on demand without turning ordinary status reads
+  into billable requests. Disconnecting removes the encrypted credential while
+  leaving the optional CLI installed.
+- Keep connection separate from execution authority. This slice does not add a
+  Gemini prompt window, background agent, filesystem access or shell access.
+
+Google ended Gemini CLI service for individual Google AI Pro, Ultra and free
+Code Assist accounts on June 18, 2026. This connector therefore exposes the
+supported API-key path instead of a non-working consumer Google-login flow.
+Vertex AI and enterprise authentication are not part of this first slice.
 
 ### Updates and Compose
 
@@ -300,7 +389,9 @@ records enough evidence to report or roll back the result.
 FoxOS control data is stored under `.foxos-data/` on the host and mounted as
 `/data` inside the agent. It contains authentication state, desktop layout,
 application identities, encrypted secrets, route state, migration evidence,
-operation receipts and gateway state.
+operation receipts and gateway state. Active owner sessions persist there as
+SHA-256 token digests rather than raw cookie values, so an agent rebuild does
+not sign the owner out while server-side work continues.
 
 Application data remains in the application's own Docker volumes or explicit
 host paths. Do not delete `.foxos-data/`, application volumes or gateway data
@@ -386,6 +477,13 @@ authenticated FoxOS session should be treated as a server administrator.
   containers.
 - Give optional provider tokens the smallest possible scope. For Cloudflare,
   use only zone read and DNS edit access for the required zones.
+- Treat Full Server Codex as an authenticated root shell: review approval
+  details, use **Tam Erişim — sorma** only when you intend to delegate every
+  command and file change without another prompt, protect the FoxOS owner
+  session and return Codex to read-only when the task is finished.
+- Treat Antigravity Full Server as an authenticated root shell with no
+  per-command prompt. Enable it only when that is intentional, protect the
+  FoxOS owner session and return Antigravity to salt-okunur when finished.
 - Back up encryption and recovery material separately from the server.
 - Read [SECURITY.md](SECURITY.md) before internet exposure or production
   migration.
