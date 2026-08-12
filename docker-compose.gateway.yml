@@ -16,6 +16,10 @@ services:
       args:
         CADDY_VERSION: "2.11.4"
     container_name: foxos-gateway
+    # Caddy is not a subreaper. Docker health checks and route probes use
+    # BusyBox TLS helpers, so keep docker-init as PID 1 to reap any orphaned
+    # helper process instead of accumulating zombies for the container lifetime.
+    init: true
     depends_on:
       foxos:
         condition: service_healthy

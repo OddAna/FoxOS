@@ -76,6 +76,19 @@ jobs:
           docker compose -f docker-compose.yml -f docker-compose.gateway.yml config --quiet
           FOXOS_DOMAIN=foxos.example.com \
           FOXOS_ACME_EMAIL=admin@example.com \
+          docker compose -f docker-compose.yml -f docker-compose.gateway.yml config --format json | node -e '
+            let input = "";
+            process.stdin.on("data", chunk => input += chunk);
+            process.stdin.on("end", () => {
+              const config = JSON.parse(input);
+              if (config.services?.["foxos-gateway"]?.init !== true) {
+                console.error("FoxOS gateway must use an init process to reap probe helpers.");
+                process.exit(1);
+              }
+            });
+          '
+          FOXOS_DOMAIN=foxos.example.com \
+          FOXOS_ACME_EMAIL=admin@example.com \
           docker compose -f docker-compose.yml -f docker-compose.gateway.yml -f docker-compose.ingress.yml config --quiet
           docker build --tag foxos-gateway-ci gateway
           docker build --tag foxos-ingress-ci ingress
