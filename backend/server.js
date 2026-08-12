@@ -100,6 +100,7 @@ const { createDockerClient } = require('./dockerClient');
 const { createEncryptionStore } = require('./encryptionStore');
 const { createHostServiceDiscovery } = require('./hostServiceDiscovery');
 const { HostServiceError, createHostServiceManager } = require('./hostServiceManager');
+const { hostServiceObservationDefinition } = require('./hostServiceObservationAdapter');
 const { createRouteManager } = require('./routeManager');
 const { createSecretManager } = require('./secretManager');
 const { createSessionStore } = require('./sessionStore');
@@ -1248,11 +1249,54 @@ function runExactHostObservation(operation) {
   });
 }
 
+function runExactHostServiceObservation(operation, unit, options = {}) {
+  const definition = hostServiceObservationDefinition(operation, unit, options);
+  if (!definition) {
+    return Promise.resolve({
+      success: false,
+      exitCode: 1,
+      output: '',
+      truncated: false
+    });
+  }
+  const hostExecutable = definition.candidates.find((candidate) => (
+    fs.existsSync(path.resolve(HOST_ROOT, '.' + candidate))
+  ));
+  if (!hostExecutable) {
+    return Promise.resolve({ success: false, exitCode: 127, output: '', truncated: false });
+  }
+  const invocation = HOST_EXECUTION === 'nsenter' ? {
+    executable: 'nsenter',
+    args: [
+      '--target', '1', '--mount', '--uts', '--ipc', '--net', '--pid', '--',
+      hostExecutable, ...definition.args
+    ]
+  } : {
+    executable: hostExecutable,
+    args: definition.args
+  };
+  return new Promise((resolve) => {
+    execFile(invocation.executable, invocation.args, {
+      timeout: definition.timeout,
+      maxBuffer: definition.maxBuffer,
+      windowsHide: true
+    }, (error, stdout) => {
+      const truncated = Boolean(error && error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER');
+      resolve({
+        success: !error,
+        exitCode: error && Number.isInteger(error.code) ? error.code : error ? 1 : 0,
+        output: truncated ? '' : String(stdout || ''),
+        truncated
+      });
+    });
+  });
+}
+
 function runExactHostServiceCommand(action, unit) {
   const allowedActions = new Set(['start', 'stop', 'restart', 'enable', 'disable']);
   if (
     !allowedActions.has(action) ||
-    !/^[A-Za-z0-9_.@-]+\.service$/.test(String(unit || ''))
+    !/^[A-Za-z0-9_][A-Za-z0-9_.@-]*\.service$/.test(String(unit || ''))
   ) {
     return Promise.resolve({ success: false, exitCode: 1, output: '' });
   }
@@ -1610,7 +1654,9 @@ const applicationObservabilityManager = createApplicationObservabilityManager({
   dataRoot: DATA_ROOT,
   dockerRequest,
   dockerRawRequest: dockerClient.requestRaw,
-  getApplicationInventory
+  getApplicationInventory,
+  getHostServiceSettings: (resourceId) => hostServiceManager.settings(resourceId),
+  hostServiceObservation: runExactHostServiceObservation
 });
 const productionStatelessMigrationAdapter = createProductionStatelessMigrationAdapter({
   dataRoot: DATA_ROOT,

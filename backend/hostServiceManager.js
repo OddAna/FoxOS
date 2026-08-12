@@ -1,7 +1,7 @@
 const HOST_SERVICE_ACTIONS = new Set(['start', 'stop', 'restart']);
 const HOST_SERVICE_BOOT_STATES = new Set(['enabled', 'disabled']);
 const RESOURCE_ID_PATTERN = /^res_[a-f0-9]{32}$/;
-const UNIT_PATTERN = /^[A-Za-z0-9_.@-]+\.service$/;
+const UNIT_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9_.@-]*\.service$/;
 
 class HostServiceError extends Error {
   constructor(message, statusCode = 400, code = 'host-service-error') {

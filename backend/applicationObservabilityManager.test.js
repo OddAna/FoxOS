@@ -5,10 +5,14 @@ const path = require('node:path');
 const test = require('node:test');
 const {
   ApplicationObservabilityError,
+  METRIC_SAMPLE_INTERVAL_MS,
   createApplicationObservabilityManager,
   logLinesFromDockerBuffer,
+  logLinesFromJournal,
   metricsFromStats,
+  metricsFromSystemdProperties,
   normalizedLogTail,
+  parseSystemdProperties,
   redactLogLine
 } = require('./applicationObservabilityManager');
 
@@ -118,11 +122,15 @@ test('Docker observability returns bounded redacted logs, live metrics, history 
   const testFixture = fixture();
   const result = await testFixture.manager.observe(application().id, { tail: 120 });
 
-  assert.equal(result.schemaVersion, 1);
+  assert.equal(result.schemaVersion, 2);
   assert.equal(result.available, true);
+  assert.equal(result.runtime.engine, 'docker');
   assert.equal(result.health.operationalState, 'running');
   assert.equal(result.health.restartCount, 4);
   assert.equal(result.metrics.available, true);
+  assert.equal(result.metrics.source, 'docker');
+  assert.equal(result.metrics.history.length, 1);
+  assert.equal(result.metrics.historyPolicy.minimumIntervalSeconds, 300);
   assert.equal(result.metrics.sample.cpuPercent, 20);
   assert.equal(result.metrics.sample.memoryUsageBytes, 900);
   assert.equal(result.metrics.sample.memoryPercent, 90);
@@ -149,6 +157,10 @@ test('Docker observability returns bounded redacted logs, live metrics, history 
   assert.equal(fs.statSync(historyFile).mode & 0o777, 0o700);
   const recordPath = path.join(historyFile, fs.readdirSync(historyFile)[0]);
   assert.equal(fs.statSync(recordPath).mode & 0o777, 0o600);
+  const metricHistoryDirectory = path.join(testFixture.root, 'observability', 'metric-history');
+  assert.equal(fs.statSync(metricHistoryDirectory).mode & 0o777, 0o700);
+  const metricRecordPath = path.join(metricHistoryDirectory, fs.readdirSync(metricHistoryDirectory)[0]);
+  assert.equal(fs.statSync(metricRecordPath).mode & 0o777, 0o600);
 });
 
 test('unchanged health is heartbeat-bounded while state transitions persist immediately', () => {
@@ -174,6 +186,18 @@ test('unchanged health is heartbeat-bounded while state transitions persist imme
   assert.equal(testFixture.manager.readHistory(current.id).length, 3);
 });
 
+test('metric history persists no more than one sample per controlled interval', async () => {
+  const testFixture = fixture();
+  await testFixture.manager.observe(application().id);
+  testFixture.setNow(Date.parse('2026-08-12T12:04:59.999Z'));
+  await testFixture.manager.observe(application().id);
+  assert.equal(testFixture.manager.readMetricHistory(application().id).length, 1);
+
+  testFixture.setNow(Date.parse('2026-08-12T12:00:00.000Z') + METRIC_SAMPLE_INTERVAL_MS);
+  await testFixture.manager.observe(application().id);
+  assert.equal(testFixture.manager.readMetricHistory(application().id).length, 2);
+});
+
 test('inactive definitions expose health history without attempting arbitrary Docker reads', async () => {
   const inactive = application('exited', null);
   inactive.runtime.containerId = null;
@@ -189,6 +213,143 @@ test('inactive definitions expose health history without attempting arbitrary Do
   assert.equal(result.metrics.available, false);
   assert.equal(result.health.operationalState, 'stopped');
   assert.equal(testFixture.dockerRequests.length, 0);
+});
+
+test('host services resolve the exact Registry unit before reading bounded systemd metrics and journal logs', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-host-observability-'));
+  let now = Date.parse('2026-08-12T12:00:00.000Z');
+  let cpuUsage = 1_000_000_000n;
+  const hostApplication = {
+    id: 'res_' + '2'.repeat(32),
+    name: 'Example Service',
+    installation: { state: 'host-service' },
+    runtime: {
+      engine: 'systemd',
+      serviceUnit: 'example.service',
+      state: 'running',
+      status: 'active:running',
+      healthStatus: 'active',
+      operationalState: 'running'
+    }
+  };
+  const observations = [];
+  let dockerReads = 0;
+  const manager = createApplicationObservabilityManager({
+    dataRoot: root,
+    clock: () => now,
+    getApplicationInventory: async () => ({ applications: [hostApplication] }),
+    getHostServiceSettings: (resourceId) => ({
+      resourceId,
+      engine: 'systemd',
+      unit: 'example.service'
+    }),
+    hostServiceObservation: async (operation, unit, options) => {
+      observations.push({ operation, unit, options });
+      if (operation === 'properties') {
+        return {
+          success: true,
+          output: [
+            'ActiveState=active',
+            'SubState=running',
+            'Result=success',
+            'NRestarts=4',
+            'ExecMainStatus=0',
+            `CPUUsageNSec=${cpuUsage}`,
+            'MemoryCurrent=52428800',
+            'EffectiveMemoryMax=104857600',
+            'TasksCurrent=12',
+            'TasksMax=100',
+            'IPIngressBytes=[not set]',
+            'IPEgressBytes=[not set]',
+            'IOReadBytes=4096',
+            'IOWriteBytes=8192'
+          ].join('\n')
+        };
+      }
+      return {
+        success: true,
+        output: [
+          JSON.stringify({
+            __REALTIME_TIMESTAMP: '1786535998000000',
+            PRIORITY: '6',
+            MESSAGE: 'ready'
+          }),
+          JSON.stringify({
+            __REALTIME_TIMESTAMP: '1786535999000000',
+            PRIORITY: '3',
+            MESSAGE: 'api_token=must-not-leak'
+          })
+        ].join('\n')
+      };
+    },
+    dockerRequest: async () => { dockerReads += 1; throw new Error('Docker must not be read'); },
+    dockerRawRequest: async () => { dockerReads += 1; throw new Error('Docker must not be read'); }
+  });
+
+  const first = await manager.observe(hostApplication.id, { tail: 120 });
+  assert.equal(first.schemaVersion, 2);
+  assert.equal(first.runtime.engine, 'systemd');
+  assert.equal(first.available, true);
+  assert.equal(first.health.operationalState, 'running');
+  assert.equal(first.health.restartCount, 4);
+  assert.equal(first.metrics.source, 'systemd');
+  assert.equal(first.metrics.sample.cpuPercent, null);
+  assert.equal(first.metrics.sample.memoryUsageBytes, 52_428_800);
+  assert.equal(first.metrics.sample.memoryPercent, 50);
+  assert.equal(first.metrics.sample.networkRxBytes, null);
+  assert.equal(first.metrics.sample.blockWriteBytes, 8192);
+  assert.equal(first.logs.source, 'journal');
+  assert.equal(first.logs.lines[0].message, 'ready');
+  assert.equal(first.logs.lines[1].stream, 'stderr');
+  assert.equal(first.logs.lines[1].message, 'api_token=[REDACTED]');
+  assert.equal(JSON.stringify(first).includes('must-not-leak'), false);
+  assert.equal(first.alerts.some((alert) => alert.code === 'service-restarts'), true);
+  assert.deepEqual(observations.map(({ operation, unit, options }) => ({
+    operation,
+    unit,
+    tail: options.tail
+  })), [
+    { operation: 'properties', unit: 'example.service', tail: 120 },
+    { operation: 'journal', unit: 'example.service', tail: 120 }
+  ]);
+  assert.equal(dockerReads, 0);
+
+  now += 15_000;
+  cpuUsage += 7_500_000_000n;
+  const second = await manager.observe(hostApplication.id, { tail: 120 });
+  assert.equal(second.metrics.sample.cpuPercent, 50);
+  assert.equal(manager.readMetricHistory(hostApplication.id).length, 1);
+});
+
+test('host service unit drift fails before a host or Docker observation can run', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-host-observability-drift-'));
+  let observations = 0;
+  const current = {
+    id: 'res_' + '3'.repeat(32),
+    installation: { state: 'host-service' },
+    runtime: {
+      engine: 'systemd',
+      serviceUnit: 'stale.service',
+      state: 'running',
+      operationalState: 'running'
+    }
+  };
+  const manager = createApplicationObservabilityManager({
+    dataRoot: root,
+    getApplicationInventory: async () => ({ applications: [current] }),
+    getHostServiceSettings: () => ({
+      resourceId: current.id,
+      unit: 'current.service'
+    }),
+    hostServiceObservation: async () => { observations += 1; },
+    dockerRequest: async () => { observations += 1; },
+    dockerRawRequest: async () => { observations += 1; }
+  });
+  await assert.rejects(
+    manager.observe(current.id),
+    (error) => error instanceof ApplicationObservabilityError && error.code === 'application-runtime-drift'
+  );
+  assert.equal(observations, 0);
 });
 
 test('application identity and log tail are fail-closed', async () => {
@@ -211,6 +372,58 @@ test('Docker log framing falls back to TTY text and strips controls while preser
   assert.equal(parsed.lines[0].timestamp, '2026-08-12T12:00:00.000000000Z');
   assert.equal(parsed.lines[0].message, 'failed token=[REDACTED]');
   assert.equal(parsed.redacted, true);
+});
+
+test('systemd property and journal parsers retain only bounded operational fields', () => {
+  const properties = parseSystemdProperties([
+    'ActiveState=active',
+    'MemoryCurrent=512',
+    'EffectiveMemoryMax=[not set]',
+    'MemoryMax=1024',
+    'TasksCurrent=7',
+    'TasksMax=18446744073709551615',
+    'IPIngressBytes=2048',
+    'IPEgressBytes=4096',
+    'IOReadBytes=8192',
+    'IOWriteBytes=16384',
+    'invalid-name=value'
+  ].join('\n'));
+  const metrics = metricsFromSystemdProperties(
+    properties,
+    '2026-08-12T12:00:00.000Z',
+    12.345
+  );
+  assert.equal(properties['invalid-name'], undefined);
+  assert.equal(metrics.cpuPercent, 12.35);
+  assert.equal(metrics.memoryPercent, 50);
+  assert.equal(metrics.pids, 7);
+  assert.equal(metrics.pidsLimit, null);
+  assert.equal(metrics.networkRxBytes, 2048);
+
+  const journal = logLinesFromJournal([
+    JSON.stringify({
+      __REALTIME_TIMESTAMP: '1786536000000000',
+      PRIORITY: '6',
+      MESSAGE: '\u001b[32mstarted\u001b[0m'
+    }),
+    JSON.stringify({
+      __REALTIME_TIMESTAMP: '1786536001000000',
+      PRIORITY: '3',
+      MESSAGE: `credential=${'x'.repeat(80)}`
+    }),
+    JSON.stringify({
+      __REALTIME_TIMESTAMP: '1786536002000000',
+      PRIORITY: '6',
+      MESSAGE: [0, 1, 2]
+    })
+  ].join('\n'), 20);
+  assert.equal(journal.lines.length, 2);
+  assert.equal(journal.lines[0].message, 'started');
+  assert.equal(journal.lines[1].stream, 'stderr');
+  assert.equal(journal.lines[1].message, 'credential=[REDACTED]');
+  assert.equal(journal.omittedEntries, 1);
+  assert.equal(journal.truncated, false);
+  assert.equal(journal.redacted, true);
 });
 
 test('secret redaction and metric normalization do not return raw credential values', () => {

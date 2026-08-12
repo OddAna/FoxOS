@@ -107,4 +107,10 @@ test('host manager rejects non-host resources and command failures', async () =>
     () => manager.lifecycle(current.id, 'start'),
     (error) => error.code === 'host-service-command-failed' && !error.message.includes('redacted')
   );
+
+  current = hostResource({ runtime: { ...current.runtime, unit: '--root.service' } });
+  await assert.rejects(
+    () => manager.lifecycle(current.id, 'start'),
+    (error) => error.code === 'host-service-unit-invalid'
+  );
 });

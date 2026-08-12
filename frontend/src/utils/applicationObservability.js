@@ -1,4 +1,5 @@
 export const formatBytes = (value) => {
+  if (value === null || value === undefined || value === '') return '—';
   const bytes = Number(value);
   if (!Number.isFinite(bytes) || bytes < 0) return '—';
   if (bytes === 0) return '0 B';
@@ -10,9 +11,47 @@ export const formatBytes = (value) => {
 };
 
 export const formatPercent = (value) => {
+  if (value === null || value === undefined || value === '') return '—';
   const percent = Number(value);
   if (!Number.isFinite(percent)) return '—';
   return `%${percent.toLocaleString('tr-TR', { maximumFractionDigits: percent >= 10 ? 1 : 2 })}`;
+};
+
+export const formatCount = (value) => (
+  typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? Math.round(value).toLocaleString('tr-TR')
+    : '—'
+);
+
+export const metricTrend = (samples, field, floorMaximum = 0, maxPoints = 96) => {
+  const entries = (Array.isArray(samples) ? samples : []).flatMap((sample) => {
+    const value = sample && sample[field];
+    const timestamp = sample && Date.parse(sample.collectedAt);
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0 && Number.isFinite(timestamp)
+      ? [{ collectedAt: sample.collectedAt, value }]
+      : [];
+  }).slice(-maxPoints);
+  if (!entries.length) {
+    return { count: 0, points: '', minimum: null, maximum: null, latest: null };
+  }
+  const values = entries.map((entry) => entry.value);
+  const maximum = Math.max(...values);
+  const scaleMaximum = Math.max(1, floorMaximum, maximum);
+  const pointCoordinates = entries.map((entry, index) => {
+    const x = entries.length === 1 ? 50 : index / (entries.length - 1) * 100;
+    const y = 31 - Math.min(1, entry.value / scaleMaximum) * 29;
+    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  });
+  const points = entries.length === 1
+    ? `0.00,${pointCoordinates[0].split(',')[1]} 100.00,${pointCoordinates[0].split(',')[1]}`
+    : pointCoordinates.join(' ');
+  return {
+    count: entries.length,
+    points,
+    minimum: Math.min(...values),
+    maximum,
+    latest: entries.at(-1)
+  };
 };
 
 export const healthStateLabel = (sample) => {

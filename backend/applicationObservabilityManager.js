@@ -4,8 +4,9 @@ const path = require('node:path');
 const { operationalStateForRuntime } = require('./applicationInventory');
 const { atomicWriteJson } = require('./resourceRegistry');
 
-const OBSERVABILITY_SCHEMA_VERSION = 1;
+const OBSERVABILITY_SCHEMA_VERSION = 2;
 const HISTORY_SCHEMA_VERSION = 1;
+const METRIC_HISTORY_SCHEMA_VERSION = 1;
 const DEFAULT_LOG_TAIL = 160;
 const MIN_LOG_TAIL = 20;
 const MAX_LOG_TAIL = 500;
@@ -16,6 +17,13 @@ const MAX_HISTORY_BYTES = 1024 * 1024;
 const MAX_HISTORY_SAMPLES = 1024;
 const HISTORY_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const HISTORY_HEARTBEAT_MS = 15 * 60 * 1000;
+const MAX_METRIC_HISTORY_BYTES = 2 * 1024 * 1024;
+const MAX_METRIC_HISTORY_SAMPLES = 2048;
+const MAX_RETURNED_METRIC_SAMPLES = 288;
+const METRIC_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const METRIC_SAMPLE_INTERVAL_MS = 5 * 60 * 1000;
+const SYSTEMD_UNIT_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9_.@-]*\.service$/;
+const SYSTEMD_UNLIMITED_VALUE = 2n ** 64n - 1n;
 
 class ApplicationObservabilityError extends Error {
   constructor(message, statusCode = 400, code = 'application-observability-invalid') {
@@ -48,6 +56,85 @@ function rounded(value, digits = 2) {
   if (!Number.isFinite(value)) return 0;
   const scale = 10 ** digits;
   return Math.round(value * scale) / scale;
+}
+
+function systemdInteger(value) {
+  const normalized = String(value === undefined || value === null ? '' : value).trim();
+  if (!/^\d+$/.test(normalized)) return null;
+  try {
+    const parsed = BigInt(normalized);
+    if (parsed < 0n || parsed >= SYSTEMD_UNLIMITED_VALUE || parsed > BigInt(Number.MAX_SAFE_INTEGER)) {
+      return null;
+    }
+    return Number(parsed);
+  } catch {
+    return null;
+  }
+}
+
+function systemdBigInt(value) {
+  const normalized = String(value === undefined || value === null ? '' : value).trim();
+  if (!/^\d+$/.test(normalized)) return null;
+  try {
+    const parsed = BigInt(normalized);
+    return parsed >= 0n && parsed < SYSTEMD_UNLIMITED_VALUE ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseSystemdProperties(value) {
+  const properties = {};
+  for (const line of String(value || '').split(/\r?\n/)) {
+    const separator = line.indexOf('=');
+    if (separator <= 0) continue;
+    const name = line.slice(0, separator);
+    if (!/^[A-Za-z][A-Za-z0-9]*$/.test(name)) continue;
+    properties[name] = line.slice(separator + 1).slice(0, 4096);
+  }
+  return properties;
+}
+
+function metricsFromSystemdProperties(properties, collectedAt, cpuPercent = null) {
+  if (!properties || typeof properties !== 'object') return null;
+  const memoryUsageBytes = systemdInteger(properties.MemoryCurrent);
+  const effectiveMemoryLimit = systemdInteger(properties.EffectiveMemoryMax);
+  const memoryLimitBytes = effectiveMemoryLimit === null
+    ? systemdInteger(properties.MemoryMax)
+    : effectiveMemoryLimit;
+  const pids = systemdInteger(properties.TasksCurrent);
+  const pidsLimit = systemdInteger(properties.TasksMax);
+  const networkRxBytes = systemdInteger(properties.IPIngressBytes);
+  const networkTxBytes = systemdInteger(properties.IPEgressBytes);
+  const blockReadBytes = systemdInteger(properties.IOReadBytes);
+  const blockWriteBytes = systemdInteger(properties.IOWriteBytes);
+  const hasMetric = [
+    memoryUsageBytes,
+    memoryLimitBytes,
+    pids,
+    pidsLimit,
+    networkRxBytes,
+    networkTxBytes,
+    blockReadBytes,
+    blockWriteBytes,
+    Number.isFinite(cpuPercent) ? cpuPercent : null
+  ].some((entry) => entry !== null);
+  if (!hasMetric) return null;
+  return {
+    collectedAt,
+    cpuPercent: Number.isFinite(cpuPercent) ? rounded(Math.max(0, cpuPercent)) : null,
+    memoryUsageBytes,
+    memoryLimitBytes,
+    memoryPercent: memoryUsageBytes !== null && memoryLimitBytes > 0
+      ? rounded(memoryUsageBytes / memoryLimitBytes * 100)
+      : null,
+    networkRxBytes,
+    networkTxBytes,
+    blockReadBytes,
+    blockWriteBytes,
+    pids,
+    pidsLimit: pidsLimit > 0 ? pidsLimit : null
+  };
 }
 
 function metricsFromStats(stats, details, collectedAt = null) {
@@ -149,7 +236,6 @@ function redactLogLine(value, knownSensitiveValues = []) {
   replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, 'Bearer [REDACTED]');
   replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, '[REDACTED JWT]');
   replace(/\b(?:sk-[A-Za-z0-9_-]{16,}|gh[opusr]_[A-Za-z0-9_]{16,}|AKIA[A-Z0-9]{16})\b/g, '[REDACTED TOKEN]');
-  replace(/\b[A-Za-z0-9+/_-]{64,}={0,2}(?![A-Za-z0-9+/_=-])/g, '[REDACTED LONG VALUE]');
   replace(
     /\b((?:[a-z0-9]+[_-])*(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|authorization|auth[_-]?token|access[_-]?token|refresh[_-]?token|session|cookie|credential|private[_-]?key)(?:[_-][a-z0-9]+)*)(\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,
     (match, label, separator) => `${label}${separator}[REDACTED]`
@@ -158,6 +244,7 @@ function redactLogLine(value, knownSensitiveValues = []) {
     /([a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:)([^@\s/]+)(@)/gi,
     (match, prefix, credential, suffix) => `${prefix}[REDACTED]${suffix}`
   );
+  replace(/\b[A-Za-z0-9+/_-]{64,}={0,2}(?![A-Za-z0-9+/_=-])/g, '[REDACTED LONG VALUE]');
 
   return { text, redactionCount };
 }
@@ -221,6 +308,62 @@ function logLinesFromDockerBuffer(buffer, tail, knownSensitiveValues = []) {
   };
 }
 
+function journalTimestamp(value) {
+  const normalized = String(value === undefined || value === null ? '' : value).trim();
+  if (!/^\d{10,20}$/.test(normalized)) return null;
+  try {
+    const milliseconds = Number(BigInt(normalized) / 1000n);
+    const date = new Date(milliseconds);
+    return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function logLinesFromJournal(value, tail, commandTruncated = false) {
+  const lines = [];
+  let redactionCount = 0;
+  let insidePrivateKey = false;
+  let invalidEntries = 0;
+  const rawEntries = String(value || '').split(/\r?\n/).filter(Boolean);
+  for (const rawEntry of rawEntries) {
+    let entry;
+    try {
+      entry = JSON.parse(rawEntry);
+    } catch {
+      invalidEntries += 1;
+      continue;
+    }
+    if (!entry || typeof entry.MESSAGE !== 'string') {
+      invalidEntries += 1;
+      continue;
+    }
+    const beginsPrivateKey = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/i.test(entry.MESSAGE);
+    const endsPrivateKey = /-----END [A-Z0-9 ]*PRIVATE KEY-----/i.test(entry.MESSAGE);
+    const redactPrivateKeyMaterial = insidePrivateKey || beginsPrivateKey;
+    const redacted = redactPrivateKeyMaterial
+      ? { text: '[REDACTED PRIVATE KEY MATERIAL]', redactionCount: 1 }
+      : redactLogLine(entry.MESSAGE);
+    if (beginsPrivateKey && !endsPrivateKey) insidePrivateKey = true;
+    if (insidePrivateKey && endsPrivateKey) insidePrivateKey = false;
+    redactionCount += redacted.redactionCount;
+    const priority = Number(entry.PRIORITY);
+    lines.push({
+      timestamp: journalTimestamp(entry.__REALTIME_TIMESTAMP),
+      stream: Number.isInteger(priority) && priority <= 3 ? 'stderr' : 'journal',
+      priority: Number.isInteger(priority) && priority >= 0 && priority <= 7 ? priority : null,
+      message: redacted.text
+    });
+  }
+  return {
+    lines: lines.slice(-tail),
+    truncated: commandTruncated || lines.length > tail,
+    omittedEntries: invalidEntries,
+    redacted: redactionCount > 0,
+    redactionCount
+  };
+}
+
 function sensitiveValuesFromDetails(details) {
   const values = [];
   const sensitiveName = /(?:^|[_-])(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|authorization|credential|private[_-]?key)(?:$|[_-])/i;
@@ -270,6 +413,40 @@ function healthSample(application, details, observedAt) {
   };
 }
 
+function systemdHealthSample(application, properties, observedAt) {
+  const runtime = application.runtime || {};
+  const activeState = String(properties.ActiveState || runtime.healthStatus || '').toLowerCase();
+  const subState = String(properties.SubState || '').toLowerCase();
+  let operationalState = runtime.operationalState || 'stopped';
+  if (activeState === 'failed' || subState === 'failed') operationalState = 'error';
+  else if (activeState === 'active') operationalState = 'running';
+  else if (['activating', 'deactivating', 'reloading'].includes(activeState)) {
+    operationalState = 'transitioning';
+  } else if (activeState) operationalState = 'stopped';
+  const restartCount = systemdInteger(properties.NRestarts);
+  const exitStatus = systemdInteger(properties.ExecMainStatus);
+  const result = String(properties.Result || '').toLowerCase();
+  return {
+    observedAt,
+    operationalState,
+    state: operationalState === 'running'
+      ? 'running'
+      : operationalState === 'transitioning'
+        ? activeState
+        : activeState === 'failed' ? 'failed' : 'stopped',
+    healthStatus: activeState || null,
+    restartCount,
+    exitCode: operationalState === 'running' ? null : exitStatus,
+    oomKilled: /oom/.test(result)
+      ? true
+      : ['yes', 'no'].includes(String(properties.OOMKilled || '').toLowerCase())
+        ? String(properties.OOMKilled).toLowerCase() === 'yes'
+        : null,
+    startedAt: null,
+    finishedAt: null
+  };
+}
+
 function sampleSignature(sample) {
   return JSON.stringify([
     sample.operationalState,
@@ -281,35 +458,38 @@ function sampleSignature(sample) {
   ]);
 }
 
-function alertsFor(health, metrics) {
+function alertsFor(health, metrics, runtimeKind = 'container') {
   const alerts = [];
   const add = (code, severity, title, message) => alerts.push({ code, severity, title, message });
+  const isService = runtimeKind === 'systemd';
+  const subject = isService ? 'Servis' : 'Container';
+  const codePrefix = isService ? 'service' : 'container';
   if (health.oomKilled) {
-    add('container-oom-killed', 'critical', 'Bellek nedeniyle durduruldu', 'Container son çalışmasında OOM ile kapandı. Bellek tüketimini ve limitini inceleyin.');
+    add(`${codePrefix}-oom-killed`, 'critical', 'Bellek nedeniyle durduruldu', `${subject} son çalışmasında OOM ile kapandı. Bellek tüketimini ve limitini inceleyin.`);
   }
   if (health.healthStatus === 'unhealthy') {
-    add('container-unhealthy', 'critical', 'Health check başarısız', 'Uygulama çalışıyor görünse de Docker health check başarısız. Logları ve bağımlılıkları inceleyin.');
+    add(`${codePrefix}-unhealthy`, 'critical', 'Health check başarısız', 'Uygulama çalışıyor görünse de health check başarısız. Logları ve bağımlılıkları inceleyin.');
   } else if (health.operationalState === 'error') {
-    add('container-error', 'critical', 'Uygulama hata durumunda', 'Çalışma durumu hata gösteriyor. Son logları ve çıkış kodunu inceleyin.');
+    add(`${codePrefix}-error`, 'critical', isService ? 'Servis hata durumunda' : 'Uygulama hata durumunda', 'Çalışma durumu hata gösteriyor. Son logları ve çıkış kodunu inceleyin.');
   } else if (health.state === 'restarting') {
-    add('container-restarting', 'warning', 'Yeniden başlatma döngüsü', 'Container yeniden başlatılıyor. Son loglarda başlangıç hatası arayın.');
+    add(`${codePrefix}-restarting`, 'warning', 'Yeniden başlatma döngüsü', `${subject} yeniden başlatılıyor. Son loglarda başlangıç hatası arayın.`);
   } else if (!['running', 'transitioning'].includes(health.operationalState)) {
-    add('container-not-running', 'warning', 'Uygulama çalışmıyor', 'Uygulama şu anda çalışmıyor. Bilinçli olarak durdurulmadıysa logları ve çıkış kodunu inceleyin.');
+    add(`${codePrefix}-not-running`, 'warning', isService ? 'Servis çalışmıyor' : 'Uygulama çalışmıyor', `${subject} şu anda çalışmıyor. Bilinçli olarak durdurulmadıysa logları ve çıkış kodunu inceleyin.`);
   }
   if (Number.isInteger(health.restartCount) && health.restartCount >= 3) {
-    add('container-restarts', 'warning', 'Tekrarlanan yeniden başlatmalar', `Container ${health.restartCount} kez yeniden başladı. Başlangıç kararlılığını inceleyin.`);
+    add(`${codePrefix}-restarts`, 'warning', 'Tekrarlanan yeniden başlatmalar', `${subject} ${health.restartCount} kez yeniden başladı. Başlangıç kararlılığını inceleyin.`);
   }
   if (metrics) {
     if (metrics.cpuPercent >= 90) {
       add('cpu-pressure', 'warning', 'Yüksek CPU kullanımı', `Anlık CPU kullanımı %${metrics.cpuPercent}. Yükün kalıcı olup olmadığını izleyin.`);
     }
     if (metrics.memoryPercent >= 90) {
-      add('memory-pressure', 'critical', 'Bellek limiti yaklaşıyor', `Container bellek limitinin %${metrics.memoryPercent} oranını kullanıyor.`);
+      add('memory-pressure', 'critical', 'Bellek limiti yaklaşıyor', `${subject} bellek limitinin %${metrics.memoryPercent} oranını kullanıyor.`);
     } else if (metrics.memoryPercent >= 80) {
-      add('memory-pressure', 'warning', 'Bellek kullanımı yüksek', `Container bellek limitinin %${metrics.memoryPercent} oranını kullanıyor.`);
+      add('memory-pressure', 'warning', 'Bellek kullanımı yüksek', `${subject} bellek limitinin %${metrics.memoryPercent} oranını kullanıyor.`);
     }
     if (metrics.pidsLimit && metrics.pids / metrics.pidsLimit >= 0.85) {
-      add('pid-pressure', 'critical', 'PID limiti yaklaşıyor', `Container ${metrics.pids}/${metrics.pidsLimit} process kullanıyor.`);
+      add('pid-pressure', 'critical', 'PID limiti yaklaşıyor', `${subject} ${metrics.pids}/${metrics.pidsLimit} process kullanıyor.`);
     }
   }
   const order = { critical: 0, warning: 1, info: 2 };
@@ -321,6 +501,8 @@ function createApplicationObservabilityManager({
   dockerRequest,
   dockerRawRequest,
   getApplicationInventory,
+  getHostServiceSettings = null,
+  hostServiceObservation = null,
   clock = () => Date.now()
 }) {
   if (!dataRoot || typeof dockerRequest !== 'function' || typeof dockerRawRequest !== 'function') {
@@ -330,10 +512,26 @@ function createApplicationObservabilityManager({
     throw new Error('Application observability requires the canonical application inventory');
   }
   const historyRoot = path.join(dataRoot, 'observability', 'health-history');
+  const metricHistoryRoot = path.join(dataRoot, 'observability', 'metric-history');
+  const hostCpuBaselines = new Map();
+  const metricHistoryPolicy = {
+    minimumIntervalSeconds: METRIC_SAMPLE_INTERVAL_MS / 1000,
+    retentionDays: METRIC_RETENTION_MS / (24 * 60 * 60 * 1000),
+    maxStoredSamples: MAX_METRIC_HISTORY_SAMPLES,
+    maxReturnedSamples: MAX_RETURNED_METRIC_SAMPLES
+  };
+
+  function stateFile(root, applicationId) {
+    const digest = crypto.createHash('sha256').update(applicationId, 'utf8').digest('hex');
+    return path.join(root, digest + '.json');
+  }
 
   function historyFile(applicationId) {
-    const digest = crypto.createHash('sha256').update(applicationId, 'utf8').digest('hex');
-    return path.join(historyRoot, digest + '.json');
+    return stateFile(historyRoot, applicationId);
+  }
+
+  function metricHistoryFile(applicationId) {
+    return stateFile(metricHistoryRoot, applicationId);
   }
 
   function readHistory(applicationId) {
@@ -390,12 +588,255 @@ function createApplicationObservabilityManager({
     return retained;
   }
 
+  function safeMetricSample(sample, source) {
+    if (!sample || !['docker', 'systemd'].includes(source)) return null;
+    if (typeof sample.collectedAt !== 'string' || !Number.isFinite(Date.parse(sample.collectedAt))) {
+      return null;
+    }
+    const normalized = { collectedAt: sample.collectedAt, source };
+    const integerFields = [
+      'memoryUsageBytes',
+      'memoryLimitBytes',
+      'networkRxBytes',
+      'networkTxBytes',
+      'blockReadBytes',
+      'blockWriteBytes',
+      'pids',
+      'pidsLimit'
+    ];
+    for (const field of ['cpuPercent', 'memoryPercent']) {
+      normalized[field] = typeof sample[field] === 'number' && Number.isFinite(sample[field]) && sample[field] >= 0
+        ? rounded(sample[field])
+        : null;
+    }
+    for (const field of integerFields) {
+      normalized[field] = typeof sample[field] === 'number' && Number.isFinite(sample[field]) && sample[field] >= 0
+        ? Math.round(sample[field])
+        : null;
+    }
+    return normalized;
+  }
+
+  function readMetricHistory(applicationId) {
+    const file = metricHistoryFile(applicationId);
+    if (!fs.existsSync(file)) return [];
+    let descriptor;
+    try {
+      descriptor = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+      const stat = fs.fstatSync(descriptor);
+      if (!stat.isFile() || stat.size > MAX_METRIC_HISTORY_BYTES) throw new Error('invalid metric history');
+      const record = JSON.parse(fs.readFileSync(descriptor, 'utf8'));
+      if (
+        !record || record.schemaVersion !== METRIC_HISTORY_SCHEMA_VERSION ||
+        record.applicationId !== applicationId || !Array.isArray(record.samples)
+      ) return [];
+      const cutoff = clock() - METRIC_RETENTION_MS;
+      return record.samples.slice(-MAX_METRIC_HISTORY_SAMPLES).flatMap((sample) => {
+        const normalized = safeMetricSample(sample, sample && sample.source);
+        return normalized && Date.parse(normalized.collectedAt) >= cutoff ? [normalized] : [];
+      });
+    } catch {
+      return [];
+    } finally {
+      if (descriptor !== undefined) fs.closeSync(descriptor);
+    }
+  }
+
+  function recordMetricSample(applicationId, sample, source) {
+    const normalized = safeMetricSample(sample, source);
+    if (!normalized) return readMetricHistory(applicationId).slice(-MAX_RETURNED_METRIC_SAMPLES);
+    const cutoff = clock() - METRIC_RETENTION_MS;
+    const samples = readMetricHistory(applicationId).filter((entry) => {
+      const timestamp = Date.parse(entry.collectedAt);
+      return Number.isFinite(timestamp) && timestamp >= cutoff;
+    });
+    const previous = samples.at(-1) || null;
+    const previousTime = previous ? Date.parse(previous.collectedAt) : 0;
+    if (
+      previous && previous.source === normalized.source && Number.isFinite(previousTime) &&
+      clock() - previousTime < METRIC_SAMPLE_INTERVAL_MS
+    ) return samples.slice(-MAX_RETURNED_METRIC_SAMPLES);
+    samples.push(normalized);
+    const retained = samples.slice(-MAX_METRIC_HISTORY_SAMPLES);
+    atomicWriteJson(metricHistoryFile(applicationId), {
+      schemaVersion: METRIC_HISTORY_SCHEMA_VERSION,
+      applicationId,
+      updatedAt: normalized.collectedAt,
+      samples: retained
+    });
+    return retained.slice(-MAX_RETURNED_METRIC_SAMPLES);
+  }
+
+  function metricsResult(applicationId, source, sample, reason) {
+    const history = sample
+      ? recordMetricSample(applicationId, sample, source)
+      : readMetricHistory(applicationId).slice(-MAX_RETURNED_METRIC_SAMPLES);
+    return {
+      available: Boolean(sample),
+      source: sample ? source : null,
+      reason: sample ? null : reason,
+      sample: sample || null,
+      history,
+      historyPolicy: metricHistoryPolicy
+    };
+  }
+
+  function systemdCpuPercent(applicationId, properties, observedAt) {
+    const usage = systemdBigInt(properties.CPUUsageNSec);
+    const previous = hostCpuBaselines.get(applicationId);
+    if (usage === null) {
+      hostCpuBaselines.delete(applicationId);
+      return null;
+    }
+    hostCpuBaselines.set(applicationId, { usage, observedAt });
+    if (!previous || observedAt <= previous.observedAt || usage < previous.usage) return null;
+    const elapsedNanoseconds = (observedAt - previous.observedAt) * 1e6;
+    if (!Number.isFinite(elapsedNanoseconds) || elapsedNanoseconds <= 0) return null;
+    return Number(usage - previous.usage) / elapsedNanoseconds * 100;
+  }
+
   function recordInventory(inventory) {
     const observedAt = new Date(clock()).toISOString();
     for (const application of inventory && inventory.applications || []) {
       if (!application || typeof application.id !== 'string') continue;
       recordSample(application.id, healthSample(application, null, observedAt));
     }
+  }
+
+  function unavailableObservation(application, generatedAt, tail, reason) {
+    const health = healthSample(application, null, generatedAt);
+    const history = recordSample(application.id, health);
+    return {
+      schemaVersion: OBSERVABILITY_SCHEMA_VERSION,
+      generatedAt,
+      applicationId: application.id,
+      runtime: { engine: application.runtime && application.runtime.engine || null },
+      available: false,
+      reason,
+      health,
+      metrics: metricsResult(
+        application.id,
+        null,
+        null,
+        'Çalışan bir runtime bulunmadığı için anlık kaynak metriği yok.'
+      ),
+      logs: {
+        available: false,
+        source: null,
+        reason: 'Çalışan bir runtime bulunmadığı için log kaynağı yok.',
+        lines: [],
+        truncated: false,
+        redacted: false,
+        redactionCount: 0,
+        tail
+      },
+      history,
+      alerts: alertsFor(health, null)
+    };
+  }
+
+  async function observeHostService(application, generatedAt, tail) {
+    if (typeof getHostServiceSettings !== 'function' || typeof hostServiceObservation !== 'function') {
+      return unavailableObservation(
+        application,
+        generatedAt,
+        tail,
+        'Sunucu servisi gözlem adaptörü bu kurulumda etkin değil.'
+      );
+    }
+    let settings;
+    try {
+      settings = getHostServiceSettings(application.id);
+    } catch {
+      throw new ApplicationObservabilityError(
+        'Sunucu servisi çalışma kaydı envanterden sonra değişti. Listeyi yenileyin.',
+        409,
+        'application-runtime-drift'
+      );
+    }
+    const inventoryUnit = application.runtime && application.runtime.serviceUnit;
+    if (
+      !settings || settings.resourceId !== application.id ||
+      !SYSTEMD_UNIT_PATTERN.test(String(settings.unit || '')) ||
+      settings.unit !== inventoryUnit
+    ) {
+      throw new ApplicationObservabilityError(
+        'Sunucu servisi birimi güncel envanterle eşleşmiyor.',
+        409,
+        'application-runtime-drift'
+      );
+    }
+
+    const requests = await Promise.allSettled([
+      hostServiceObservation('properties', settings.unit, { tail }),
+      hostServiceObservation('journal', settings.unit, { tail })
+    ]);
+    const propertyResult = requests[0].status === 'fulfilled' ? requests[0].value : null;
+    const journalResult = requests[1].status === 'fulfilled' ? requests[1].value : null;
+    const propertyOutput = propertyResult && propertyResult.success === true &&
+      Buffer.byteLength(String(propertyResult.output || ''), 'utf8') <= MAX_STATS_BYTES
+      ? String(propertyResult.output || '')
+      : null;
+    const journalOutput = journalResult && journalResult.success === true &&
+      Buffer.byteLength(String(journalResult.output || ''), 'utf8') <= MAX_LOG_BYTES
+      ? String(journalResult.output || '')
+      : null;
+    const properties = propertyOutput === null ? null : parseSystemdProperties(propertyOutput);
+    const hasProperties = properties && Object.keys(properties).length > 0;
+    const health = hasProperties
+      ? systemdHealthSample(application, properties, generatedAt)
+      : healthSample(application, null, generatedAt);
+    const history = recordSample(application.id, health);
+    const cpuPercent = hasProperties
+      ? systemdCpuPercent(application.id, properties, clock())
+      : null;
+    const metrics = hasProperties
+      ? metricsFromSystemdProperties(properties, generatedAt, cpuPercent)
+      : null;
+    const parsedLogs = journalOutput === null
+      ? null
+      : logLinesFromJournal(journalOutput, tail, journalResult.truncated === true);
+    const available = Boolean(hasProperties || parsedLogs);
+    return {
+      schemaVersion: OBSERVABILITY_SCHEMA_VERSION,
+      generatedAt,
+      applicationId: application.id,
+      runtime: { engine: 'systemd' },
+      available,
+      reason: available ? null : 'systemd gözlem verisi güvenli sorgu sınırları içinde alınamadı.',
+      health,
+      metrics: metricsResult(
+        application.id,
+        'systemd',
+        metrics,
+        hasProperties
+          ? 'systemd bu servis için kullanılabilir cgroup sayacı bildirmedi.'
+          : 'systemd cgroup sayaçları alınamadı.'
+      ),
+      logs: parsedLogs
+        ? {
+            available: true,
+            source: 'journal',
+            reason: parsedLogs.lines.length ? null : 'Bu servis için journal kaydı bulunmuyor.',
+            ...parsedLogs,
+            tail
+          }
+        : {
+            available: false,
+            source: 'journal',
+            reason: journalResult && journalResult.truncated
+              ? 'Journal çıktısı güvenli okuma sınırını aştı.'
+              : 'Journal kayıtları alınamadı.',
+            lines: [],
+            truncated: Boolean(journalResult && journalResult.truncated),
+            omittedEntries: 0,
+            redacted: false,
+            redactionCount: 0,
+            tail
+          },
+      history,
+      alerts: alertsFor(health, metrics, 'systemd')
+    };
   }
 
   async function observe(applicationId, options = {}) {
@@ -415,23 +856,16 @@ function createApplicationObservabilityManager({
 
     const generatedAt = new Date(clock()).toISOString();
     const containerId = application.runtime && application.runtime.containerId;
+    if (application.installation && application.installation.state === 'host-service') {
+      return observeHostService(application, generatedAt, tail);
+    }
     if (!containerId) {
-      const health = healthSample(application, null, generatedAt);
-      const history = recordSample(application.id, health);
-      return {
-        schemaVersion: OBSERVABILITY_SCHEMA_VERSION,
+      return unavailableObservation(
+        application,
         generatedAt,
-        applicationId: application.id,
-        available: false,
-        reason: application.installation && application.installation.state === 'host-service'
-          ? 'Bu ilk dilimde doğrudan sunucu servisleri için journal ve cgroup gözlemi henüz etkin değil.'
-          : 'Çalışan container olmadığı için log ve kaynak metriği bulunmuyor.',
-        health,
-        metrics: { available: false, reason: 'Çalışan container bulunmuyor.', sample: null },
-        logs: { available: false, reason: 'Çalışan container bulunmuyor.', lines: [], truncated: false, redacted: false, redactionCount: 0, tail },
-        history,
-        alerts: alertsFor(health, null)
-      };
+        tail,
+        'Çalışan container olmadığı için log ve kaynak metriği bulunmuyor.'
+      );
     }
     if (!/^[a-f0-9]{12,64}$/i.test(containerId)) {
       throw new ApplicationObservabilityError(
@@ -498,22 +932,23 @@ function createApplicationObservabilityManager({
       schemaVersion: OBSERVABILITY_SCHEMA_VERSION,
       generatedAt,
       applicationId: application.id,
+      runtime: { engine: 'docker' },
       available: true,
       reason: null,
       health,
-      metrics: metrics
-        ? { available: true, reason: null, sample: metrics }
-        : {
-            available: false,
-            reason: health.state === 'running'
-              ? 'Anlık Docker kaynak metriği alınamadı.'
-              : 'Uygulama çalışmadığı için anlık kaynak metriği yok.',
-            sample: null
-          },
+      metrics: metricsResult(
+        application.id,
+        'docker',
+        metrics,
+        health.state === 'running'
+          ? 'Anlık Docker kaynak metriği alınamadı.'
+          : 'Uygulama çalışmadığı için anlık kaynak metriği yok.'
+      ),
       logs: parsedLogs
-        ? { available: true, reason: null, ...parsedLogs, tail }
+        ? { available: true, source: 'docker', reason: null, ...parsedLogs, tail }
         : {
             available: false,
+            source: 'docker',
             reason: 'Container log sürücüsü bu kaydı sunmadı.',
             lines: [],
             truncated: false,
@@ -526,7 +961,7 @@ function createApplicationObservabilityManager({
     };
   }
 
-  return { observe, readHistory, recordInventory };
+  return { observe, readHistory, readMetricHistory, recordInventory };
 }
 
 module.exports = {
@@ -534,11 +969,17 @@ module.exports = {
   DEFAULT_LOG_TAIL,
   MAX_LOG_BYTES,
   MAX_LOG_TAIL,
+  MAX_METRIC_HISTORY_SAMPLES,
+  MAX_RETURNED_METRIC_SAMPLES,
+  METRIC_SAMPLE_INTERVAL_MS,
   MIN_LOG_TAIL,
   OBSERVABILITY_SCHEMA_VERSION,
   createApplicationObservabilityManager,
   logLinesFromDockerBuffer,
+  logLinesFromJournal,
   metricsFromStats,
+  metricsFromSystemdProperties,
   normalizedLogTail,
+  parseSystemdProperties,
   redactLogLine
 };

@@ -721,12 +721,29 @@ proven secret-free.
 Health state changes and 15-minute unchanged heartbeats are persisted under
 `.foxos-data/observability/health-history/` as schema-versioned owner-only
 `700/600` state. Seven days and 1,024 samples per stable application ID are the
-hard bounds. Current CPU, effective memory, network, block-I/O and PID readings
-remain ephemeral. Threshold-derived alerts explain unhealthy/error, restart,
-OOM, CPU, memory and PID pressure without changing a runtime or provider. A
-missing container or inactive definition still receives truthful health
-history and an explicit unavailable reason. systemd journal/cgroup metrics,
-long-term metric retention and external alert delivery remain later contracts.
+hard bounds. Docker and systemd resource samples use a separate owner-only
+`.foxos-data/observability/metric-history/` store: at most one five-minute
+sample, seven days and 2,048 samples are retained, while an API response returns
+at most the latest 288 points. Only normalized numeric metrics and their source
+are persisted; logs and raw Docker/systemd responses are never stored.
+
+Host-service observation resolves the application ID through canonical
+inventory and then resolves its exact systemd unit again through the Registry-
+bound host-service manager. The host adapter accepts no unit or command from the
+client. It issues only a fixed `systemctl show` property allowlist for cgroup
+CPU, memory, task, optional IP-accounting and I/O counters, plus a fixed
+`journalctl` query for the exact unit. Journal output is limited to 500 lines
+and 512 KiB, retains only message/priority/timestamp fields, and passes through
+the same control-character removal, private-key suppression and credential-
+pattern redaction as Docker logs. Service files, process environment,
+WireGuard configuration and keys remain unread. Unsupported counters are
+reported as unavailable rather than zero.
+
+Threshold-derived alerts explain unhealthy/error, restart, OOM, CPU, memory
+and PID pressure without changing a runtime or provider. A missing container or
+inactive definition still receives truthful health history and an explicit
+unavailable reason. Separately configured external alert delivery remains a
+later contract.
 
 ### Implemented boundary: Application Manifest
 

@@ -574,8 +574,11 @@ target blocks only adoption/migration operations that require restore proof.
 - [x] Add owner-authenticated, bounded and server-filtered Docker application
   logs, persisted health history, live CPU/memory/network/I/O/PID metrics and
   actionable local alerts without mutating the runtime.
-- [ ] Extend application observability to systemd journal/cgroup sources, durable
-  metric retention and separately configured external alert delivery.
+- [x] Extend application observability to Registry-bound systemd journal/cgroup
+  sources and bounded durable Docker/systemd metric retention without reading
+  service configuration or persisting logs.
+- [ ] Add separately configured external alert delivery with explicit destination,
+  secret and rate-limit contracts.
 - [ ] Add audit logs, users/roles and explicit authorization for destructive actions.
 - [ ] Add CPU/memory/storage limits and disk-pressure protection.
 - [ ] Add database-aware lifecycle and backup safety rather than treating databases

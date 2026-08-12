@@ -1426,9 +1426,12 @@ test('setup creates an authenticated session and server-owned onboarding state',
   );
   assert.equal(observabilityResponse.status, 200);
   const observability = (await observabilityResponse.json()).observability;
+  assert.equal(observability.schemaVersion, 2);
   assert.equal(observability.available, true);
   assert.equal(observability.health.healthStatus, 'healthy');
   assert.equal(observability.metrics.sample.cpuPercent, 20);
+  assert.equal(observability.metrics.history.length, 1);
+  assert.equal(observability.metrics.historyPolicy.minimumIntervalSeconds, 300);
   assert.equal(observability.logs.lines.at(-1).message, 'API_TOKEN=[REDACTED]');
   assert.equal(observability.logs.redacted, true);
   assert.equal(JSON.stringify(observability).includes(registrySecret), false);

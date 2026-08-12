@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const UNIT_PATTERN = /^[A-Za-z0-9_.@-]+\.service$/;
+const UNIT_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9_.@-]*\.service$/;
 const INTERFACE_PATTERN = /^[A-Za-z0-9_.-]{1,15}$/;
 
 function outputOf(result) {

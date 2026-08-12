@@ -14,22 +14,26 @@ import {
 import { apiFetch } from '../api';
 import {
   formatBytes,
+  formatCount,
   formatObservedTime,
   formatPercent,
   healthStateLabel,
-  healthStateTone
+  healthStateTone,
+  metricTrend
 } from '../utils/applicationObservability';
 import './ApplicationObservability.css';
 
 const METRIC_REFRESH_MS = 15000;
 
-const metricCards = (metrics) => [
+const metricCards = (metrics, source) => [
   {
     id: 'cpu',
     icon: Cpu,
     label: 'CPU',
     value: formatPercent(metrics.cpuPercent),
-    detail: 'Anlık container kullanımı'
+    detail: source === 'systemd'
+      ? metrics.cpuPercent === null ? 'İkinci örnekten sonra hesaplanır' : 'systemd cgroup kullanımı'
+      : 'Anlık container kullanımı'
   },
   {
     id: 'memory',
@@ -44,24 +48,47 @@ const metricCards = (metrics) => [
     id: 'pids',
     icon: Activity,
     label: 'Process',
-    value: metrics.pids.toLocaleString('tr-TR'),
-    detail: metrics.pidsLimit ? `${metrics.pidsLimit.toLocaleString('tr-TR')} PID limit` : 'PID limiti yok'
+    value: formatCount(metrics.pids),
+    detail: metrics.pidsLimit ? `${formatCount(metrics.pidsLimit)} PID limit` : 'PID limiti bildirilmedi'
   },
   {
     id: 'network',
     icon: Network,
     label: 'Ağ',
-    value: `↓ ${formatBytes(metrics.networkRxBytes)}`,
-    detail: `↑ ${formatBytes(metrics.networkTxBytes)}`
+    value: metrics.networkRxBytes === null ? '—' : `↓ ${formatBytes(metrics.networkRxBytes)}`,
+    detail: metrics.networkTxBytes === null
+      ? source === 'systemd' ? 'IPAccounting sayacı yok' : 'Ağ sayacı yok'
+      : `↑ ${formatBytes(metrics.networkTxBytes)}`
   },
   {
     id: 'disk',
     icon: HardDrive,
     label: 'Disk I/O',
-    value: `↓ ${formatBytes(metrics.blockReadBytes)}`,
-    detail: `↑ ${formatBytes(metrics.blockWriteBytes)}`
+    value: metrics.blockReadBytes === null ? '—' : `↓ ${formatBytes(metrics.blockReadBytes)}`,
+    detail: metrics.blockWriteBytes === null
+      ? source === 'systemd' ? 'Cgroup I/O sayacı yok' : 'Disk sayacı yok'
+      : `↑ ${formatBytes(metrics.blockWriteBytes)}`
   }
 ];
+
+const MetricTrend = ({ label, samples, field, className }) => {
+  const trend = metricTrend(samples, field, 100, 288);
+  if (!trend.count) return null;
+  return (
+    <div className={`application-metric-trend ${className}`}>
+      <div>
+        <strong>{label}</strong>
+        <span>
+          Son {formatPercent(trend.latest.value)} · tepe {formatPercent(trend.maximum)}
+        </span>
+      </div>
+      <svg viewBox="0 0 100 33" preserveAspectRatio="none" role="img" aria-label={`${label} kullanım eğilimi`}>
+        <line x1="0" x2="100" y1="31" y2="31" />
+        <polyline points={trend.points} />
+      </svg>
+    </div>
+  );
+};
 
 const ApplicationObservability = ({ application }) => {
   const [observability, setObservability] = useState(null);
@@ -109,16 +136,21 @@ const ApplicationObservability = ({ application }) => {
   const health = observability && observability.health;
   const history = observability && observability.history || [];
   const metrics = observability && observability.metrics && observability.metrics.sample;
+  const metricHistory = observability && observability.metrics && observability.metrics.history || [];
+  const metricHistoryPolicy = observability && observability.metrics && observability.metrics.historyPolicy;
   const logs = observability && observability.logs;
   const alerts = observability && observability.alerts || [];
   const tone = healthStateTone(health);
+  const isSystemd = observability && observability.runtime && observability.runtime.engine === 'systemd';
+  const hasMetricTrend = metricTrend(metricHistory, 'cpuPercent', 100, 288).count > 0 ||
+    metricTrend(metricHistory, 'memoryPercent', 100, 288).count > 0;
 
   return (
     <section className="application-observability" data-application-observability>
       <div className="application-observability-heading">
         <div>
           <h3>Gözlem</h3>
-          <p>Salt-okunur sağlık, kaynak kullanımı ve sunucu tarafında filtrelenen container logları.</p>
+          <p>Salt-okunur sağlık, kaynak kullanımı ve sunucu tarafında filtrelenen çalışma kayıtları.</p>
         </div>
         <button
           type="button"
@@ -181,7 +213,7 @@ const ApplicationObservability = ({ application }) => {
 
           {metrics ? (
             <div className="application-metric-grid">
-              {metricCards(metrics).map((metric) => {
+              {metricCards(metrics, observability.metrics.source).map((metric) => {
                 const Icon = metric.icon;
                 return (
                   <div className="application-metric-card" key={metric.id}>
@@ -197,6 +229,28 @@ const ApplicationObservability = ({ application }) => {
               {observability.metrics && observability.metrics.reason || observability.reason}
             </div>
           )}
+
+          <div className="application-observability-block">
+            <div className="application-observability-block-title">
+              <Gauge size={15} />
+              <div>
+                <strong>Kaynak eğilimi</strong>
+                <span>
+                  {metricHistoryPolicy
+                    ? `${metricHistoryPolicy.minimumIntervalSeconds / 60} dakikada bir · ${metricHistoryPolicy.retentionDays} gün tutulur · ekranda son ${metricHistoryPolicy.maxReturnedSamples} nokta`
+                    : 'Sınırlı kalıcı metrik geçmişi'}
+                </span>
+              </div>
+            </div>
+            {hasMetricTrend ? (
+              <div className="application-metric-trends">
+                <MetricTrend label="CPU" samples={metricHistory} field="cpuPercent" className="is-cpu" />
+                <MetricTrend label="Bellek" samples={metricHistory} field="memoryPercent" className="is-memory" />
+              </div>
+            ) : (
+              <div className="application-observability-empty">Henüz kalıcı kaynak örneği oluşmadı.</div>
+            )}
+          </div>
 
           <div className="application-observability-block">
             <div className="application-observability-block-title">
@@ -222,8 +276,11 @@ const ApplicationObservability = ({ application }) => {
             <div className="application-observability-block-title">
               <ScrollText size={15} />
               <div>
-                <strong>Son container logları</strong>
-                <span>En fazla 160 satır · bilinen ve yaygın kimlik bilgisi desenleri yanıttan önce gizlenir</span>
+                <strong>{isSystemd ? 'Son systemd journal kayıtları' : 'Son container logları'}</strong>
+                <span>
+                  En fazla 160 satır · yaygın kimlik bilgisi desenleri yanıttan önce gizlenir
+                  {isSystemd ? ' · servis dosyası ve ortam içeriği okunmaz' : ''}
+                </span>
               </div>
             </div>
             {logs && logs.available && logs.lines.length ? (
@@ -237,13 +294,15 @@ const ApplicationObservability = ({ application }) => {
               </div>
             ) : (
               <div className="application-observability-empty">
-                {logs && logs.reason || 'Gösterilecek container logu bulunamadı.'}
+                {logs && logs.reason || `Gösterilecek ${isSystemd ? 'journal kaydı' : 'container logu'} bulunamadı.`}
               </div>
             )}
-            {logs && (logs.redacted || logs.truncated) && (
+            {logs && (logs.redacted || logs.truncated || logs.omittedEntries > 0) && (
               <div className="application-log-notice">
                 {logs.redacted ? `${logs.redactionCount} hassas değer gizlendi.` : ''}
-                {logs.redacted && logs.truncated ? ' ' : ''}
+                {logs.redacted && (logs.truncated || logs.omittedEntries > 0) ? ' ' : ''}
+                {logs.omittedEntries > 0 ? `${logs.omittedEntries} metin olmayan journal kaydı atlandı.` : ''}
+                {logs.omittedEntries > 0 && logs.truncated ? ' ' : ''}
                 {logs.truncated ? 'Çıktı güvenli görüntüleme sınırında kesildi.' : ''}
               </div>
             )}
