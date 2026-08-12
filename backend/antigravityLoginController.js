@@ -267,7 +267,6 @@ function createAntigravityLoginController({
           }),
           postSubmissionWaitMs === null ? completionTimeoutMs : postSubmissionWaitMs
         );
-        record.completionTimer.unref?.();
       })
     ]);
     if (record.completionTimer) clearTimeout(record.completionTimer);
