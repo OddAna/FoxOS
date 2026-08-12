@@ -106,6 +106,10 @@ const { createSessionStore } = require('./sessionStore');
 const { createHostTerminalPtyFactory } = require('./hostTerminalPty');
 const { createTerminalSessionManager } = require('./terminalSessionManager');
 const {
+  MediaThumbnailError,
+  createMediaThumbnailManager
+} = require('./mediaThumbnailManager');
+const {
   WorkloadEvidenceError,
   createWorkloadEvidenceManager
 } = require('./workloadEvidenceManager');
@@ -187,6 +191,7 @@ const HOST_EXECUTION = process.env.HOST_EXECUTION || 'local';
 const DOCKER_SOCKET = process.env.DOCKER_SOCKET || '/var/run/docker.sock';
 const AUTH_FILE = path.join(DATA_ROOT, 'auth.json');
 const SESSIONS_FILE = path.join(DATA_ROOT, 'sessions.json');
+const THUMBNAIL_CACHE_ROOT = path.join(DATA_ROOT, 'thumbnail-cache');
 const PUBLIC_DIR = path.resolve(process.env.PUBLIC_DIR || path.join(__dirname, 'public'));
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const SESSION_RENEWAL_WINDOW_MS = Math.floor(SESSION_TTL_MS / 2);
@@ -248,6 +253,10 @@ function initializeDataDirectory() {
 }
 
 initializeDataDirectory();
+
+const mediaThumbnailManager = createMediaThumbnailManager({
+  cacheRoot: THUMBNAIL_CACHE_ROOT
+});
 
 const sessionStore = createSessionStore({
   filePath: SESSIONS_FILE,
@@ -2411,6 +2420,31 @@ app.get('/api/file-content', (req, res) => {
       res.status(error.statusCode || 404).json({ error: 'File not found' });
     });
   } catch {
+    res.status(404).json({ error: 'File not found' });
+  }
+});
+
+app.get('/api/file-thumbnail', async (req, res) => {
+  try {
+    const requestedPath = req.query.path;
+    const targetFile = resolveWorkspacePath(requestedPath);
+    const stats = fs.statSync(targetFile);
+    if (!stats.isFile()) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+    const resolvedFile = fs.realpathSync(targetFile);
+    const thumbnailPath = await mediaThumbnailManager.getThumbnail(resolvedFile);
+    res.setHeader('Cache-Control', 'private, max-age=86400');
+    res.type('jpg');
+    res.sendFile(thumbnailPath, { cacheControl: false }, (error) => {
+      if (!error || res.headersSent) return;
+      res.status(error.statusCode || 404).json({ error: 'Thumbnail not found' });
+    });
+  } catch (error) {
+    if (error instanceof MediaThumbnailError) {
+      if (error.statusCode === 503) res.setHeader('Retry-After', '2');
+      return res.status(error.statusCode).json({ error: 'Thumbnail unavailable', code: error.code });
+    }
     res.status(404).json({ error: 'File not found' });
   }
 });

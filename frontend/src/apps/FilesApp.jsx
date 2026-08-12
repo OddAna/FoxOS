@@ -30,6 +30,12 @@ const staticFileUrl = (currentPath, fileName) => {
   return `/api/file-content?path=${encodeURIComponent(parts.join('/'))}`;
 };
 
+const thumbnailFileUrl = (currentPath, file) => {
+  const parts = [...String(currentPath).split('/'), file.name].filter(Boolean);
+  const revision = `${file.size || 0}:${file.mtime || ''}`;
+  return `/api/file-thumbnail?path=${encodeURIComponent(parts.join('/'))}&v=${encodeURIComponent(revision)}`;
+};
+
 const FilePreview = ({ file, currentPath, viewMode }) => {
   const [failed, setFailed] = useState(false);
   const size = viewMode === 'list' ? 24 : 64;
@@ -62,27 +68,17 @@ const FilePreview = ({ file, currentPath, viewMode }) => {
         boxShadow: '0 3px 9px rgba(0,0,0,0.22)'
       }}
     >
-      {isImage ? (
-        <img
-          src={staticFileUrl(currentPath, file.name)}
-          alt=""
-          loading="lazy"
-          draggable="false"
-          onError={() => setFailed(true)}
-          style={mediaStyle}
-        />
-      ) : (
+      <img
+        src={ext === '.svg' ? staticFileUrl(currentPath, file.name) : thumbnailFileUrl(currentPath, file)}
+        alt=""
+        loading="lazy"
+        decoding="async"
+        draggable="false"
+        onError={() => setFailed(true)}
+        style={mediaStyle}
+      />
+      {isVideo && (
         <>
-          <video
-            src={`${staticFileUrl(currentPath, file.name)}#t=0.1`}
-            aria-hidden="true"
-            muted
-            playsInline
-            preload="metadata"
-            draggable="false"
-            onError={() => setFailed(true)}
-            style={mediaStyle}
-          />
           <PlayCircle
             size={22}
             fill="rgba(0,0,0,0.55)"

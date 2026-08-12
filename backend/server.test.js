@@ -24,6 +24,21 @@ process.env.DATA_ROOT = path.join(testRoot, 'data');
 process.env.HOST_ROOT = testRoot;
 process.env.HOST_EXECUTION = 'local';
 process.env.DOCKER_SOCKET = path.join(testRoot, 'docker.sock');
+const thumbnailGenerator = path.join(testRoot, 'thumbnail-generator');
+const thumbnailGenerationCounter = path.join(testRoot, 'thumbnail-generations');
+fs.writeFileSync(thumbnailGenerator, [
+  '#!/bin/sh',
+  'output=',
+  'previous=',
+  'for argument in "$@"; do',
+  '  if [ "$argument" = "/output/thumbnail.jpg" ]; then output=$previous; break; fi',
+  '  previous=$argument',
+  'done',
+  'printf x >> "$FOXOS_THUMBNAIL_TEST_COUNTER"',
+  'printf thumbnail-bytes > "$output"'
+].join('\n') + '\n', { mode: 0o700 });
+process.env.FOXOS_PRLIMIT_BINARY = thumbnailGenerator;
+process.env.FOXOS_THUMBNAIL_TEST_COUNTER = thumbnailGenerationCounter;
 
 let mockContainer = null;
 let lastContainerPayload = null;
@@ -900,9 +915,11 @@ test('setup creates an authenticated session and server-owned onboarding state',
 
   const externalPreviewDirectory = path.join(testRoot, 'external-preview-directory');
   const externalPreview = path.join(externalPreviewDirectory, 'linked-preview.jpg');
+  const thumbnailPreview = path.join(externalPreviewDirectory, 'thumbnail-preview.jpg');
   const previewLink = path.join(process.env.DATA_ROOT, 'files', 'Masaüstü', 'linked-previews');
   fs.mkdirSync(externalPreviewDirectory);
   fs.writeFileSync(externalPreview, 'preview-bytes');
+  fs.writeFileSync(thumbnailPreview, 'thumbnail-source');
   fs.symlinkSync(externalPreviewDirectory, previewLink);
   const previewResponse = await fetch(
     baseUrl() + '/api/file-content?path=Masa%C3%BCst%C3%BC%2Flinked-previews%2Flinked-preview.jpg',
@@ -911,11 +928,39 @@ test('setup creates an authenticated session and server-owned onboarding state',
   assert.equal(previewResponse.status, 200);
   assert.equal(await previewResponse.text(), 'preview-bytes');
 
+  const thumbnailUrl = baseUrl() +
+    '/api/file-thumbnail?path=Masa%C3%BCst%C3%BC%2Flinked-previews%2Fthumbnail-preview.jpg&v=1';
+  const thumbnailResponse = await fetch(thumbnailUrl, { headers: { Cookie: cookie } });
+  assert.equal(thumbnailResponse.status, 200);
+  assert.equal(thumbnailResponse.headers.get('content-type'), 'image/jpeg');
+  assert.equal(thumbnailResponse.headers.get('cache-control'), 'private, max-age=86400');
+  assert.equal(await thumbnailResponse.text(), 'thumbnail-bytes');
+  assert.equal(fs.readFileSync(thumbnailGenerationCounter, 'utf8'), 'x');
+
+  const cachedThumbnailResponse = await fetch(thumbnailUrl, { headers: { Cookie: cookie } });
+  assert.equal(cachedThumbnailResponse.status, 200);
+  assert.equal(await cachedThumbnailResponse.text(), 'thumbnail-bytes');
+  assert.equal(fs.readFileSync(thumbnailGenerationCounter, 'utf8'), 'x');
+
+  fs.appendFileSync(thumbnailPreview, '-changed');
+  const refreshedThumbnailResponse = await fetch(thumbnailUrl.replace('&v=1', '&v=2'), {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(refreshedThumbnailResponse.status, 200);
+  assert.equal(await refreshedThumbnailResponse.text(), 'thumbnail-bytes');
+  assert.equal(fs.readFileSync(thumbnailGenerationCounter, 'utf8'), 'xx');
+
   const escapedPreviewResponse = await fetch(
     baseUrl() + '/api/file-content?path=..%2Fexternal-preview.jpg',
     { headers: { Cookie: cookie } }
   );
   assert.equal(escapedPreviewResponse.status, 404);
+
+  const escapedThumbnailResponse = await fetch(
+    baseUrl() + '/api/file-thumbnail?path=..%2Fexternal-preview.jpg&v=1',
+    { headers: { Cookie: cookie } }
+  );
+  assert.equal(escapedThumbnailResponse.status, 404);
 
   const downloadName = 'oredata-kapakları.zip';
   const downloadBytes = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0xff, 0x7f]);
