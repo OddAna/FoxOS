@@ -1,7 +1,8 @@
 import React, { Children, isValidElement, useState } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Check, Copy, ExternalLink, FileCode2 } from 'lucide-react';
+import { Check, Copy, Download, ExternalLink, FileCode2 } from 'lucide-react';
+import { localFileDetails, localFileDownloadUrl } from '../utils/fileDownloads';
 
 const textFromChildren = (children) => Children.toArray(children)
   .map((child) => {
@@ -51,22 +52,38 @@ const CodexMarkdown = ({ children, onOpenLocalFile }) => (
           void node;
           const localFile = href.startsWith('/');
           const external = /^https?:\/\//i.test(href);
+          const downloadHref = localFile ? localFileDownloadUrl(href) : '';
+          const fileName = localFile ? localFileDetails(href).name : '';
           return (
-            <a
-              {...props}
-              href={href}
-              target={external ? '_blank' : undefined}
-              rel={external ? 'noopener noreferrer' : undefined}
-              onClick={localFile && onOpenLocalFile
-                ? (event) => {
-                  event.preventDefault();
-                  onOpenLocalFile(href);
-                }
-                : undefined}
-            >
-              {linkChildren}
-              {localFile ? <FileCode2 size={12} aria-hidden="true" /> : external ? <ExternalLink size={11} aria-hidden="true" /> : null}
-            </a>
+            <span className={localFile ? 'codex-local-file-actions' : undefined}>
+              <a
+                {...props}
+                href={href}
+                target={external ? '_blank' : undefined}
+                rel={external ? 'noopener noreferrer' : undefined}
+                onClick={localFile && onOpenLocalFile
+                  ? (event) => {
+                    event.preventDefault();
+                    onOpenLocalFile(href);
+                  }
+                  : undefined}
+              >
+                {linkChildren}
+                {localFile ? <FileCode2 size={12} aria-hidden="true" /> : external ? <ExternalLink size={11} aria-hidden="true" /> : null}
+              </a>
+              {downloadHref && (
+                <a
+                  className="codex-local-file-download"
+                  href={downloadHref}
+                  download={fileName}
+                  aria-label={`${fileName} dosyasını indir`}
+                  title="Dosyayı indir"
+                >
+                  <Download size={11} aria-hidden="true" />
+                  İndir
+                </a>
+              )}
+            </span>
           );
         },
         pre: ({ node, children: preChildren }) => {

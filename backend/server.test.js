@@ -513,6 +513,8 @@ test('health is public while management APIs require a session', async () => {
 
   const filesResponse = await fetch(baseUrl() + '/api/files');
   assert.equal(filesResponse.status, 401);
+  const fileDownloadResponse = await fetch(baseUrl() + '/api/file-download?path=Masa%C3%BCst%C3%BC%2Ftest.zip');
+  assert.equal(fileDownloadResponse.status, 401);
 
   const resourcesResponse = await fetch(baseUrl() + '/api/resources');
   assert.equal(resourcesResponse.status, 401);
@@ -914,6 +916,48 @@ test('setup creates an authenticated session and server-owned onboarding state',
     { headers: { Cookie: cookie } }
   );
   assert.equal(escapedPreviewResponse.status, 404);
+
+  const downloadName = 'oredata-kapakları.zip';
+  const downloadBytes = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0xff, 0x7f]);
+  fs.writeFileSync(path.join(process.env.DATA_ROOT, 'files', 'Masaüstü', downloadName), downloadBytes);
+  const downloadResponse = await fetch(
+    baseUrl() + '/api/file-download?path=' + encodeURIComponent('Masaüstü/' + downloadName),
+    { headers: { Cookie: cookie } }
+  );
+  assert.equal(downloadResponse.status, 200);
+  assert.match(downloadResponse.headers.get('content-disposition'), /^attachment;/i);
+  assert.match(downloadResponse.headers.get('content-disposition'), /oredata-kapaklar%C4%B1\.zip/i);
+  assert.equal(downloadResponse.headers.get('cache-control'), 'private, no-store');
+  assert.deepEqual(Buffer.from(await downloadResponse.arrayBuffer()), downloadBytes);
+
+  const linkedDownloadResponse = await fetch(
+    baseUrl() + '/api/file-download?path=Masa%C3%BCst%C3%BC%2Flinked-previews%2Flinked-preview.jpg',
+    { headers: { Cookie: cookie } }
+  );
+  assert.equal(linkedDownloadResponse.status, 200);
+  assert.match(linkedDownloadResponse.headers.get('content-disposition'), /^attachment;/i);
+  assert.equal(await linkedDownloadResponse.text(), 'preview-bytes');
+
+  const hostDownloadName = 'server-photo.jpg';
+  fs.writeFileSync(path.join(testRoot, hostDownloadName), 'server-photo-bytes');
+  const hostDownloadResponse = await fetch(
+    baseUrl() + '/api/file-download?path=' + encodeURIComponent('Sunucu/' + hostDownloadName),
+    { headers: { Cookie: cookie } }
+  );
+  assert.equal(hostDownloadResponse.status, 200);
+  assert.equal(await hostDownloadResponse.text(), 'server-photo-bytes');
+
+  const directoryDownloadResponse = await fetch(
+    baseUrl() + '/api/file-download?path=Masa%C3%BCst%C3%BC',
+    { headers: { Cookie: cookie } }
+  );
+  assert.equal(directoryDownloadResponse.status, 404);
+
+  const escapedDownloadResponse = await fetch(
+    baseUrl() + '/api/file-download?path=..%2Fexternal-preview.jpg',
+    { headers: { Cookie: cookie } }
+  );
+  assert.equal(escapedDownloadResponse.status, 404);
 
   const terminalResponse = await fetch(baseUrl() + '/api/terminal', {
     method: 'POST',

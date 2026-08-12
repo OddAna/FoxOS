@@ -19,6 +19,11 @@ import {
 } from 'lucide-react';
 import { apiFetch } from '../api';
 import { useWindowManager } from '../contexts/WindowContext';
+import {
+  localFileDetails,
+  localFileDownloadUrl,
+  localFilePreviewKind
+} from '../utils/fileDownloads';
 import CodexMarkdown from './CodexMarkdown';
 import './CodexApp.css';
 
@@ -218,17 +223,6 @@ const eventThreadId = (event) => {
   return params.threadId || params.thread?.id || params.turn?.threadId || null;
 };
 
-const localFileDetails = (href) => {
-  let decoded = String(href || '');
-  try { decoded = decodeURI(decoded); } catch {}
-  decoded = decoded.split(/[?#]/, 1)[0];
-  const location = decoded.match(/^(.*?):(\d+)(?::(\d+))?$/);
-  const filePath = location ? location[1] : decoded;
-  const line = location ? Number(location[2]) : null;
-  const name = filePath.split('/').filter(Boolean).at(-1) || filePath;
-  return { filePath, line, name };
-};
-
 const threadTime = (thread) => {
   const timestamp = thread.recencyAt || thread.updatedAt || thread.createdAt;
   if (!timestamp) return '';
@@ -294,16 +288,23 @@ const CodexApp = () => {
   });
 
   const openLocalFile = (href) => {
-    const { filePath, line, name } = localFileDetails(href);
+    const { filePath, line, name, ext } = localFileDetails(href);
     if (!filePath.startsWith('/')) return;
+    const previewKind = localFilePreviewKind(href);
+    if (previewKind === 'download') {
+      window.location.assign(localFileDownloadUrl(href));
+      return;
+    }
+    const audio = ['.mp3', '.wav', '.ogg'].includes(ext);
     openWindow({
       id: `codex-file-${encodeURIComponent(`${filePath}:${line || 0}`).slice(0, 180)}`,
-      type: 'text-viewer',
+      type: previewKind === 'image' ? 'image-viewer' : previewKind === 'media' ? 'media-player' : 'text-viewer',
       title: line ? `${name}:${line}` : name,
       filePath: `/Sunucu${filePath}`,
       initialLine: line,
-      width: 760,
-      height: 590
+      ext,
+      width: previewKind === 'image' ? 800 : previewKind === 'media' ? (audio ? 320 : 800) : 760,
+      height: previewKind === 'image' ? 600 : previewKind === 'media' ? (audio ? 420 : 500) : 590
     });
   };
 

@@ -2415,6 +2415,29 @@ app.get('/api/file-content', (req, res) => {
   }
 });
 
+app.get('/api/file-download', (req, res) => {
+  try {
+    const requestedPath = req.query.path;
+    const targetFile = resolveWorkspacePath(requestedPath);
+    const stats = fs.statSync(targetFile);
+    if (!stats.isFile()) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+    const resolvedFile = fs.realpathSync(targetFile);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.download(resolvedFile, path.basename(targetFile), (error) => {
+      if (!error) return;
+      if (res.headersSent) {
+        res.destroy(error);
+        return;
+      }
+      res.status(error.statusCode || 404).json({ error: 'File not found' });
+    });
+  } catch {
+    res.status(404).json({ error: 'File not found' });
+  }
+});
+
 app.use('/api/static', express.static(DISK_ROOT, { dotfiles: 'deny', fallthrough: false }));
 
 app.get('/api/files', (req, res) => {

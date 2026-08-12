@@ -845,6 +845,30 @@
   text-decoration-color: currentColor;
 }
 
+.codex-local-file-actions {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.codex-markdown a.codex-local-file-download {
+  gap: 3px;
+  padding: 1px 5px;
+  border: 1px solid rgba(117, 189, 244, 0.28);
+  border-radius: 5px;
+  color: #a7d5f8;
+  background: rgba(117, 189, 244, 0.08);
+  font-size: 11px;
+  line-height: 1.35;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.codex-markdown a.codex-local-file-download:hover {
+  border-color: rgba(167, 213, 248, 0.55);
+  background: rgba(117, 189, 244, 0.16);
+}
+
 .codex-markdown :not(pre) > code {
   padding: 1px 4px;
   border: 1px solid rgba(255, 255, 255, 0.08);

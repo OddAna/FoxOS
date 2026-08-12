@@ -4,6 +4,7 @@ import { HardDrive, Download, Image as ImageIcon, FileText, Monitor, Trash2, Arr
 import { useWindowManager } from '../contexts/WindowContext';
 import { useDialog } from '../contexts/DialogContext';
 import { getFileIcon } from '../utils/fileIcons';
+import { workspaceFileDownloadUrl } from '../utils/fileDownloads';
 import { apiFetch } from '../api';
 import ApplicationLogo from '../components/ApplicationLogo';
 import { useApplicationInventory } from '../contexts/ApplicationContext';
@@ -275,6 +276,13 @@ const FilesApp = ({ initialPath = 'Masaüstü' }) => {
           .catch(() => showDialog({ title: 'Hata', message: 'Yeniden adlandırılamadı.', type: 'error' }));
       }
     });
+  };
+
+  const handleDownload = (file) => {
+    setContextMenu(null);
+    if (!file || file.type === 'folder' || file.desktopKind === 'application') return;
+    const filePath = `${currentPath === '/' ? '' : currentPath}/${file.name}`;
+    window.location.assign(workspaceFileDownloadUrl(filePath));
   };
 
   const handleNewFolder = () => {
@@ -1177,6 +1185,9 @@ const FilesApp = ({ initialPath = 'Masaüstü' }) => {
           ) : contextMenu.type === 'file' ? (
             <>
               <div className="context-item" onClick={(e) => { handleDoubleClick(e, contextMenu.file); setContextMenu(null); }} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>Aç</div>
+              {contextMenu.file.type !== 'folder' && (
+                <div className="context-item" onClick={() => handleDownload(contextMenu.file)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><Download size={14} /> İndir</div>
+              )}
               <div className="context-item" onClick={() => handleRename(contextMenu.file)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>Yeniden Adlandır</div>
               <div className="context-item" onClick={() => handleDelete(contextMenu.file)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', color: '#ff5f56' }}>Sil</div>
             </>
