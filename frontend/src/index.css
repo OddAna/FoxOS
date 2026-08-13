@@ -137,6 +137,13 @@ body, html {
   outline-offset: 1px;
 }
 
+.topbar-weather-temperature {
+  min-width: 2.4ch;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
 .topbar-search-trigger kbd,
 .spotlight-panel kbd {
   border: 1px solid rgba(255, 255, 255, 0.13);

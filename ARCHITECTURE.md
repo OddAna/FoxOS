@@ -153,7 +153,9 @@ operation. Location search and seven-day forecast requests are proxied only to
 fixed Open-Meteo geocoding and forecast HTTPS endpoints with bounded queries,
 timeouts, response size, allowlisted output fields and short in-memory caches.
 Weather opens from its compact menu-bar control or Spotlight and is
-intentionally absent from the Dock.
+intentionally absent from the Dock. The control shows an icon before location
+setup, then the rounded current temperature; successful location changes and
+forecast refreshes update it immediately, with a ten-minute cached refresh.
 The selected coordinates and timezone are stored atomically in owner-only local
 state; no external credential is required or persisted. Provider failure is
 isolated to the Weather window, which retains explicit attribution, and the

@@ -103,7 +103,8 @@ agent is still required to perform management operations.
   editing or deleting timed and all-day events; clicking the top-right date and
   time opens it on today.
 - Open Weather from the compact menu-bar control or Spotlight, select a city
-  and view current conditions plus a seven-day forecast. Calendar and Weather
+  and view current conditions plus a seven-day forecast. After setup, the
+  menu-bar control shows the current rounded temperature. Calendar and Weather
   are intentionally kept out of the Dock. The optional
   [Open-Meteo](https://open-meteo.com/) adapter is called
   only when Weather is used, requires no API key for its open-access path and

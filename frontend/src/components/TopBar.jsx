@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useWindowManager } from '../contexts/WindowContext';
 import { CloudSun, Lock, Search } from 'lucide-react';
+import { apiFetch } from '../api';
+import { WEATHER_UPDATED_EVENT, weatherTemperatureFromPayload } from '../utils/weatherStatus';
 import SpotlightSearch from './SpotlightSearch';
 
 const CustomFoxIcon = ({ size = 16, color = "currentColor" }) => (
@@ -19,6 +21,7 @@ const TopBar = ({
   const { logout } = useAuth();
   const { openWindow } = useWindowManager();
   const [time, setTime] = useState(new Date());
+  const [weatherTemperature, setWeatherTemperature] = useState(null);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isSpotlightOpen, setIsSpotlightOpen] = useState(false);
 
@@ -31,6 +34,38 @@ const TopBar = ({
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000);
     return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const loadWeather = async () => {
+      try {
+        const response = await apiFetch('/api/weather');
+        const payload = await response.json();
+        if (active) setWeatherTemperature(weatherTemperatureFromPayload(payload));
+      } catch {
+        // Keep the last known value when the optional provider is unavailable.
+      }
+    };
+    const handleWeatherUpdate = (event) => {
+      if (!active) return;
+      const temperature = event.detail?.temperature;
+      setWeatherTemperature(Number.isFinite(temperature) ? temperature : null);
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') loadWeather();
+    };
+
+    window.addEventListener(WEATHER_UPDATED_EVENT, handleWeatherUpdate);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    loadWeather();
+    const timer = window.setInterval(loadWeather, 10 * 60 * 1000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      window.removeEventListener(WEATHER_UPDATED_EVENT, handleWeatherUpdate);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, []);
 
   useEffect(() => {
@@ -88,6 +123,10 @@ const TopBar = ({
     });
   };
 
+  const weatherButtonLabel = weatherTemperature === null
+    ? 'Hava durumunu aç'
+    : `${weatherTemperature} derece, hava durumunu aç`;
+
   return (
     <div className="topbar">
       <div className="topbar-left">
@@ -140,12 +179,18 @@ const TopBar = ({
         <button
           type="button"
           className="topbar-item topbar-weather-trigger"
-          title="Hava durumunu aç"
-          aria-label="Hava durumunu aç"
+          title={weatherButtonLabel}
+          aria-label={weatherButtonLabel}
           onClick={openWeather}
         >
-          <CloudSun size={15} aria-hidden="true" />
-          <span className="topbar-weather-label">Hava</span>
+          {weatherTemperature === null ? (
+            <>
+              <CloudSun size={15} aria-hidden="true" />
+              <span className="topbar-weather-label">Hava</span>
+            </>
+          ) : (
+            <span className="topbar-weather-temperature" aria-live="polite">{weatherTemperature}°</span>
+          )}
         </button>
         <button
           type="button"

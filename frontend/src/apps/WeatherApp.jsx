@@ -18,6 +18,7 @@ import {
   Wind
 } from 'lucide-react';
 import { apiFetch } from '../api';
+import { publishWeatherUpdate } from '../utils/weatherStatus';
 import './WeatherApp.css';
 
 const weatherDetails = (code, isDay = true) => {
@@ -70,6 +71,7 @@ const WeatherApp = () => {
       const response = await apiFetch(force ? '/api/weather?refresh=1' : '/api/weather');
       const payload = await response.json();
       setWeather(payload);
+      publishWeatherUpdate(payload);
       setLocationMode(payload.configured !== true);
       setError('');
     } catch (requestError) {
@@ -112,6 +114,7 @@ const WeatherApp = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(location)
       });
+      publishWeatherUpdate(null);
       setWeather(null);
       setLocationQuery('');
       setLocationResults([]);
