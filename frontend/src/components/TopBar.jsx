@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useWindowManager } from '../contexts/WindowContext';
-import { Lock, Search } from 'lucide-react';
+import { CloudSun, Lock, Search } from 'lucide-react';
 import SpotlightSearch from './SpotlightSearch';
 
 const CustomFoxIcon = ({ size = 16, color = "currentColor" }) => (
@@ -75,6 +75,19 @@ const TopBar = ({
     });
   };
 
+  const openWeather = (event) => {
+    event.stopPropagation();
+    setIsMenuOpen(false);
+    openWindow({
+      id: 'weather',
+      type: 'weather',
+      title: 'Hava Durumu',
+      component: null,
+      width: 780,
+      height: 590
+    });
+  };
+
   return (
     <div className="topbar">
       <div className="topbar-left">
@@ -126,8 +139,17 @@ const TopBar = ({
         </button>
         <button
           type="button"
+          className="topbar-item topbar-weather-trigger"
+          title="Hava durumunu aç"
+          aria-label="Hava durumunu aç"
+          onClick={openWeather}
+        >
+          <CloudSun size={15} aria-hidden="true" />
+          <span className="topbar-weather-label">Hava</span>
+        </button>
+        <button
+          type="button"
           className="topbar-item topbar-clock-trigger"
-          style={{ marginLeft: '12px' }}
           title="Takvimi aç"
           aria-label={`${formatDate(time)} ${formatTime(time)}, takvimi aç`}
           onClick={openCalendar}

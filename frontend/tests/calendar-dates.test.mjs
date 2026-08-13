@@ -28,7 +28,7 @@ test('calendar date helpers validate dates and cross year boundaries', () => {
   assert.equal(shiftCalendarMonth('2026-01-01', -1), '2025-12-01');
 });
 
-test('calendar is wired to persistent APIs, Dock, Spotlight and the top-right clock', () => {
+test('calendar is wired to persistent APIs, Spotlight and the top-right menu bar clock', () => {
   const read = (relativePath) => readFileSync(new URL(relativePath, import.meta.url), 'utf8');
   const app = read('../src/apps/CalendarApp.jsx');
   const topBar = read('../src/components/TopBar.jsx');
@@ -37,6 +37,6 @@ test('calendar is wired to persistent APIs, Dock, Spotlight and the top-right cl
   assert.match(app, /\/api\/calendar\/events/);
   assert.match(topBar, /className="topbar-item topbar-clock-trigger"/);
   assert.match(topBar, /type: 'calendar'/);
-  assert.match(dock, /app-calendar/);
+  assert.doesNotMatch(dock, /app-calendar/);
   assert.match(spotlight, /id: 'system-calendar'/);
 });

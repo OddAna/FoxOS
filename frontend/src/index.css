@@ -108,6 +108,7 @@ body, html {
   outline-offset: 2px;
 }
 
+.topbar-weather-trigger,
 .topbar-clock-trigger {
   appearance: none;
   border: 0;
@@ -116,13 +117,21 @@ body, html {
   color: inherit;
   padding: 3px 5px;
   font: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  white-space: nowrap;
 }
 
+.topbar-weather-trigger:hover,
+.topbar-weather-trigger:focus-visible,
 .topbar-clock-trigger:hover,
 .topbar-clock-trigger:focus-visible {
   background: rgba(255, 255, 255, 0.11);
 }
 
+.topbar-weather-trigger:focus-visible,
 .topbar-clock-trigger:focus-visible {
   outline: 2px solid rgba(56, 189, 248, 0.9);
   outline-offset: 1px;
@@ -449,7 +458,8 @@ body, html {
   }
 
   .topbar-search-label,
-  .topbar-search-trigger kbd {
+  .topbar-search-trigger kbd,
+  .topbar-weather-label {
     display: none;
   }
 
