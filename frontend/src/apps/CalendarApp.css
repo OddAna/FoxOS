@@ -65,6 +65,9 @@
 }
 
 .calendar-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   border-radius: 8px;
   padding: 0 11px;
   font-size: 12px;
@@ -94,14 +97,24 @@
   border-left: 0;
 }
 
-.calendar-error {
+.calendar-error,
+.calendar-warning {
   margin: 10px 14px 0;
-  border: 1px solid rgba(255, 95, 86, 0.32);
   border-radius: 9px;
-  background: rgba(255, 95, 86, 0.12);
-  color: #ffaaa5;
   padding: 8px 11px;
   font-size: 12px;
+}
+
+.calendar-error {
+  border: 1px solid rgba(255, 95, 86, 0.32);
+  background: rgba(255, 95, 86, 0.12);
+  color: #ffaaa5;
+}
+
+.calendar-warning {
+  border: 1px solid rgba(246, 196, 83, 0.3);
+  background: rgba(246, 196, 83, 0.1);
+  color: #f8d77d;
 }
 
 .calendar-layout {
@@ -334,6 +347,7 @@
 }
 
 .calendar-event-actions button,
+.calendar-event-actions a,
 .calendar-form-heading button {
   height: 30px;
   border-color: transparent;
@@ -342,9 +356,22 @@
 }
 
 .calendar-event-actions button:hover,
+.calendar-event-actions a:hover,
 .calendar-form-heading button:hover {
   background: rgba(255, 255, 255, 0.08);
   color: #fff;
+}
+
+.calendar-event-actions a {
+  width: 32px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 8px;
+}
+
+.calendar-event-main .calendar-event-source {
+  color: color-mix(in srgb, var(--event-color, #38bdf8) 78%, white);
+  font-size: 10px;
 }
 
 .calendar-event-form {
@@ -373,6 +400,7 @@
 }
 
 .calendar-event-form input:not([type="checkbox"]),
+.calendar-event-form select,
 .calendar-event-form textarea {
   width: 100%;
   border: 1px solid rgba(255, 255, 255, 0.12);
@@ -386,12 +414,24 @@
 }
 
 .calendar-event-form input:focus,
+.calendar-event-form select:focus,
 .calendar-event-form textarea:focus {
   border-color: rgba(56, 189, 248, 0.72);
 }
 
 .calendar-event-form textarea {
   resize: vertical;
+}
+
+.calendar-event-form select:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.calendar-event-form label small {
+  color: #71717a;
+  font-size: 10px;
+  line-height: 1.35;
 }
 
 .calendar-all-day {
@@ -477,6 +517,14 @@
 
   .calendar-toolbar-actions {
     gap: 5px;
+  }
+
+  .calendar-account-button {
+    width: 32px;
+    justify-content: center;
+    overflow: hidden;
+    padding: 0;
+    font-size: 0;
   }
 
   .calendar-layout {

@@ -530,6 +530,7 @@ test('health is public while management APIs require a session', async () => {
   assert.equal(filesResponse.status, 401);
   assert.equal((await fetch(baseUrl() + '/api/file-search?q=rapor')).status, 401);
   assert.equal((await fetch(baseUrl() + '/api/calendar/events?from=2026-08-01&to=2026-08-31')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/calendar/sources')).status, 401);
   assert.equal((await fetch(baseUrl() + '/api/weather')).status, 401);
   const fileDownloadResponse = await fetch(baseUrl() + '/api/file-download?path=Masa%C3%BCst%C3%BC%2Ftest.zip');
   assert.equal(fileDownloadResponse.status, 401);
@@ -815,6 +816,13 @@ test('setup creates an authenticated session and server-owned onboarding state',
   );
   assert.equal(calendarListResponse.status, 200);
   assert.equal((await calendarListResponse.json()).events[0].id, calendarEvent.id);
+  const calendarSourcesResponse = await fetch(baseUrl() + '/api/calendar/sources', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(calendarSourcesResponse.status, 200);
+  const calendarSources = await calendarSourcesResponse.json();
+  assert.deepEqual(calendarSources.sources.map((source) => source.id), ['local']);
+  assert.deepEqual(calendarSources.accounts, []);
   const calendarDeleteResponse = await fetch(baseUrl() + '/api/calendar/events/' + calendarEvent.id, {
     method: 'DELETE',
     headers: { Cookie: cookie }
@@ -860,25 +868,29 @@ test('setup creates an authenticated session and server-owned onboarding state',
   });
   assert.equal(connectionsResponse.status, 200);
   const connections = (await connectionsResponse.json()).connections;
-  assert.equal(connections.length, 4);
-  assert.equal(connections[0].id, 'codex');
-  assert.equal(connections[0].installed, false);
+  assert.equal(connections.length, 5);
+  assert.equal(connections[0].id, 'calendar-accounts');
   assert.equal(connections[0].connected, false);
-  assert.equal(connections[0].accessProfile, 'read-only');
-  assert.equal(connections[0].credentialIncluded, false);
-  assert.equal(connections[1].id, 'antigravity-cli');
+  assert.equal(connections[0].credentialsIncluded, false);
+  assert.deepEqual(connections[0].accounts, []);
+  assert.equal(connections[1].id, 'codex');
   assert.equal(connections[1].installed, false);
   assert.equal(connections[1].connected, false);
   assert.equal(connections[1].accessProfile, 'read-only');
   assert.equal(connections[1].credentialIncluded, false);
-  assert.equal(connections[1].oauthAuthorizationUrlIncluded, false);
-  assert.equal(connections[2].id, 'gemini-cli');
+  assert.equal(connections[2].id, 'antigravity-cli');
   assert.equal(connections[2].installed, false);
   assert.equal(connections[2].connected, false);
+  assert.equal(connections[2].accessProfile, 'read-only');
   assert.equal(connections[2].credentialIncluded, false);
-  assert.equal(connections[3].id, 'cloudflare');
+  assert.equal(connections[2].oauthAuthorizationUrlIncluded, false);
+  assert.equal(connections[3].id, 'gemini-cli');
+  assert.equal(connections[3].installed, false);
   assert.equal(connections[3].connected, false);
-  assert.equal(connections[3].tokenIncluded, false);
+  assert.equal(connections[3].credentialIncluded, false);
+  assert.equal(connections[4].id, 'cloudflare');
+  assert.equal(connections[4].connected, false);
+  assert.equal(connections[4].tokenIncluded, false);
 
   const unconfirmedCodexInstall = await fetch(baseUrl() + '/api/connections/codex/install', {
     method: 'POST',

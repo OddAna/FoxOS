@@ -40,3 +40,17 @@ test('calendar is wired to persistent APIs, Spotlight and the top-right menu bar
   assert.doesNotMatch(dock, /app-calendar/);
   assert.match(spotlight, /id: 'system-calendar'/);
 });
+
+test('calendar merges connected account sources and routes account setup through Connections', () => {
+  const read = (relativePath) => readFileSync(new URL(relativePath, import.meta.url), 'utf8');
+  const app = read('../src/apps/CalendarApp.jsx');
+  const connections = read('../src/apps/ConnectionsSettings.jsx');
+  assert.match(app, /\/api\/calendar\/sources/);
+  assert.match(app, /sourceKey/);
+  assert.match(app, /timeZone=/);
+  assert.match(app, /navigation: \{ tab: 'connections' \}/);
+  assert.match(connections, /calendar-accounts/);
+  assert.match(connections, /Google, Outlook ve Microsoft 365/);
+  assert.match(connections, /\{providerLabel\} Hesabı Ekle/);
+  assert.match(connections, /DISCONNECT CALENDAR ACCOUNT/);
+});

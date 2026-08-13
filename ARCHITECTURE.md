@@ -147,6 +147,28 @@ storage is not authority. The menu-bar date and time and Spotlight both
 activate the same Calendar window and current-date navigation state. Calendar
 is intentionally absent from the Dock.
 
+Calendar also has an optional multi-account provider boundary configured only
+through authenticated **Bağlantılar**. Google Calendar and personal or
+organizational Microsoft calendars use separate web-server OAuth applications;
+an Antigravity, Gemini, Codex, Gmail or browser login is never copied or treated
+as Calendar authority. Authorization uses an exact server callback, a bounded
+one-use state value and PKCE. FoxOS requests only identity, offline renewal and
+calendar-event/list permissions, receives no mailbox password, encrypts OAuth
+client secrets and per-account refresh tokens with the server-local
+AES-256-GCM key, and never returns those values through an API response.
+
+Each connected account retains its own provider and calendar sources. Bounded
+on-demand reads expand recurring instances for the visible date range and merge
+them with the local server-owned calendar; one provider failure becomes a
+source warning and cannot hide local events or another healthy account.
+Authenticated writes are routed only to an explicitly selected writable
+calendar, while provider identifiers remain opaque event references. Account
+disconnect removes only local encrypted credentials and preserves remote
+calendars and events. A clean install has no OAuth application, account,
+provider request or background synchronization dependency; external network
+requests begin only after the owner explicitly configures and opens or refreshes
+Calendar.
+
 Weather is an optional, on-demand adapter. A clean install has no configured
 location and makes no weather network request during startup or ordinary FoxOS
 operation. Location search and seven-day forecast requests are proxied only to

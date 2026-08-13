@@ -731,6 +731,10 @@ body, html {
     column-gap: 10px !important;
   }
 
+  .calendar-oauth-fields {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
   .files-sidebar {
     display: flex;
     align-items: center;

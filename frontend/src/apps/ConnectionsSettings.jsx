@@ -1,11 +1,13 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Bot,
+  CalendarDays,
   Copy,
   ExternalLink,
   HardDrive,
   Link2,
   Loader2,
+  Mail,
   Play,
   RefreshCw,
   ShieldAlert,
@@ -67,6 +69,7 @@ const ConnectionsSettings = () => {
   const { showDialog } = useDialog();
   const { openWindow } = useWindowManager();
   const [cloudflare, setCloudflare] = useState(null);
+  const [calendarConnection, setCalendarConnection] = useState(null);
   const [codex, setCodex] = useState(null);
   const [antigravity, setAntigravity] = useState(null);
   const [gemini, setGemini] = useState(null);
@@ -79,9 +82,16 @@ const ConnectionsSettings = () => {
   const [editingGemini, setEditingGemini] = useState(false);
   const [apiToken, setApiToken] = useState('');
   const [editingCloudflare, setEditingCloudflare] = useState(false);
+  const [calendarCredentials, setCalendarCredentials] = useState({
+    google: { clientId: '', clientSecret: '' },
+    microsoft: { clientId: '', clientSecret: '' }
+  });
+  const [editingCalendarProvider, setEditingCalendarProvider] = useState({ google: false, microsoft: false });
+  const calendarOauthPollRef = useRef(null);
+  const calendarOauthPopupRef = useRef(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(null);
-  const [messages, setMessages] = useState({ codex: null, antigravity: null, gemini: null, cloudflare: null });
+  const [messages, setMessages] = useState({ calendar: null, codex: null, antigravity: null, gemini: null, cloudflare: null });
   const codexConnected = Boolean(codex && codex.connected);
   const antigravityConnected = Boolean(antigravity && antigravity.connected);
   const geminiConnected = Boolean(gemini && gemini.connected);
@@ -94,10 +104,12 @@ const ConnectionsSettings = () => {
       const response = await apiFetch('/api/connections');
       const payload = await response.json();
       const nextCloudflare = (payload.connections || []).find((item) => item.id === 'cloudflare') || null;
+      const nextCalendar = (payload.connections || []).find((item) => item.id === 'calendar-accounts') || null;
       const nextCodex = (payload.connections || []).find((item) => item.id === 'codex') || null;
       const nextAntigravity = (payload.connections || []).find((item) => item.id === 'antigravity-cli') || null;
       const nextGemini = (payload.connections || []).find((item) => item.id === 'gemini-cli') || null;
       setCloudflare(nextCloudflare);
+      setCalendarConnection(nextCalendar);
       setCodex(nextCodex);
       setAntigravity(nextAntigravity);
       setGemini(nextGemini);
@@ -120,6 +132,10 @@ const ConnectionsSettings = () => {
     loadConnections({ initial: true });
   }, []);
 
+  useEffect(() => () => {
+    if (calendarOauthPollRef.current) window.clearInterval(calendarOauthPollRef.current);
+  }, []);
+
   useEffect(() => {
     if (!codexLogin || codexConnected) return undefined;
     const timer = window.setInterval(() => {
@@ -127,6 +143,186 @@ const ConnectionsSettings = () => {
     }, 2000);
     return () => window.clearInterval(timer);
   }, [codexLogin, codexConnected]);
+
+  const refreshCalendarConnection = async () => {
+    const response = await apiFetch('/api/connections/calendar');
+    const payload = await response.json();
+    setCalendarConnection(payload.connection);
+    return payload.connection;
+  };
+
+  const updateCalendarCredential = (providerId, field, value) => {
+    setCalendarCredentials((current) => ({
+      ...current,
+      [providerId]: { ...current[providerId], [field]: value }
+    }));
+    setMessage('calendar', null);
+  };
+
+  const saveCalendarProvider = async (event, providerId) => {
+    event.preventDefault();
+    const credentials = calendarCredentials[providerId];
+    setSaving(`calendar-${providerId}-configure`);
+    setMessage('calendar', null);
+    try {
+      const response = await apiFetch(`/api/connections/calendar/providers/${providerId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(credentials)
+      });
+      const payload = await response.json();
+      setCalendarConnection(payload.connection);
+      setCalendarCredentials((current) => ({
+        ...current,
+        [providerId]: { clientId: '', clientSecret: '' }
+      }));
+      setEditingCalendarProvider((current) => ({ ...current, [providerId]: false }));
+      setMessage('calendar', {
+        type: 'success',
+        text: `${providerId === 'google' ? 'Google' : 'Microsoft'} OAuth uygulaması güvenli biçimde kaydedildi. Şimdi hesabınızı ekleyebilirsiniz.`
+      });
+    } catch (error) {
+      setMessage('calendar', { type: 'error', text: error.message });
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const startCalendarAuthorization = async (providerId) => {
+    const previousIds = new Set((calendarConnection?.accounts || []).map((account) => account.id));
+    const previousSync = new Map((calendarConnection?.accounts || []).map((account) => [account.id, account.lastSyncedAt]));
+    const reconnectingIds = new Set((calendarConnection?.accounts || [])
+      .filter((account) => account.provider === providerId && account.needsReconnect)
+      .map((account) => account.id));
+    const popup = window.open('about:blank', `foxos-calendar-${providerId}`, 'popup,width=640,height=760');
+    calendarOauthPopupRef.current = popup;
+    if (popup) {
+      popup.document.title = 'Takvim hesabı bağlanıyor';
+      popup.document.body.style.cssText = 'margin:0;background:#111318;color:#fff;font-family:system-ui,sans-serif;display:grid;place-items:center;min-height:100vh';
+      popup.document.body.textContent = 'Hesap giriş sayfası hazırlanıyor…';
+    }
+    setSaving(`calendar-${providerId}-authorize`);
+    setMessage('calendar', null);
+    try {
+      const response = await apiFetch(`/api/connections/calendar/providers/${providerId}/authorize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}'
+      });
+      const payload = await response.json();
+      if (popup) popup.location.assign(payload.authorization.authorizationUrl);
+      else window.location.assign(payload.authorization.authorizationUrl);
+      setMessage('calendar', {
+        type: 'info',
+        text: 'Hesap seçme penceresinde takvim iznini onaylayın. Bağlantı tamamlanınca bu ekran otomatik yenilenecek.'
+      });
+
+      if (calendarOauthPollRef.current) window.clearInterval(calendarOauthPollRef.current);
+      const expiresAt = Date.now() + 10 * 60 * 1000;
+      let polling = false;
+      calendarOauthPollRef.current = window.setInterval(async () => {
+        if (polling) return;
+        if (Date.now() >= expiresAt) {
+          window.clearInterval(calendarOauthPollRef.current);
+          calendarOauthPollRef.current = null;
+          return;
+        }
+        polling = true;
+        try {
+          const connection = await refreshCalendarConnection();
+          const added = (connection.accounts || []).find((account) => !previousIds.has(account.id));
+          const reconnected = !added && (connection.accounts || []).some((account) => (
+            (reconnectingIds.has(account.id) && !account.needsReconnect) ||
+            (account.provider === providerId && previousSync.has(account.id) && previousSync.get(account.id) !== account.lastSyncedAt)
+          ));
+          if (added || reconnected) {
+            window.clearInterval(calendarOauthPollRef.current);
+            calendarOauthPollRef.current = null;
+            try { calendarOauthPopupRef.current?.close(); } catch { /* Popup may already be closed. */ }
+            setMessage('calendar', {
+              type: 'success',
+              text: `${added?.email || 'Takvim hesabı'} bağlandı. Etkinlikler Takvim uygulamasında görünecek.`
+            });
+          }
+        } catch {
+          // The owner may still be completing consent in the other window.
+        } finally {
+          polling = false;
+        }
+      }, 1_500);
+    } catch (error) {
+      try { popup?.close(); } catch { /* Ignore popup cleanup failures. */ }
+      setMessage('calendar', { type: 'error', text: error.message });
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const disconnectCalendarAccount = (account) => {
+    showDialog({
+      title: 'Takvim Hesabını Ayır',
+      message: `${account.email} hesabının FoxOS’taki şifreli yenileme anahtarı silinecek. Sağlayıcıdaki takvim ve etkinlikler silinmez.`,
+      type: 'confirm',
+      confirmText: 'Hesabı Ayır',
+      cancelText: 'Vazgeç',
+      onConfirm: async () => {
+        setSaving(`calendar-account-${account.id}`);
+        setMessage('calendar', null);
+        try {
+          const response = await apiFetch(`/api/connections/calendar/accounts/${encodeURIComponent(account.id)}`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ confirmation: 'DISCONNECT CALENDAR ACCOUNT' })
+          });
+          const payload = await response.json();
+          setCalendarConnection(payload.connection);
+          setMessage('calendar', { type: 'success', text: `${account.email} FoxOS Takvim’den ayrıldı.` });
+        } catch (error) {
+          setMessage('calendar', { type: 'error', text: error.message });
+        } finally {
+          setSaving(null);
+        }
+      }
+    });
+  };
+
+  const removeCalendarProvider = (provider) => {
+    showDialog({
+      title: 'OAuth Uygulamasını Kaldır',
+      message: `${provider.name} Client ID ve şifreli Client Secret kaydı bu sunucudan silinecek.`,
+      type: 'confirm',
+      confirmText: 'Ayarı Kaldır',
+      cancelText: 'Vazgeç',
+      onConfirm: async () => {
+        setSaving(`calendar-${provider.id}-remove`);
+        setMessage('calendar', null);
+        try {
+          const response = await apiFetch(`/api/connections/calendar/providers/${provider.id}`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ confirmation: 'REMOVE CALENDAR OAUTH APP' })
+          });
+          const payload = await response.json();
+          setCalendarConnection(payload.connection);
+          setEditingCalendarProvider((current) => ({ ...current, [provider.id]: false }));
+          setMessage('calendar', { type: 'success', text: `${provider.name} OAuth uygulama ayarı kaldırıldı.` });
+        } catch (error) {
+          setMessage('calendar', { type: 'error', text: error.message });
+        } finally {
+          setSaving(null);
+        }
+      }
+    });
+  };
+
+  const openCalendar = () => openWindow({
+    id: 'calendar',
+    type: 'calendar',
+    title: 'Takvim',
+    component: null,
+    width: 980,
+    height: 650
+  });
 
   const installCodex = () => {
     showDialog({
@@ -681,6 +877,7 @@ const ConnectionsSettings = () => {
   }
 
   const codexInstalled = Boolean(codex && codex.installed);
+  const calendarConnected = Boolean(calendarConnection && calendarConnection.connected);
   const antigravityInstalled = Boolean(antigravity && antigravity.installed);
   const geminiInstalled = Boolean(gemini && gemini.installed);
   const cloudflareConnected = Boolean(cloudflare && cloudflare.connected);
@@ -690,12 +887,157 @@ const ConnectionsSettings = () => {
   const antigravityBusy = Boolean(saving && saving.startsWith('antigravity'));
   const geminiBusy = Boolean(saving && saving.startsWith('gemini'));
   const cloudflareBusy = Boolean(saving && saving.startsWith('cloudflare'));
+  const calendarBusy = Boolean(saving && saving.startsWith('calendar'));
 
   return (
     <div className="connections-settings" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
       <div style={{ color: '#888', fontSize: '13px', lineHeight: 1.5 }}>
         Sunucunun kullanacağı dış hesapları buradan bağlayın. Bağlantılar isteğe bağlıdır; FoxOS bağlı hesap olmadan da çalışır.
       </div>
+
+      <section style={CARD_STYLE}>
+        <div className="connection-card-header" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '16px', marginBottom: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>
+            <div style={{ width: '46px', height: '38px', borderRadius: '10px', background: 'linear-gradient(135deg, #2563eb 0%, #0ea5e9 55%, #22c55e 100%)', border: '1px solid rgba(255,255,255,0.18)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+              <CalendarDays size={22} color="#fff" />
+            </div>
+            <div style={{ minWidth: 0 }}>
+              <h3 style={{ margin: 0, fontSize: '15px', color: '#fff' }}>Takvim Hesapları</h3>
+              <div style={{ marginTop: '4px', color: '#888', fontSize: '12px', lineHeight: 1.4 }}>
+                Google, Outlook ve Microsoft 365 etkinliklerini FoxOS Takvim’de birleştirir.
+              </div>
+            </div>
+          </div>
+          <Status
+            connected={calendarConnected}
+            readyLabel={`${calendarConnection?.accountCount || 0} hesap bağlı`}
+            idleLabel="Hesap bağlı değil"
+          />
+        </div>
+
+        <div style={{ color: '#aaa', fontSize: '12px', lineHeight: 1.55, marginBottom: '14px' }}>
+          FoxOS e-posta parolanızı almaz. Her hesap sağlayıcının kendi giriş sayfasında seçilir; yalnız takvim etkinliklerini okuma ve düzenleme izni istenir. Yenileme anahtarları bu sunucuda şifreli saklanır.
+        </div>
+
+        {(calendarConnection?.accounts || []).length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
+            {(calendarConnection.accounts || []).map((account) => (
+              <div key={account.id} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px', padding: '10px 11px', border: '1px solid rgba(255,255,255,0.09)', borderRadius: '9px', background: 'rgba(0,0,0,0.16)' }}>
+                <div style={{ width: '30px', height: '30px', display: 'grid', placeItems: 'center', flexShrink: 0, borderRadius: '8px', background: account.provider === 'google' ? 'linear-gradient(135deg,#4285f4,#34a853)' : 'linear-gradient(135deg,#0078d4,#00a4ef)' }}>
+                  <Mail size={15} color="#fff" />
+                </div>
+                <div style={{ flex: '1 1 230px', minWidth: 0 }}>
+                  <div style={{ color: '#fff', fontSize: '13px', fontWeight: 650, overflow: 'hidden', textOverflow: 'ellipsis' }}>{account.email}</div>
+                  <div style={{ color: account.needsReconnect ? '#f6c453' : '#888', fontSize: '11px', marginTop: '2px' }}>
+                    {account.providerName} · {account.calendars.length} takvim{account.needsReconnect ? ' · yeniden bağlantı gerekli' : ''}
+                  </div>
+                </div>
+                {account.needsReconnect && (
+                  <button type="button" onClick={() => startCalendarAuthorization(account.provider)} disabled={calendarBusy} style={{ ...PRIMARY_BUTTON_STYLE, padding: '7px 10px', cursor: calendarBusy ? 'wait' : 'pointer', opacity: calendarBusy ? 0.5 : 1 }}>
+                    <Link2 size={14} /> Yeniden Bağla
+                  </button>
+                )}
+                <button type="button" onClick={() => disconnectCalendarAccount(account)} disabled={calendarBusy} style={{ ...SECONDARY_BUTTON_STYLE, padding: '7px 10px', cursor: calendarBusy ? 'not-allowed' : 'pointer', opacity: calendarBusy ? 0.5 : 1 }}>
+                  <Unplug size={14} /> Ayır
+                </button>
+              </div>
+            ))}
+            <button type="button" onClick={openCalendar} disabled={calendarBusy} style={{ ...PRIMARY_BUTTON_STYLE, alignSelf: 'flex-start', marginTop: '2px', cursor: calendarBusy ? 'wait' : 'pointer', opacity: calendarBusy ? 0.5 : 1 }}>
+              <CalendarDays size={15} /> Takvimi Aç
+            </button>
+          </div>
+        )}
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          {(calendarConnection?.providers || []).map((provider) => {
+            const credentials = calendarCredentials[provider.id];
+            const editing = editingCalendarProvider[provider.id];
+            const showForm = !provider.configured || editing;
+            const providerLabel = provider.id === 'google' ? 'Google' : 'Microsoft';
+            const providerConsoleUrl = provider.id === 'google'
+              ? 'https://console.cloud.google.com/apis/credentials'
+              : 'https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade';
+            const canSave = credentials.clientId.trim() && (provider.configured || credentials.clientSecret.trim());
+            return (
+              <div key={provider.id} style={{ padding: '13px', border: '1px solid rgba(255,255,255,0.09)', borderRadius: '10px', background: 'rgba(255,255,255,0.025)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', marginBottom: showForm ? '11px' : 0 }}>
+                  <div>
+                    <div style={{ color: '#fff', fontSize: '13px', fontWeight: 700 }}>{provider.name}</div>
+                    <div style={{ color: '#888', fontSize: '11px', marginTop: '3px' }}>
+                      {provider.configured ? `${provider.accountCount} hesap · OAuth uygulaması hazır` : 'Önce sunucuya ait OAuth uygulamasını tanımlayın'}
+                    </div>
+                  </div>
+                  <Status connected={provider.configured} readyLabel="Hazır" idleLabel="Yapılandırılmadı" />
+                </div>
+
+                {showForm ? (
+                  <form onSubmit={(event) => saveCalendarProvider(event, provider.id)}>
+                    <div style={{ color: '#aaa', fontSize: '12px', lineHeight: 1.5, marginBottom: '10px' }}>
+                      {provider.id === 'google'
+                        ? 'Google Cloud’da Calendar API’yi açın ve “Web application” OAuth istemcisi oluşturun.'
+                        : 'Microsoft Entra’da kişisel Microsoft hesaplarını da destekleyen bir Web uygulaması kaydedin; User.Read ve Calendars.ReadWrite delegated izinlerini ekleyin.'}
+                      {' '}Aşağıdaki dönüş adresini yetkili Redirect URI olarak birebir kaydedin.
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px', padding: '9px 10px', borderRadius: '8px', background: 'rgba(0,0,0,0.22)', border: '1px solid rgba(255,255,255,0.09)' }}>
+                      <code style={{ flex: 1, minWidth: 0, overflowWrap: 'anywhere', color: '#cbd5e1', fontSize: '11px' }}>{provider.callbackUrl}</code>
+                      <button type="button" onClick={() => navigator.clipboard?.writeText(provider.callbackUrl)} style={{ ...SECONDARY_BUTTON_STYLE, flexShrink: 0, padding: '6px 8px', cursor: 'pointer' }} aria-label="Dönüş adresini kopyala"><Copy size={13} /></button>
+                    </div>
+                    <a href={providerConsoleUrl} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', color: '#7dd3fc', fontSize: '12px', marginBottom: '11px', textDecoration: 'none' }}>
+                      {providerLabel} uygulama kayıtlarını aç <ExternalLink size={13} />
+                    </a>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 1fr) minmax(180px, 1fr)', gap: '9px', marginBottom: '10px' }} className="calendar-oauth-fields">
+                      <input
+                        type="text"
+                        value={credentials.clientId}
+                        onChange={(event) => updateCalendarCredential(provider.id, 'clientId', event.target.value)}
+                        disabled={calendarBusy}
+                        placeholder={`${providerLabel} OAuth Client ID`}
+                        autoComplete="off"
+                        spellCheck={false}
+                        style={{ minWidth: 0, background: '#24242a', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 12px', borderRadius: '8px', outline: 'none', fontSize: '12px' }}
+                      />
+                      <input
+                        type="password"
+                        value={credentials.clientSecret}
+                        onChange={(event) => updateCalendarCredential(provider.id, 'clientSecret', event.target.value)}
+                        disabled={calendarBusy}
+                        placeholder={provider.configured ? 'Client Secret (değişmiyorsa boş)' : `${providerLabel} OAuth Client Secret`}
+                        autoComplete="new-password"
+                        spellCheck={false}
+                        style={{ minWidth: 0, background: '#24242a', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 12px', borderRadius: '8px', outline: 'none', fontSize: '12px' }}
+                      />
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                      <button type="submit" disabled={calendarBusy || !canSave} style={{ ...PRIMARY_BUTTON_STYLE, cursor: calendarBusy || !canSave ? 'not-allowed' : 'pointer', opacity: calendarBusy || !canSave ? 0.5 : 1 }}>
+                        {saving === `calendar-${provider.id}-configure` ? <Loader2 size={15} className="spin" /> : <ShieldCheck size={15} />} OAuth Ayarını Kaydet
+                      </button>
+                      {editing && (
+                        <button type="button" onClick={() => { setEditingCalendarProvider((current) => ({ ...current, [provider.id]: false })); setMessage('calendar', null); }} disabled={calendarBusy} style={{ ...SECONDARY_BUTTON_STYLE, cursor: calendarBusy ? 'not-allowed' : 'pointer', opacity: calendarBusy ? 0.5 : 1 }}>Vazgeç</button>
+                      )}
+                    </div>
+                  </form>
+                ) : (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '11px' }}>
+                    <button type="button" onClick={() => startCalendarAuthorization(provider.id)} disabled={calendarBusy} style={{ ...PRIMARY_BUTTON_STYLE, cursor: calendarBusy ? 'wait' : 'pointer', opacity: calendarBusy ? 0.5 : 1 }}>
+                      {saving === `calendar-${provider.id}-authorize` ? <Loader2 size={15} className="spin" /> : <Link2 size={15} />} {providerLabel} Hesabı Ekle
+                    </button>
+                    <button type="button" onClick={() => setEditingCalendarProvider((current) => ({ ...current, [provider.id]: true }))} disabled={calendarBusy} style={{ ...SECONDARY_BUTTON_STYLE, cursor: calendarBusy ? 'not-allowed' : 'pointer', opacity: calendarBusy ? 0.5 : 1 }}>
+                      OAuth Ayarını Değiştir
+                    </button>
+                    {provider.accountCount === 0 && (
+                      <button type="button" onClick={() => removeCalendarProvider(provider)} disabled={calendarBusy} style={{ ...SECONDARY_BUTTON_STYLE, color: '#aaa', cursor: calendarBusy ? 'not-allowed' : 'pointer', opacity: calendarBusy ? 0.5 : 1 }}>
+                        Ayarı Kaldır
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <Message value={messages.calendar} />
+      </section>
 
       <section style={CARD_STYLE}>
         <div className="connection-card-header" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '16px', marginBottom: '16px' }}>

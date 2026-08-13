@@ -172,7 +172,7 @@ const SpotlightSearch = ({
     {
       id: 'settings-connections',
       title: 'Bağlantılar',
-      subtitle: 'Codex, Gemini, Antigravity ve Cloudflare',
+      subtitle: 'Takvim hesapları, Codex, Gemini ve diğer servisler',
       category: 'Ayarlar',
       keywords: ['connections', 'hesaplar', 'entegrasyonlar'],
       icon: resultIcon(<Link2 size={20} />),

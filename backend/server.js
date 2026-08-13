@@ -111,6 +111,7 @@ const {
 } = require('./mediaThumbnailManager');
 const { FileSearchError, createFileSearchManager } = require('./fileSearchManager');
 const { CalendarError, createCalendarManager } = require('./calendarManager');
+const { createCalendarConnectionManager } = require('./calendarConnectionManager');
 const { WeatherError, createWeatherManager } = require('./weatherManager');
 const {
   WorkloadEvidenceError,
@@ -1392,7 +1393,37 @@ const maintenanceSessionManager = createMaintenanceSessionManager({ dataRoot: DA
 const desktopShortcutManager = createDesktopShortcutManager({ dataRoot: DATA_ROOT });
 const fileSearchManager = createFileSearchManager({ diskRoot: DISK_ROOT });
 const calendarManager = createCalendarManager({ dataRoot: DATA_ROOT });
+const calendarConnectionManager = createCalendarConnectionManager({
+  dataRoot: DATA_ROOT,
+  encryptionStore
+});
 const weatherManager = createWeatherManager({ dataRoot: DATA_ROOT });
+
+function calendarPublicBaseUrl(req) {
+  const configured = String(process.env.FOXOS_ROUTE_BASE_URL || '').trim();
+  const candidate = configured || `${req.protocol}://${req.get('host')}`;
+  let url;
+  try {
+    url = new URL(candidate);
+  } catch {
+    throw new CalendarError('Takvim OAuth genel adresi geçersiz.', 503, 'calendar-oauth-base-url-invalid');
+  }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) {
+    throw new CalendarError('Takvim OAuth genel adresi geçersiz.', 503, 'calendar-oauth-base-url-invalid');
+  }
+  return url.origin;
+}
+
+function calendarRedirectUri(req, providerId) {
+  return new URL(`/oauth/calendar/${encodeURIComponent(providerId)}/callback`, calendarPublicBaseUrl(req)).toString();
+}
+
+function calendarRedirectUris(req) {
+  return {
+    google: calendarRedirectUri(req, 'google'),
+    microsoft: calendarRedirectUri(req, 'microsoft')
+  };
+}
 
 function sendCalendarError(res, error) {
   const status = error instanceof CalendarError ? error.statusCode : 500;
@@ -2366,6 +2397,29 @@ app.post('/api/auth/logout', requireAuth, (req, res) => {
   res.status(204).end();
 });
 
+app.get('/oauth/calendar/:provider/callback', async (req, res) => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  try {
+    await calendarConnectionManager.completeAuthorization(req.params.provider, {
+      state: req.query.state,
+      code: req.query.code,
+      error: req.query.error
+    });
+    res.status(200).type('html').send(`<!doctype html>
+<html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Takvim bağlandı</title></head>
+<body style="margin:0;min-height:100vh;display:grid;place-items:center;background:#111318;color:#f8fafc;font-family:system-ui,sans-serif">
+<main style="max-width:420px;padding:32px;text-align:center"><h1 style="font-size:22px">Takvim hesabı bağlandı</h1><p style="color:#a1a1aa;line-height:1.55">FoxOS Takvim artık bu hesabı gösterebilir. Bu pencereyi kapatabilirsiniz.</p></main>
+</body></html>`);
+  } catch (error) {
+    const status = error instanceof CalendarError ? error.statusCode : 500;
+    res.status(status).type('html').send(`<!doctype html>
+<html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Takvim bağlanamadı</title></head>
+<body style="margin:0;min-height:100vh;display:grid;place-items:center;background:#111318;color:#f8fafc;font-family:system-ui,sans-serif">
+<main style="max-width:440px;padding:32px;text-align:center"><h1 style="font-size:22px">Takvim hesabı bağlanamadı</h1><p style="color:#fca5a5;line-height:1.55">Bağlantı oturumu tamamlanmadı veya süresi doldu. Bu pencereyi kapatıp FoxOS’tan yeniden deneyin.</p></main>
+</body></html>`);
+  }
+});
+
 app.use('/api', requireAuth);
 
 app.post('/api/setup/onboarding/complete', (req, res) => {
@@ -2534,34 +2588,76 @@ app.get('/api/weather', async (req, res) => {
   }
 });
 
-app.get('/api/calendar/events', (req, res) => {
+app.get('/api/calendar/events', async (req, res) => {
   try {
+    const localEvents = calendarManager.list({ from: req.query.from, to: req.query.to }).map((event) => ({
+      ...event,
+      source: 'local',
+      sourceId: null,
+      provider: 'local',
+      providerName: 'FoxOS',
+      accountName: 'Bu sunucu',
+      calendarId: 'local',
+      calendarName: 'FoxOS Takvimi',
+      editable: true
+    }));
+    const remote = await calendarConnectionManager.listEvents({
+      from: req.query.from,
+      to: req.query.to,
+      timeZone: req.query.timeZone || 'UTC'
+    });
+    const events = [...localEvents, ...remote.events].sort((left, right) => (
+      left.date.localeCompare(right.date) ||
+      Number(right.allDay) - Number(left.allDay) ||
+      String(left.startTime || '').localeCompare(String(right.startTime || '')) ||
+      left.title.localeCompare(right.title, 'tr')
+    ));
     res.setHeader('Cache-Control', 'private, no-store');
-    res.json({ events: calendarManager.list({ from: req.query.from, to: req.query.to }) });
+    res.json({ events, warnings: remote.warnings });
   } catch (error) {
     sendCalendarError(res, error);
   }
 });
 
-app.post('/api/calendar/events', (req, res) => {
+app.post('/api/calendar/events', async (req, res) => {
   try {
-    res.status(201).json({ event: calendarManager.create(req.body) });
+    const remote = req.body && req.body.sourceId && req.body.sourceId !== 'local';
+    const event = remote
+      ? await calendarConnectionManager.createEvent(req.body)
+      : calendarManager.create(req.body);
+    res.status(201).json({ event });
   } catch (error) {
     sendCalendarError(res, error);
   }
 });
 
-app.put('/api/calendar/events/:eventId', (req, res) => {
+app.put('/api/calendar/events/:eventId', async (req, res) => {
   try {
-    res.json({ event: calendarManager.update(req.params.eventId, req.body) });
+    const event = req.params.eventId.startsWith('rem_')
+      ? await calendarConnectionManager.updateEvent(req.params.eventId, req.body)
+      : calendarManager.update(req.params.eventId, req.body);
+    res.json({ event });
   } catch (error) {
     sendCalendarError(res, error);
   }
 });
 
-app.delete('/api/calendar/events/:eventId', (req, res) => {
+app.delete('/api/calendar/events/:eventId', async (req, res) => {
   try {
-    res.json(calendarManager.remove(req.params.eventId));
+    const result = req.params.eventId.startsWith('rem_')
+      ? await calendarConnectionManager.removeEvent(req.params.eventId)
+      : calendarManager.remove(req.params.eventId);
+    res.json(result);
+  } catch (error) {
+    sendCalendarError(res, error);
+  }
+});
+
+app.get('/api/calendar/sources', async (req, res) => {
+  try {
+    const result = await calendarConnectionManager.listSources({ refresh: req.query.refresh === '1' });
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(result);
   } catch (error) {
     sendCalendarError(res, error);
   }
@@ -3616,9 +3712,65 @@ app.get('/api/connections', async (req, res) => {
       antigravityConnectionManager.status(),
       geminiConnectionManager.status()
     ]);
-    res.json({ connections: [codex, antigravity, gemini, cloudflareConnectionManager.status()] });
+    const calendar = calendarConnectionManager.status({ redirectUris: calendarRedirectUris(req) });
+    res.json({ connections: [calendar, codex, antigravity, gemini, cloudflareConnectionManager.status()] });
   } catch (error) {
     sendConnectionError(res, error, 'Could not read provider connections');
+  }
+});
+
+app.get('/api/connections/calendar', (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ connection: calendarConnectionManager.status({ redirectUris: calendarRedirectUris(req) }) });
+  } catch (error) {
+    sendCalendarError(res, error);
+  }
+});
+
+app.put('/api/connections/calendar/providers/:provider', (req, res) => {
+  try {
+    calendarConnectionManager.configureProvider(req.params.provider, req.body || {});
+    res.json({ connection: calendarConnectionManager.status({ redirectUris: calendarRedirectUris(req) }) });
+  } catch (error) {
+    sendCalendarError(res, error);
+  }
+});
+
+app.post('/api/connections/calendar/providers/:provider/authorize', (req, res) => {
+  try {
+    const ownerFingerprint = crypto.createHash('sha256').update(req.session.token).digest('hex');
+    const authorization = calendarConnectionManager.startAuthorization(req.params.provider, {
+      redirectUri: calendarRedirectUri(req, req.params.provider),
+      ownerFingerprint
+    });
+    res.status(201).json({ authorization });
+  } catch (error) {
+    sendCalendarError(res, error);
+  }
+});
+
+app.delete('/api/connections/calendar/accounts/:accountId', (req, res) => {
+  try {
+    calendarConnectionManager.disconnectAccount(
+      req.params.accountId,
+      req.body && req.body.confirmation
+    );
+    res.json({ connection: calendarConnectionManager.status({ redirectUris: calendarRedirectUris(req) }) });
+  } catch (error) {
+    sendCalendarError(res, error);
+  }
+});
+
+app.delete('/api/connections/calendar/providers/:provider', (req, res) => {
+  try {
+    calendarConnectionManager.disconnectProvider(
+      req.params.provider,
+      req.body && req.body.confirmation
+    );
+    res.json({ connection: calendarConnectionManager.status({ redirectUris: calendarRedirectUris(req) }) });
+  } catch (error) {
+    sendCalendarError(res, error);
   }
 });
 

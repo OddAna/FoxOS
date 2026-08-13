@@ -4,6 +4,8 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock3,
+  ExternalLink,
+  Link2,
   MapPin,
   Pencil,
   Plus,
@@ -13,6 +15,7 @@ import {
 } from 'lucide-react';
 import { apiFetch } from '../api';
 import { useDialog } from '../contexts/DialogContext';
+import { useWindowManager } from '../contexts/WindowContext';
 import {
   calendarGridRange,
   calendarMonthGrid,
@@ -24,8 +27,27 @@ import './CalendarApp.css';
 
 const WEEKDAYS = ['Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz'];
 const COLORS = ['sky', 'green', 'orange', 'pink', 'purple'];
+const LOCAL_SOURCE = {
+  id: 'local',
+  accountId: null,
+  provider: 'local',
+  providerName: 'FoxOS',
+  accountName: 'Bu sunucu',
+  calendarId: 'local',
+  name: 'FoxOS Takvimi',
+  writable: true,
+  color: 'sky'
+};
 
-const blankEvent = (date) => ({
+const detectedTimeZone = () => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  } catch {
+    return 'UTC';
+  }
+};
+
+const blankEvent = (date, source = LOCAL_SOURCE, timeZone = detectedTimeZone()) => ({
   title: '',
   date,
   allDay: false,
@@ -33,7 +55,9 @@ const blankEvent = (date) => ({
   endTime: '10:00',
   location: '',
   notes: '',
-  color: 'sky'
+  color: source.color || 'sky',
+  sourceKey: source.id,
+  timeZone
 });
 
 const monthTitle = (date) => (parseCalendarDate(date) || new Date()).toLocaleDateString('tr-TR', {
@@ -54,17 +78,22 @@ const eventTime = (event) => {
 
 const CalendarApp = ({ target = null }) => {
   const { showDialog } = useDialog();
+  const { openWindow } = useWindowManager();
   const today = localCalendarDate();
+  const timeZone = useMemo(() => detectedTimeZone(), []);
   const requestedDate = parseCalendarDate(target?.date) ? target.date : today;
   const [month, setMonth] = useState(`${requestedDate.slice(0, 7)}-01`);
   const [selectedDate, setSelectedDate] = useState(requestedDate);
   const [events, setEvents] = useState([]);
+  const [sources, setSources] = useState([LOCAL_SOURCE]);
+  const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [warning, setWarning] = useState('');
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
-  const [form, setForm] = useState(() => blankEvent(requestedDate));
+  const [form, setForm] = useState(() => blankEvent(requestedDate, LOCAL_SOURCE, timeZone));
 
   const days = useMemo(() => calendarMonthGrid(month), [month]);
   const range = useMemo(() => calendarGridRange(month), [month]);
@@ -75,26 +104,49 @@ const CalendarApp = ({ target = null }) => {
     return map;
   }, new Map()), [events]);
   const selectedEvents = eventsByDate.get(selectedDate) || [];
+  const formSource = sources.find((source) => source.id === form.sourceKey) || LOCAL_SOURCE;
 
   const loadEvents = useCallback(async ({ quiet = false } = {}) => {
     if (!quiet) setLoading(true);
     try {
       const response = await apiFetch(
-        `/api/calendar/events?from=${encodeURIComponent(range.from)}&to=${encodeURIComponent(range.to)}`
+        `/api/calendar/events?from=${encodeURIComponent(range.from)}&to=${encodeURIComponent(range.to)}&timeZone=${encodeURIComponent(timeZone)}`
       );
       const payload = await response.json();
       setEvents(Array.isArray(payload.events) ? payload.events : []);
+      const warnings = Array.isArray(payload.warnings) ? payload.warnings : [];
+      setWarning(warnings.length ? warnings.map((item) => item.message).filter(Boolean).join(' ') : '');
       setError('');
     } catch (requestError) {
       setError(requestError.message || 'Takvim yüklenemedi.');
     } finally {
       setLoading(false);
     }
-  }, [range.from, range.to]);
+  }, [range.from, range.to, timeZone]);
+
+  const loadSources = useCallback(async ({ refresh = false } = {}) => {
+    try {
+      const response = await apiFetch(`/api/calendar/sources${refresh ? '?refresh=1' : ''}`);
+      const payload = await response.json();
+      const nextSources = Array.isArray(payload.sources) && payload.sources.length
+        ? payload.sources
+        : [LOCAL_SOURCE];
+      setSources(nextSources);
+      setAccounts(Array.isArray(payload.accounts) ? payload.accounts : []);
+      const warnings = Array.isArray(payload.warnings) ? payload.warnings : [];
+      if (warnings.length) setWarning(warnings.map((item) => item.message).filter(Boolean).join(' '));
+    } catch (requestError) {
+      setWarning(requestError.message || 'Bağlı takvim hesapları okunamadı.');
+    }
+  }, []);
 
   useEffect(() => {
     loadEvents();
   }, [loadEvents]);
+
+  useEffect(() => {
+    loadSources({ refresh: true });
+  }, [loadSources]);
 
   useEffect(() => {
     if (!target?.requestId || !parseCalendarDate(target.date)) return;
@@ -123,11 +175,20 @@ const CalendarApp = ({ target = null }) => {
 
   const beginCreate = () => {
     setEditingId(null);
-    setForm(blankEvent(selectedDate));
+    setForm(blankEvent(selectedDate, LOCAL_SOURCE, timeZone));
     setFormOpen(true);
   };
 
   const beginEdit = (event) => {
+    if (!event.editable) {
+      if (event.externalUrl) window.open(event.externalUrl, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    const source = sources.find((item) => (
+      event.source === 'local'
+        ? item.id === 'local'
+        : item.accountId === event.sourceId && item.calendarId === event.calendarId
+    )) || LOCAL_SOURCE;
     setEditingId(event.id);
     setForm({
       title: event.title,
@@ -137,7 +198,9 @@ const CalendarApp = ({ target = null }) => {
       endTime: event.endTime || '10:00',
       location: event.location || '',
       notes: event.notes || '',
-      color: event.color || 'sky'
+      color: event.color || source.color || 'sky',
+      sourceKey: source.id,
+      timeZone
     });
     setFormOpen(true);
   };
@@ -147,10 +210,17 @@ const CalendarApp = ({ target = null }) => {
     if (saving) return;
     setSaving(true);
     try {
-      await apiFetch(editingId ? `/api/calendar/events/${editingId}` : '/api/calendar/events', {
+      const source = sources.find((item) => item.id === form.sourceKey) || LOCAL_SOURCE;
+      const payload = {
+        ...form,
+        sourceId: source.accountId || 'local',
+        calendarId: source.calendarId,
+        timeZone
+      };
+      await apiFetch(editingId ? `/api/calendar/events/${encodeURIComponent(editingId)}` : '/api/calendar/events', {
         method: editingId ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form)
+        body: JSON.stringify(payload)
       });
       setSelectedDate(form.date);
       setMonth(`${form.date.slice(0, 7)}-01`);
@@ -174,7 +244,7 @@ const CalendarApp = ({ target = null }) => {
       pendingText: 'Siliniyor…',
       onConfirm: async () => {
         try {
-          await apiFetch(`/api/calendar/events/${event.id}`, { method: 'DELETE' });
+          await apiFetch(`/api/calendar/events/${encodeURIComponent(event.id)}`, { method: 'DELETE' });
           if (editingId === event.id) {
             setFormOpen(false);
             setEditingId(null);
@@ -187,6 +257,22 @@ const CalendarApp = ({ target = null }) => {
     });
   };
 
+  const openConnections = () => openWindow({
+    id: 'settings',
+    type: 'settings',
+    title: 'Ayarlar',
+    component: null,
+    navigation: { tab: 'connections' },
+    width: 900,
+    height: 650
+  });
+
+  const refreshCalendar = async () => {
+    setLoading(true);
+    await loadSources({ refresh: true });
+    await loadEvents({ quiet: true });
+  };
+
   return (
     <div className="calendar-app">
       <header className="calendar-toolbar">
@@ -195,18 +281,22 @@ const CalendarApp = ({ target = null }) => {
           <strong>{monthTitle(month)}</strong>
         </div>
         <div className="calendar-toolbar-actions">
+          <button type="button" className="calendar-button calendar-account-button" onClick={openConnections}>
+            <Link2 size={14} /> {accounts.length ? `${accounts.length} hesap` : 'Hesap bağla'}
+          </button>
           <button type="button" className="calendar-button" onClick={goToday}>Bugün</button>
           <div className="calendar-month-nav" aria-label="Ay seçimi">
             <button type="button" onClick={() => moveMonth(-1)} aria-label="Önceki ay"><ChevronLeft size={17} /></button>
             <button type="button" onClick={() => moveMonth(1)} aria-label="Sonraki ay"><ChevronRight size={17} /></button>
           </div>
-          <button type="button" className="calendar-icon-button" onClick={() => loadEvents()} aria-label="Takvimi yenile">
+          <button type="button" className="calendar-icon-button" onClick={refreshCalendar} aria-label="Takvimi yenile">
             <RefreshCw size={16} className={loading ? 'spin' : ''} />
           </button>
         </div>
       </header>
 
       {error && <div className="calendar-error" role="alert">{error}</div>}
+      {!error && warning && <div className="calendar-warning" role="status">{warning}</div>}
 
       <div className="calendar-layout">
         <section className="calendar-month" aria-label={monthTitle(month)}>
@@ -274,6 +364,28 @@ const CalendarApp = ({ target = null }) => {
                 />
               </label>
               <label>
+                Takvim
+                <select
+                  value={form.sourceKey}
+                  disabled={Boolean(editingId)}
+                  onChange={(event) => {
+                    const source = sources.find((item) => item.id === event.target.value) || LOCAL_SOURCE;
+                    setForm((current) => ({
+                      ...current,
+                      sourceKey: source.id,
+                      color: source.color || current.color
+                    }));
+                  }}
+                >
+                  {sources.filter((source) => source.writable).map((source) => (
+                    <option key={source.id} value={source.id}>
+                      {source.provider === 'local' ? source.name : `${source.accountName} · ${source.name}`}
+                    </option>
+                  ))}
+                </select>
+                {editingId && <small>Mevcut etkinliğin takvimi değiştirilemez.</small>}
+              </label>
+              <label>
                 Tarih
                 <input
                   type="date"
@@ -312,21 +424,23 @@ const CalendarApp = ({ target = null }) => {
                 Notlar
                 <textarea value={form.notes} maxLength={2000} rows={3} onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))} placeholder="İsteğe bağlı" />
               </label>
-              <fieldset className="calendar-color-field">
-                <legend>Renk</legend>
-                <div>
-                  {COLORS.map((color) => (
-                    <button
-                      type="button"
-                      key={color}
-                      className={`calendar-color is-${color}${form.color === color ? ' is-active' : ''}`}
-                      aria-label={`${color} renk`}
-                      aria-pressed={form.color === color}
-                      onClick={() => setForm((current) => ({ ...current, color }))}
-                    />
-                  ))}
-                </div>
-              </fieldset>
+              {formSource.provider === 'local' && (
+                <fieldset className="calendar-color-field">
+                  <legend>Renk</legend>
+                  <div>
+                    {COLORS.map((color) => (
+                      <button
+                        type="button"
+                        key={color}
+                        className={`calendar-color is-${color}${form.color === color ? ' is-active' : ''}`}
+                        aria-label={`${color} renk`}
+                        aria-pressed={form.color === color}
+                        onClick={() => setForm((current) => ({ ...current, color }))}
+                      />
+                    ))}
+                  </div>
+                </fieldset>
+              )}
               <button type="submit" className="calendar-save-button" disabled={saving || !form.title.trim()}>
                 {saving ? 'Kaydediliyor…' : editingId ? 'Değişiklikleri Kaydet' : 'Etkinliği Ekle'}
               </button>
@@ -346,12 +460,16 @@ const CalendarApp = ({ target = null }) => {
                   <button type="button" className="calendar-event-main" onClick={() => beginEdit(event)}>
                     <strong>{event.title}</strong>
                     <span><Clock3 size={13} /> {eventTime(event)}</span>
+                    <span className="calendar-event-source">{event.calendarName || 'FoxOS Takvimi'}{event.source === 'remote' && event.accountName ? ` · ${event.accountName}` : ''}</span>
                     {event.location && <span><MapPin size={13} /> {event.location}</span>}
                     {event.notes && <p>{event.notes}</p>}
                   </button>
                   <div className="calendar-event-actions">
-                    <button type="button" onClick={() => beginEdit(event)} aria-label="Etkinliği düzenle"><Pencil size={14} /></button>
-                    <button type="button" onClick={() => deleteEvent(event)} aria-label="Etkinliği sil"><Trash2 size={14} /></button>
+                    {event.externalUrl && (
+                      <a href={event.externalUrl} target="_blank" rel="noreferrer" aria-label="Sağlayıcıda aç"><ExternalLink size={14} /></a>
+                    )}
+                    {event.editable && <button type="button" onClick={() => beginEdit(event)} aria-label="Etkinliği düzenle"><Pencil size={14} /></button>}
+                    {event.editable && <button type="button" onClick={() => deleteEvent(event)} aria-label="Etkinliği sil"><Trash2 size={14} /></button>}
                   </div>
                 </article>
               ))}
