@@ -16,6 +16,18 @@ test('the shell uses the dynamic viewport and device safe areas', () => {
   assert.match(css, /env\(safe-area-inset-bottom\)/);
 });
 
+test('the mobile lock-screen blur covers the complete viewport', () => {
+  const lockScreen = read('../src/components/auth/LockScreen.jsx');
+  const css = read('../src/index.css');
+
+  assert.match(lockScreen, /className="lock-screen-backdrop"/);
+  assert.match(lockScreen, /position: 'absolute', inset: 0/);
+  assert.match(lockScreen, /WebkitBackdropFilter: 'blur\(30px\)'/);
+  assert.doesNotMatch(lockScreen, /className="lock-card"/);
+  assert.match(css, /\.lock-screen-backdrop\s*\{\s*inset: 0 !important;\s*width: auto !important;\s*height: auto !important;\s*\}/);
+  assert.doesNotMatch(css, /\.lock-card\s*\{/);
+});
+
 test('mobile windows fill the usable desktop without drag or resize handles', () => {
   const desktop = read('../src/App.jsx');
   const windowComponent = read('../src/components/Window.jsx');

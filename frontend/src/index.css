@@ -952,8 +952,10 @@ body, html {
     padding: 28px 22px !important;
   }
 
-  .lock-card {
-    width: min(100%, 320px) !important;
+  .lock-screen-backdrop {
+    inset: 0 !important;
+    width: auto !important;
+    height: auto !important;
   }
 
   .onboarding-screen {
