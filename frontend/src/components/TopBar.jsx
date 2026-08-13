@@ -12,9 +12,8 @@ const CustomFoxIcon = ({ size = 16, color = "currentColor" }) => (
 
 const TopBar = ({
   applications = [],
-  desktopFiles = [],
   onOpenApplication,
-  onOpenDesktopFile,
+  onOpenFileResult,
   onRefreshDesktop
 }) => {
   const { logout } = useAuth();
@@ -57,6 +56,23 @@ const TopBar = ({
 
   const formatTime = (date) => {
     return date.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+  };
+
+  const openCalendar = (event) => {
+    event.stopPropagation();
+    setIsMenuOpen(false);
+    const year = time.getFullYear();
+    const month = String(time.getMonth() + 1).padStart(2, '0');
+    const day = String(time.getDate()).padStart(2, '0');
+    openWindow({
+      id: 'calendar',
+      type: 'calendar',
+      title: 'Takvim',
+      component: null,
+      width: 920,
+      height: 640,
+      navigation: { date: `${year}-${month}-${day}`, requestId: Date.now() }
+    });
   };
 
   return (
@@ -108,19 +124,25 @@ const TopBar = ({
           <span className="topbar-search-label">Ara</span>
           <kbd>{shortcutLabel}</kbd>
         </button>
-        <span className="topbar-item" style={{ marginLeft: '12px' }}>
+        <button
+          type="button"
+          className="topbar-item topbar-clock-trigger"
+          style={{ marginLeft: '12px' }}
+          title="Takvimi aç"
+          aria-label={`${formatDate(time)} ${formatTime(time)}, takvimi aç`}
+          onClick={openCalendar}
+        >
           <span className="topbar-date">{formatDate(time)} </span>
           <span className="topbar-time">{formatTime(time)}</span>
-        </span>
+        </button>
       </div>
       <SpotlightSearch
         applications={applications}
-        desktopFiles={desktopFiles}
         isOpen={isSpotlightOpen}
         onClose={() => setIsSpotlightOpen(false)}
         onLock={logout}
         onOpenApplication={onOpenApplication}
-        onOpenDesktopFile={onOpenDesktopFile}
+        onOpenFileResult={onOpenFileResult}
         onOpenWindow={openWindow}
         onRefreshDesktop={onRefreshDesktop}
       />

@@ -39,7 +39,9 @@ test('FoxOS shell exposes a real Spotlight trigger, shortcut and actionable sour
   assert.match(spotlight, /role="dialog"/);
   assert.match(spotlight, /role="listbox"/);
   assert.match(spotlight, /onOpenApplication\(application\)/);
-  assert.match(spotlight, /onOpenDesktopFile\(file\)/);
+  assert.match(spotlight, /\/api\/file-search\?q=/);
+  assert.match(spotlight, /onOpenFileResult\(file\)/);
   assert.match(desktop, /onOpenApplication=\{handleOpenApplication\}/);
-  assert.match(desktop, /onOpenDesktopFile=\{handleFileDoubleClick\}/);
+  assert.match(desktop, /onOpenFileResult=\{handleSearchFileOpen\}/);
+  assert.match(desktop, /openWorkspaceEntry\(file, file\.path\)/);
 });

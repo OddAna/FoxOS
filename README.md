@@ -91,6 +91,22 @@ agent is still required to perform management operations.
 - Create or remove a desktop shortcut from either the context menu or
   Application Manager.
 
+### Search, Calendar and Weather
+
+- Open FoxOS Spotlight from the menu bar, `Command/Ctrl+K` or `Ctrl+Space` and
+  launch built-in tools, live applications, settings and actions.
+- Search nested FoxOS workspace filenames and paths without reading file
+  contents or recursively following the host-filesystem shortcut, then open a
+  result in Files or its matching viewer.
+- Keep Calendar events as schema-versioned, owner-only server data rather than
+  browser-local state. The Calendar supports month navigation and creating,
+  editing or deleting timed and all-day events; clicking the top-right date and
+  time opens it on today.
+- Select a city in Weather and view current conditions plus a seven-day
+  forecast. The optional [Open-Meteo](https://open-meteo.com/) adapter is called
+  only when Weather is used, requires no API key for its open-access path and
+  cannot block FoxOS startup or other server management features.
+
 ### App Store
 
 The Store installs reviewed Docker applications as real sibling containers on

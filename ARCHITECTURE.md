@@ -129,6 +129,34 @@ be atomic, schema-versioned, permission-restricted and included in backup and
 restore procedures. Redacted exports must be sufficient to inspect the resource
 graph without exposing secret values.
 
+### Implemented boundary: desktop search, calendar and weather utilities
+
+The Spotlight file source indexes only filename and path metadata inside the
+FoxOS workspace. Its bounded, short-lived cache is built without reading file
+contents, following symbolic links or descending into the `Sunucu` host
+shortcut or `Çöp Kutusu`. The authenticated API applies entry, depth, time and
+result ceilings; workspace writes invalidate the cache. A result still opens
+through the existing Files or viewer boundary and does not create a second file
+access path.
+
+The local Calendar is server-owned durable state under the FoxOS data root. Its
+schema-versioned event file is written atomically with owner-only permissions.
+Authenticated create, update, delete and bounded-range list operations validate
+dates, times, text lengths, identifiers and color values on the server; browser
+storage is not authority. The menu-bar date and time, Dock and Spotlight all
+activate the same Calendar window and current-date navigation state.
+
+Weather is an optional, on-demand adapter. A clean install has no configured
+location and makes no weather network request during startup or ordinary FoxOS
+operation. Location search and seven-day forecast requests are proxied only to
+fixed Open-Meteo geocoding and forecast HTTPS endpoints with bounded queries,
+timeouts, response size, allowlisted output fields and short in-memory caches.
+The selected coordinates and timezone are stored atomically in owner-only local
+state; no external credential is required or persisted. Provider failure is
+isolated to the Weather window, which retains explicit attribution, and the
+adapter can be replaced without changing Calendar, Files, authentication or the
+control plane.
+
 ## First-run server review
 
 A new owner account stores a versioned `pending` initial-setup marker in the

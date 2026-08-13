@@ -528,6 +528,9 @@ test('health is public while management APIs require a session', async () => {
 
   const filesResponse = await fetch(baseUrl() + '/api/files');
   assert.equal(filesResponse.status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/file-search?q=rapor')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/calendar/events?from=2026-08-01&to=2026-08-31')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/weather')).status, 401);
   const fileDownloadResponse = await fetch(baseUrl() + '/api/file-download?path=Masa%C3%BCst%C3%BC%2Ftest.zip');
   assert.equal(fileDownloadResponse.status, 401);
 
@@ -785,6 +788,46 @@ test('setup creates an authenticated session and server-owned onboarding state',
     username: 'tester',
     onboardingRequired: false
   });
+
+  const workspaceDocument = path.join(process.env.DATA_ROOT, 'files', 'Belgeler', 'Toplantı Notu.txt');
+  fs.writeFileSync(workspaceDocument, 'FoxOS');
+  const fileSearchResponse = await fetch(baseUrl() + '/api/file-search?q=toplanti', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(fileSearchResponse.status, 200);
+  assert.equal((await fileSearchResponse.json()).items[0].path, '/Belgeler/Toplantı Notu.txt');
+
+  const calendarCreateResponse = await fetch(baseUrl() + '/api/calendar/events', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      title: 'Takvim API testi',
+      date: '2026-08-13',
+      startTime: '10:00',
+      endTime: '11:00'
+    })
+  });
+  assert.equal(calendarCreateResponse.status, 201);
+  const calendarEvent = (await calendarCreateResponse.json()).event;
+  const calendarListResponse = await fetch(
+    baseUrl() + '/api/calendar/events?from=2026-08-01&to=2026-08-31',
+    { headers: { Cookie: cookie } }
+  );
+  assert.equal(calendarListResponse.status, 200);
+  assert.equal((await calendarListResponse.json()).events[0].id, calendarEvent.id);
+  const calendarDeleteResponse = await fetch(baseUrl() + '/api/calendar/events/' + calendarEvent.id, {
+    method: 'DELETE',
+    headers: { Cookie: cookie }
+  });
+  assert.equal(calendarDeleteResponse.status, 200);
+
+  const weatherStatusResponse = await fetch(baseUrl() + '/api/weather', { headers: { Cookie: cookie } });
+  assert.equal(weatherStatusResponse.status, 200);
+  assert.equal((await weatherStatusResponse.json()).configured, false);
+  const shortLocationQueryResponse = await fetch(baseUrl() + '/api/weather/locations?q=x', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(shortLocationQueryResponse.status, 400);
 
   const legacyAuthRecord = JSON.parse(fs.readFileSync(authFile, 'utf8'));
   delete legacyAuthRecord.initialSetup;

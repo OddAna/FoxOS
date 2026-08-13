@@ -109,6 +109,9 @@ const {
   MediaThumbnailError,
   createMediaThumbnailManager
 } = require('./mediaThumbnailManager');
+const { FileSearchError, createFileSearchManager } = require('./fileSearchManager');
+const { CalendarError, createCalendarManager } = require('./calendarManager');
+const { WeatherError, createWeatherManager } = require('./weatherManager');
 const {
   WorkloadEvidenceError,
   createWorkloadEvidenceManager
@@ -1387,6 +1390,35 @@ const dockerRequest = dockerClient.request;
 const encryptionStore = createEncryptionStore({ dataRoot: DATA_ROOT });
 const maintenanceSessionManager = createMaintenanceSessionManager({ dataRoot: DATA_ROOT });
 const desktopShortcutManager = createDesktopShortcutManager({ dataRoot: DATA_ROOT });
+const fileSearchManager = createFileSearchManager({ diskRoot: DISK_ROOT });
+const calendarManager = createCalendarManager({ dataRoot: DATA_ROOT });
+const weatherManager = createWeatherManager({ dataRoot: DATA_ROOT });
+
+function sendCalendarError(res, error) {
+  const status = error instanceof CalendarError ? error.statusCode : 500;
+  if (status >= 500 && !(error instanceof CalendarError)) {
+    console.error('Calendar operation failed:', error.message);
+  }
+  return res.status(status).json({
+    error: status >= 500 && !(error instanceof CalendarError)
+      ? 'Takvim işlemi tamamlanamadı.'
+      : error.message,
+    code: error.code || 'calendar-operation-failed'
+  });
+}
+
+function sendWeatherError(res, error) {
+  const status = error instanceof WeatherError ? error.statusCode : 500;
+  if (status >= 500 && !(error instanceof WeatherError)) {
+    console.error('Weather operation failed:', error.message);
+  }
+  return res.status(status).json({
+    error: status >= 500 && !(error instanceof WeatherError)
+      ? 'Hava durumu işlemi tamamlanamadı.'
+      : error.message,
+    code: error.code || 'weather-operation-failed'
+  });
+}
 
 function desktopShortcutPathForWorkspaceTarget(target) {
   const desktopDirectory = path.join(DISK_ROOT, DESKTOP_ROOT.slice(1));
@@ -2474,6 +2506,86 @@ app.get('/api/file-download', (req, res) => {
 
 app.use('/api/static', express.static(DISK_ROOT, { dotfiles: 'deny', fallthrough: false }));
 
+app.get('/api/weather/locations', async (req, res) => {
+  try {
+    const locations = await weatherManager.searchLocations(req.query.q);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ locations });
+  } catch (error) {
+    sendWeatherError(res, error);
+  }
+});
+
+app.put('/api/weather/location', (req, res) => {
+  try {
+    res.json({ location: weatherManager.saveLocation(req.body) });
+  } catch (error) {
+    sendWeatherError(res, error);
+  }
+});
+
+app.get('/api/weather', async (req, res) => {
+  try {
+    const forecast = await weatherManager.forecast({ force: req.query.refresh === '1' });
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(forecast);
+  } catch (error) {
+    sendWeatherError(res, error);
+  }
+});
+
+app.get('/api/calendar/events', (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ events: calendarManager.list({ from: req.query.from, to: req.query.to }) });
+  } catch (error) {
+    sendCalendarError(res, error);
+  }
+});
+
+app.post('/api/calendar/events', (req, res) => {
+  try {
+    res.status(201).json({ event: calendarManager.create(req.body) });
+  } catch (error) {
+    sendCalendarError(res, error);
+  }
+});
+
+app.put('/api/calendar/events/:eventId', (req, res) => {
+  try {
+    res.json({ event: calendarManager.update(req.params.eventId, req.body) });
+  } catch (error) {
+    sendCalendarError(res, error);
+  }
+});
+
+app.delete('/api/calendar/events/:eventId', (req, res) => {
+  try {
+    res.json(calendarManager.remove(req.params.eventId));
+  } catch (error) {
+    sendCalendarError(res, error);
+  }
+});
+
+app.get('/api/file-search', async (req, res) => {
+  try {
+    const result = await fileSearchManager.search(req.query.q, { limit: req.query.limit });
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(result);
+  } catch (error) {
+    const status = error instanceof FileSearchError ? error.statusCode : 500;
+    if (status >= 500 && !(error instanceof FileSearchError)) {
+      console.error('File search failed:', error.message);
+    }
+    res.status(status).json({
+      error: status >= 500 && !(error instanceof FileSearchError)
+        ? 'Dosya araması tamamlanamadı.'
+        : error.message,
+      code: error.code || 'file-search-failed'
+    });
+  }
+});
+
 app.get('/api/files', (req, res) => {
   try {
     const requestedPath = req.query.path || '/';
@@ -2521,6 +2633,7 @@ app.post('/api/save', (req, res) => {
       return res.status(400).json({ error: 'Target is a directory' });
     }
     fs.writeFileSync(targetFile, typeof req.body.content === 'string' ? req.body.content : '', 'utf8');
+    fileSearchManager.invalidate();
     res.json({ success: true });
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -2551,6 +2664,7 @@ app.post('/api/delete', (req, res) => {
     if (releasedShortcutDirectory && releasedShortcutDirectory !== DESKTOP_ROOT) {
       desktopShortcutManager.releaseDirectory(releasedShortcutDirectory);
     }
+    fileSearchManager.invalidate();
     res.json({ success: true });
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -2584,6 +2698,7 @@ app.post('/api/rename', (req, res) => {
         desktopShortcutManager.releaseDirectory(sourceShortcutDirectory);
       }
     }
+    fileSearchManager.invalidate();
     res.json({ success: true });
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -2620,6 +2735,7 @@ app.post('/api/move', (req, res) => {
         desktopShortcutManager.releaseDirectory(sourceShortcutDirectory);
       }
     }
+    fileSearchManager.invalidate();
     res.json({ success: true });
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -2635,6 +2751,7 @@ app.post('/api/mkdir', (req, res) => {
       return res.status(409).json({ error: 'Directory already exists' });
     }
     fs.mkdirSync(target);
+    fileSearchManager.invalidate();
     res.status(201).json({ success: true });
   } catch (error) {
     res.status(400).json({ error: error.message });

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Bot, Settings, Terminal, Gauge, FolderOpen, Trash2, Box } from 'lucide-react';
+import { Bot, CalendarDays, CloudSun, Settings, Terminal, Gauge, FolderOpen, Trash2, Box } from 'lucide-react';
 import { useWindowManager } from '../contexts/WindowContext';
 
 const Dock = () => {
@@ -72,6 +72,35 @@ const Dock = () => {
     });
   };
 
+  const handleOpenCalendar = () => {
+    const now = new Date();
+    const date = [
+      now.getFullYear(),
+      String(now.getMonth() + 1).padStart(2, '0'),
+      String(now.getDate()).padStart(2, '0')
+    ].join('-');
+    openWindow({
+      id: 'calendar',
+      type: 'calendar',
+      title: 'Takvim',
+      component: null,
+      width: 920,
+      height: 640,
+      navigation: { date, requestId: Date.now() }
+    });
+  };
+
+  const handleOpenWeather = () => {
+    openWindow({
+      id: 'weather',
+      type: 'weather',
+      title: 'Hava Durumu',
+      component: null,
+      width: 780,
+      height: 590
+    });
+  };
+
   const isAppOpen = (id) => windows.some(w => w.id === id);
 
   return (
@@ -117,6 +146,20 @@ const Dock = () => {
             <FolderOpen size={26} color="#ffffff" strokeWidth={1.5} />
           </div>
           <div className={`dock-indicator ${isAppOpen('files') ? 'active' : ''}`}></div>
+        </div>
+
+        <div className="dock-item-wrapper">
+          <div className="dock-item app-calendar" title="Takvim" onClick={handleOpenCalendar}>
+            <CalendarDays size={26} color="#ffffff" strokeWidth={1.5} />
+          </div>
+          <div className={`dock-indicator ${isAppOpen('calendar') ? 'active' : ''}`}></div>
+        </div>
+
+        <div className="dock-item-wrapper">
+          <div className="dock-item app-weather" title="Hava Durumu" onClick={handleOpenWeather}>
+            <CloudSun size={26} color="#ffffff" strokeWidth={1.5} />
+          </div>
+          <div className={`dock-indicator ${isAppOpen('weather') ? 'active' : ''}`}></div>
         </div>
 
         <div className="dock-item-wrapper">

@@ -16,6 +16,8 @@ import MediaPlayerApp from './apps/MediaPlayerApp';
 import TerminalApp from './apps/TerminalApp';
 import CodexApp from './apps/CodexApp';
 import AppStoreApp from './apps/AppStoreApp';
+import CalendarApp from './apps/CalendarApp';
+import WeatherApp from './apps/WeatherApp';
 import ApplicationLogo from './components/ApplicationLogo';
 import { APPLICATION_STATUS, applicationOperationalState } from './utils/applicationStatus';
 import {
@@ -766,9 +768,7 @@ const Desktop = () => {
     handleFileDoubleClick(item.file);
   };
 
-  const handleFileDoubleClick = (file) => {
-    const fullPath = `/Masaüstü/${file.name}`;
-    
+  const openWorkspaceEntry = (file, fullPath) => {
     if (file.type === 'folder') {
       openWindow({
         id: `folder-${file.id}`,
@@ -811,6 +811,14 @@ const Desktop = () => {
       width: width,
       height: height
     });
+  };
+
+  const handleFileDoubleClick = (file) => {
+    openWorkspaceEntry(file, `/Masaüstü/${file.name}`);
+  };
+
+  const handleSearchFileOpen = (file) => {
+    openWorkspaceEntry(file, file.path);
   };
 
   const handleBackgroundClick = (e) => {
@@ -938,6 +946,8 @@ const Desktop = () => {
       case 'terminal': return <TerminalApp />;
       case 'codex': return <CodexApp />;
       case 'store': return <AppStoreApp />;
+      case 'calendar': return <CalendarApp target={win.navigation} />;
+      case 'weather': return <WeatherApp />;
       default: return <div style={{ padding: 20, color: '#fff' }}>Bilinmeyen Uygulama: {win.title}</div>;
     }
   };
@@ -952,9 +962,8 @@ const Desktop = () => {
     >
       <TopBar
         applications={applications}
-        desktopFiles={desktopFiles}
         onOpenApplication={handleOpenApplication}
-        onOpenDesktopFile={handleFileDoubleClick}
+        onOpenFileResult={handleSearchFileOpen}
         onRefreshDesktop={refreshDesktop}
       />
       

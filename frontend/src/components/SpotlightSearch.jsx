@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Bot,
   Box,
+  CalendarDays,
+  CloudSun,
   File,
   Folder,
   FolderOpen,
@@ -16,7 +18,8 @@ import {
   Trash2
 } from 'lucide-react';
 import ApplicationLogo from './ApplicationLogo';
-import { searchSpotlightItems } from '../utils/spotlightSearch';
+import { apiFetch } from '../api';
+import { normalizeSpotlightText, searchSpotlightItems } from '../utils/spotlightSearch';
 
 const resultIcon = (icon) => (
   <span className="spotlight-result-icon" aria-hidden="true">{icon}</span>
@@ -32,18 +35,20 @@ const applicationStateLabel = (application) => {
 
 const SpotlightSearch = ({
   applications,
-  desktopFiles,
   isOpen,
   onClose,
   onLock,
   onOpenApplication,
-  onOpenDesktopFile,
+  onOpenFileResult,
   onOpenWindow,
   onRefreshDesktop
 }) => {
   const inputRef = useRef(null);
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [fileResults, setFileResults] = useState([]);
+  const [fileSearchLoading, setFileSearchLoading] = useState(false);
+  const [fileSearchError, setFileSearchError] = useState('');
 
   const openSystemWindow = useCallback((config) => () => onOpenWindow(config), [onOpenWindow]);
   const openSettings = useCallback((tab) => () => onOpenWindow({
@@ -100,6 +105,36 @@ const SpotlightSearch = ({
       featured: true,
       priority: 40,
       run: openSystemWindow({ id: 'codex', type: 'codex', title: 'Codex', component: null, width: 900, height: 650 })
+    },
+    {
+      id: 'system-calendar',
+      title: 'Takvim',
+      subtitle: 'Etkinlikleri görüntüle ve düzenle',
+      category: 'FoxOS',
+      keywords: ['calendar', 'etkinlik', 'randevu', 'ajanda', 'tarih'],
+      icon: resultIcon(<CalendarDays size={20} />),
+      featured: true,
+      priority: 35,
+      run: () => onOpenWindow({
+        id: 'calendar',
+        type: 'calendar',
+        title: 'Takvim',
+        component: null,
+        width: 920,
+        height: 640,
+        navigation: { requestId: Date.now() }
+      })
+    },
+    {
+      id: 'system-weather',
+      title: 'Hava Durumu',
+      subtitle: 'Anlık hava ve 7 günlük tahmin',
+      category: 'FoxOS',
+      keywords: ['weather', 'hava', 'sicaklik', 'yagmur', 'tahmin', 'sehir'],
+      icon: resultIcon(<CloudSun size={20} />),
+      featured: true,
+      priority: 36,
+      run: openSystemWindow({ id: 'weather', type: 'weather', title: 'Hava Durumu', component: null, width: 780, height: 590 })
     },
     {
       id: 'system-terminal',
@@ -178,15 +213,15 @@ const SpotlightSearch = ({
       priority: 200 + index,
       run: () => onOpenApplication(application)
     })),
-    ...desktopFiles.map((file, index) => ({
-      id: `desktop-${file.id}`,
+    ...fileResults.map((file, index) => ({
+      id: `file-${file.id}`,
       title: file.name,
-      subtitle: file.type === 'folder' ? 'Masaüstü · Klasör' : 'Masaüstü · Dosya',
-      category: 'Masaüstü',
-      keywords: [file.ext, file.type, 'dosya', 'klasor'],
+      subtitle: `${file.parentPath || '/'} · ${file.type === 'folder' ? 'Klasör' : 'Dosya'}`,
+      category: 'Dosyalar',
+      keywords: [file.path, file.ext, file.type, 'dosya', 'klasor'],
       icon: resultIcon(file.type === 'folder' ? <Folder size={20} /> : <File size={20} />),
       priority: 300 + index,
-      run: () => onOpenDesktopFile(file)
+      run: () => onOpenFileResult(file)
     })),
     {
       id: 'action-refresh',
@@ -208,9 +243,9 @@ const SpotlightSearch = ({
       priority: 410,
       run: onLock
     }
-  ], [applications, desktopFiles, onLock, onOpenApplication, onOpenDesktopFile, onRefreshDesktop, openSettings, openSystemWindow]);
+  ], [applications, fileResults, onLock, onOpenApplication, onOpenFileResult, onOpenWindow, onRefreshDesktop, openSettings, openSystemWindow]);
 
-  const results = useMemo(() => searchSpotlightItems(items, query), [items, query]);
+  const results = useMemo(() => searchSpotlightItems(items, query, 12), [items, query]);
   const activeIndex = results.length ? Math.min(selectedIndex, results.length - 1) : 0;
 
   useEffect(() => {
@@ -224,6 +259,40 @@ const SpotlightSearch = ({
   useEffect(() => {
     setSelectedIndex(0);
   }, [query]);
+
+  useEffect(() => {
+    const normalizedQuery = normalizeSpotlightText(query);
+    if (!isOpen || normalizedQuery.length < 2) {
+      setFileResults([]);
+      setFileSearchLoading(false);
+      setFileSearchError('');
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    setFileSearchLoading(true);
+    setFileSearchError('');
+    const timeout = window.setTimeout(async () => {
+      try {
+        const response = await apiFetch(`/api/file-search?q=${encodeURIComponent(query)}&limit=20`, {
+          signal: controller.signal
+        });
+        const payload = await response.json();
+        setFileResults(Array.isArray(payload.items) ? payload.items : []);
+      } catch (error) {
+        if (error.name === 'AbortError') return;
+        setFileResults([]);
+        setFileSearchError(error.message || 'Dosya araması tamamlanamadı.');
+      } finally {
+        if (!controller.signal.aborted) setFileSearchLoading(false);
+      }
+    }, 180);
+
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [isOpen, query]);
 
   if (!isOpen) return null;
 
@@ -304,10 +373,15 @@ const SpotlightSearch = ({
               </span>
               <span className="spotlight-result-category">{item.category}</span>
             </button>
-          )) : (
+          )) : fileSearchLoading ? (
+            <div className="spotlight-empty">
+              <RefreshCw size={22} className="spin" aria-hidden="true" />
+              <span>FoxOS dosyaları aranıyor…</span>
+            </div>
+          ) : (
             <div className="spotlight-empty">
               <Search size={22} aria-hidden="true" />
-              <span>“{query}” için sonuç bulunamadı.</span>
+              <span>{fileSearchError || `“${query}” için sonuç bulunamadı.`}</span>
             </div>
           )}
         </div>
@@ -315,7 +389,7 @@ const SpotlightSearch = ({
         <footer className="spotlight-footer">
           <span><kbd>↑</kbd><kbd>↓</kbd> seç</span>
           <span><kbd>Enter</kbd> aç</span>
-          <span>{query ? `${results.length} sonuç` : 'Hızlı Erişim'}</span>
+          <span>{fileSearchLoading ? 'Dosyalar aranıyor…' : query ? `${results.length} sonuç` : 'Hızlı Erişim'}</span>
         </footer>
       </section>
     </div>
