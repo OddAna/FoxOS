@@ -63,8 +63,6 @@ const TopBar = () => {
             </div>
           )}
         </span>
-        <span className="topbar-item">Linux Host</span>
-        <span className="topbar-item">Docker</span>
       </div>
       <div className="topbar-right">
         <span className="topbar-item" style={{ marginLeft: '12px' }}>
