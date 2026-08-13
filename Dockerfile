@@ -17,11 +17,17 @@ RUN apt-get update \
 
 WORKDIR /build
 
-RUN curl --fail --silent --show-error --location --output ffmpeg.tar.xz \
+RUN curl --fail --silent --show-error --location \
+      --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 20 --max-time 300 --remove-on-error \
+      --output ffmpeg.tar.xz \
       "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz" \
-    && curl --fail --silent --show-error --location --output ffmpeg.tar.xz.asc \
+    && curl --fail --silent --show-error --location \
+      --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 20 --max-time 300 --remove-on-error \
+      --output ffmpeg.tar.xz.asc \
       "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz.asc" \
-    && curl --fail --silent --show-error --location --output ffmpeg-devel.asc \
+    && curl --fail --silent --show-error --location \
+      --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 20 --max-time 300 --remove-on-error \
+      --output ffmpeg-devel.asc \
       https://ffmpeg.org/ffmpeg-devel.asc \
     && echo "${FFMPEG_ARCHIVE_SHA256}  ffmpeg.tar.xz" | sha256sum --check --strict \
     && gpg --batch --import ffmpeg-devel.asc \
