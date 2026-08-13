@@ -950,7 +950,13 @@ const Desktop = () => {
       onDragOver={handleDragOver}
       onDrop={handleDesktopDrop}
     >
-      <TopBar />
+      <TopBar
+        applications={applications}
+        desktopFiles={desktopFiles}
+        onOpenApplication={handleOpenApplication}
+        onOpenDesktopFile={handleFileDoubleClick}
+        onRefreshDesktop={refreshDesktop}
+      />
       
       {/* Masaüstü İkon Izgarası (Grid) */}
       <div 

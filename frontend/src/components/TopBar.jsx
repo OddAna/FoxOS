@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { Lock } from 'lucide-react';
+import { useWindowManager } from '../contexts/WindowContext';
+import { Lock, Search } from 'lucide-react';
+import SpotlightSearch from './SpotlightSearch';
 
 const CustomFoxIcon = ({ size = 16, color = "currentColor" }) => (
   <svg height={size} viewBox="0 0 100 100" width={size} xmlns="http://www.w3.org/2000/svg" fill={color}>
@@ -8,10 +10,18 @@ const CustomFoxIcon = ({ size = 16, color = "currentColor" }) => (
   </svg>
 );
 
-const TopBar = () => {
+const TopBar = ({
+  applications = [],
+  desktopFiles = [],
+  onOpenApplication,
+  onOpenDesktopFile,
+  onRefreshDesktop
+}) => {
   const { logout } = useAuth();
+  const { openWindow } = useWindowManager();
   const [time, setTime] = useState(new Date());
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isSpotlightOpen, setIsSpotlightOpen] = useState(false);
 
   useEffect(() => {
     const handleGlobalClick = () => setIsMenuOpen(false);
@@ -23,6 +33,23 @@ const TopBar = () => {
     const timer = setInterval(() => setTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    const handleShortcut = (event) => {
+      const commandK = (event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase('tr-TR') === 'k';
+      const controlSpace = event.ctrlKey && !event.metaKey && event.code === 'Space';
+      if (!commandK && !controlSpace) return;
+      event.preventDefault();
+      setIsMenuOpen(false);
+      setIsSpotlightOpen((current) => !current);
+    };
+    window.addEventListener('keydown', handleShortcut);
+    return () => window.removeEventListener('keydown', handleShortcut);
+  }, []);
+
+  const shortcutLabel = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
+    ? '⌘K'
+    : 'Ctrl K';
 
   const formatDate = (date) => {
     return date.toLocaleDateString('tr-TR', { weekday: 'short', month: 'short', day: 'numeric' });
@@ -65,11 +92,38 @@ const TopBar = () => {
         </span>
       </div>
       <div className="topbar-right">
+        <button
+          type="button"
+          className="topbar-search-trigger"
+          title={`FoxOS’ta ara (${shortcutLabel})`}
+          aria-label={`FoxOS’ta ara, ${shortcutLabel}`}
+          aria-expanded={isSpotlightOpen}
+          onClick={(event) => {
+            event.stopPropagation();
+            setIsMenuOpen(false);
+            setIsSpotlightOpen(true);
+          }}
+        >
+          <Search size={14} aria-hidden="true" />
+          <span className="topbar-search-label">Ara</span>
+          <kbd>{shortcutLabel}</kbd>
+        </button>
         <span className="topbar-item" style={{ marginLeft: '12px' }}>
           <span className="topbar-date">{formatDate(time)} </span>
           <span className="topbar-time">{formatTime(time)}</span>
         </span>
       </div>
+      <SpotlightSearch
+        applications={applications}
+        desktopFiles={desktopFiles}
+        isOpen={isSpotlightOpen}
+        onClose={() => setIsSpotlightOpen(false)}
+        onLock={logout}
+        onOpenApplication={onOpenApplication}
+        onOpenDesktopFile={onOpenDesktopFile}
+        onOpenWindow={openWindow}
+        onRefreshDesktop={onRefreshDesktop}
+      />
     </div>
   );
 };
