@@ -143,14 +143,17 @@ The local Calendar is server-owned durable state under the FoxOS data root. Its
 schema-versioned event file is written atomically with owner-only permissions.
 Authenticated create, update, delete and bounded-range list operations validate
 dates, times, text lengths, identifiers and color values on the server; browser
-storage is not authority. The menu-bar date and time, Dock and Spotlight all
-activate the same Calendar window and current-date navigation state.
+storage is not authority. The menu-bar date and time and Spotlight both
+activate the same Calendar window and current-date navigation state. Calendar
+is intentionally absent from the Dock.
 
 Weather is an optional, on-demand adapter. A clean install has no configured
 location and makes no weather network request during startup or ordinary FoxOS
 operation. Location search and seven-day forecast requests are proxied only to
 fixed Open-Meteo geocoding and forecast HTTPS endpoints with bounded queries,
 timeouts, response size, allowlisted output fields and short in-memory caches.
+Weather opens from its compact menu-bar control or Spotlight and is
+intentionally absent from the Dock.
 The selected coordinates and timezone are stored atomically in owner-only local
 state; no external credential is required or persisted. Provider failure is
 isolated to the Weather window, which retains explicit attribution, and the
