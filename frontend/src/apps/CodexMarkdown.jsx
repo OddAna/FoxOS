@@ -3,6 +3,7 @@ import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Check, Copy, Download, ExternalLink, FileCode2 } from 'lucide-react';
 import { localFileDetails, localFileDownloadUrl } from '../utils/fileDownloads';
+import { useI18n } from '../contexts/LocaleContext';
 
 const textFromChildren = (children) => Children.toArray(children)
   .map((child) => {
@@ -12,6 +13,7 @@ const textFromChildren = (children) => Children.toArray(children)
   .join('');
 
 const CodeBlock = ({ children, language }) => {
+  const { t } = useI18n();
   const [copied, setCopied] = useState(false);
   const code = textFromChildren(children).replace(/\n$/, '');
 
@@ -28,10 +30,10 @@ const CodeBlock = ({ children, language }) => {
   return (
     <div className="codex-code-block">
       <div className="codex-code-header">
-        <span>{language || 'kod'}</span>
-        <button type="button" onClick={copy} aria-label="Kodu kopyala">
+        <span>{language || t('codexApp.code')}</span>
+        <button type="button" onClick={copy} aria-label={t('codexApp.copyCode')}>
           {copied ? <Check size={13} /> : <Copy size={13} />}
-          {copied ? 'Kopyalandı' : 'Kopyala'}
+          {t(copied ? 'codexApp.copied' : 'codexApp.copy')}
         </button>
       </div>
       <pre><code>{code}</code></pre>
@@ -41,8 +43,9 @@ const CodeBlock = ({ children, language }) => {
 
 const safeUrl = (url) => defaultUrlTransform(url);
 
-const CodexMarkdown = ({ children, onOpenLocalFile }) => (
-  <div className="codex-markdown">
+const CodexMarkdown = ({ children, onOpenLocalFile }) => {
+  const { t } = useI18n();
+  return <div className="codex-markdown">
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
       skipHtml
@@ -76,11 +79,11 @@ const CodexMarkdown = ({ children, onOpenLocalFile }) => (
                   className="codex-local-file-download"
                   href={downloadHref}
                   download={fileName}
-                  aria-label={`${fileName} dosyasını indir`}
-                  title="Dosyayı indir"
+                  aria-label={t('codexApp.downloadFileLabel', { name: fileName })}
+                  title={t('codexApp.downloadFile')}
                 >
                   <Download size={11} aria-hidden="true" />
-                  İndir
+                  {t('codexApp.download')}
                 </a>
               )}
             </span>
@@ -102,7 +105,7 @@ const CodexMarkdown = ({ children, onOpenLocalFile }) => (
     >
       {String(children || '')}
     </ReactMarkdown>
-  </div>
-);
+  </div>;
+};
 
 export default CodexMarkdown;

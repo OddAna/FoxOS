@@ -15,39 +15,30 @@ import {
 } from 'lucide-react';
 import { apiFetch } from '../api';
 import { useDialog } from '../contexts/DialogContext';
+import { useI18n } from '../contexts/LocaleContext';
 import { useWindowManager } from '../contexts/WindowContext';
 import {
   calendarGridRange,
   calendarMonthGrid,
-  localCalendarDate,
   parseCalendarDate,
   shiftCalendarMonth
 } from '../utils/calendarDates';
 import './CalendarApp.css';
 
-const WEEKDAYS = ['Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz'];
 const COLORS = ['sky', 'green', 'orange', 'pink', 'purple'];
 const LOCAL_SOURCE = {
   id: 'local',
   accountId: null,
   provider: 'local',
   providerName: 'FoxOS',
-  accountName: 'Bu sunucu',
+  accountName: 'FoxOS',
   calendarId: 'local',
-  name: 'FoxOS Takvimi',
+  name: 'FoxOS',
   writable: true,
   color: 'sky'
 };
 
-const detectedTimeZone = () => {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-  } catch {
-    return 'UTC';
-  }
-};
-
-const blankEvent = (date, source = LOCAL_SOURCE, timeZone = detectedTimeZone()) => ({
+const blankEvent = (date, source = LOCAL_SOURCE, timeZone = 'UTC') => ({
   title: '',
   date,
   allDay: false,
@@ -60,27 +51,21 @@ const blankEvent = (date, source = LOCAL_SOURCE, timeZone = detectedTimeZone()) 
   timeZone
 });
 
-const monthTitle = (date) => (parseCalendarDate(date) || new Date()).toLocaleDateString('tr-TR', {
-  month: 'long',
-  year: 'numeric'
-});
-
-const longDate = (date) => (parseCalendarDate(date) || new Date()).toLocaleDateString('tr-TR', {
-  weekday: 'long',
-  day: 'numeric',
-  month: 'long'
-});
-
-const eventTime = (event) => {
-  if (event.allDay) return 'Tüm gün';
-  return event.endTime ? `${event.startTime}–${event.endTime}` : event.startTime;
+const calendarDateInTimeZone = (date, timeZone) => {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(date).map((part) => [part.type, part.value]));
+  return `${parts.year}-${parts.month}-${parts.day}`;
 };
 
 const CalendarApp = ({ target = null }) => {
   const { showDialog } = useDialog();
+  const { formatDate, t, timeZone, weekStartsOn } = useI18n();
   const { openWindow } = useWindowManager();
-  const today = localCalendarDate();
-  const timeZone = useMemo(() => detectedTimeZone(), []);
+  const today = useMemo(() => calendarDateInTimeZone(new Date(), timeZone), [timeZone]);
   const requestedDate = parseCalendarDate(target?.date) ? target.date : today;
   const [month, setMonth] = useState(`${requestedDate.slice(0, 7)}-01`);
   const [selectedDate, setSelectedDate] = useState(requestedDate);
@@ -95,8 +80,12 @@ const CalendarApp = ({ target = null }) => {
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(() => blankEvent(requestedDate, LOCAL_SOURCE, timeZone));
 
-  const days = useMemo(() => calendarMonthGrid(month), [month]);
-  const range = useMemo(() => calendarGridRange(month), [month]);
+  const days = useMemo(() => calendarMonthGrid(month, parseCalendarDate(today), weekStartsOn), [month, today, weekStartsOn]);
+  const range = useMemo(() => calendarGridRange(month, weekStartsOn), [month, weekStartsOn]);
+  const weekdays = useMemo(() => Array.from({ length: 7 }, (_, index) => {
+    const day = new Date(Date.UTC(2024, 0, 7 + ((weekStartsOn + index) % 7)));
+    return formatDate(day, { weekday: 'short', timeZone: 'UTC' });
+  }), [formatDate, weekStartsOn]);
   const eventsByDate = useMemo(() => events.reduce((map, event) => {
     const current = map.get(event.date) || [];
     current.push(event);
@@ -105,6 +94,11 @@ const CalendarApp = ({ target = null }) => {
   }, new Map()), [events]);
   const selectedEvents = eventsByDate.get(selectedDate) || [];
   const formSource = sources.find((source) => source.id === form.sourceKey) || LOCAL_SOURCE;
+  const monthTitle = (date) => formatDate(parseCalendarDate(date) || new Date(), { month: 'long', year: 'numeric' });
+  const longDate = (date) => formatDate(parseCalendarDate(date) || new Date(), { weekday: 'long', day: 'numeric', month: 'long' });
+  const eventTime = (event) => event.allDay
+    ? t('calendar.allDay')
+    : event.endTime ? `${event.startTime}–${event.endTime}` : event.startTime;
 
   const loadEvents = useCallback(async ({ quiet = false } = {}) => {
     if (!quiet) setLoading(true);
@@ -118,11 +112,11 @@ const CalendarApp = ({ target = null }) => {
       setWarning(warnings.length ? warnings.map((item) => item.message).filter(Boolean).join(' ') : '');
       setError('');
     } catch (requestError) {
-      setError(requestError.message || 'Takvim yüklenemedi.');
+      setError(requestError.message || t('calendar.loadError'));
     } finally {
       setLoading(false);
     }
-  }, [range.from, range.to, timeZone]);
+  }, [range.from, range.to, t, timeZone]);
 
   const loadSources = useCallback(async ({ refresh = false } = {}) => {
     try {
@@ -136,9 +130,9 @@ const CalendarApp = ({ target = null }) => {
       const warnings = Array.isArray(payload.warnings) ? payload.warnings : [];
       if (warnings.length) setWarning(warnings.map((item) => item.message).filter(Boolean).join(' '));
     } catch (requestError) {
-      setWarning(requestError.message || 'Bağlı takvim hesapları okunamadı.');
+      setWarning(requestError.message || t('calendar.sourcesError'));
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     loadEvents();
@@ -228,7 +222,7 @@ const CalendarApp = ({ target = null }) => {
       setEditingId(null);
       await loadEvents({ quiet: true });
     } catch (requestError) {
-      setError(requestError.message || 'Etkinlik kaydedilemedi.');
+      setError(requestError.message || t('calendar.saveError'));
     } finally {
       setSaving(false);
     }
@@ -236,12 +230,12 @@ const CalendarApp = ({ target = null }) => {
 
   const deleteEvent = (event) => {
     showDialog({
-      title: 'Etkinliği Sil',
-      message: `“${event.title}” etkinliği kalıcı olarak silinsin mi?`,
+      title: t('calendar.deleteTitle'),
+      message: t('calendar.deleteMessage', { title: event.title }),
       type: 'warning',
-      confirmText: 'Sil',
-      cancelText: 'Vazgeç',
-      pendingText: 'Siliniyor…',
+      confirmText: t('common.delete'),
+      cancelText: t('common.cancel'),
+      pendingText: t('calendar.deleting'),
       onConfirm: async () => {
         try {
           await apiFetch(`/api/calendar/events/${encodeURIComponent(event.id)}`, { method: 'DELETE' });
@@ -251,7 +245,7 @@ const CalendarApp = ({ target = null }) => {
           }
           await loadEvents({ quiet: true });
         } catch (requestError) {
-          setError(requestError.message || 'Etkinlik silinemedi.');
+          setError(requestError.message || t('calendar.deleteError'));
         }
       }
     });
@@ -260,7 +254,7 @@ const CalendarApp = ({ target = null }) => {
   const openConnections = () => openWindow({
     id: 'settings',
     type: 'settings',
-    title: 'Ayarlar',
+    title: t('common.settings'),
     component: null,
     navigation: { tab: 'connections' },
     width: 900,
@@ -282,14 +276,14 @@ const CalendarApp = ({ target = null }) => {
         </div>
         <div className="calendar-toolbar-actions">
           <button type="button" className="calendar-button calendar-account-button" onClick={openConnections}>
-            <Link2 size={14} /> {accounts.length ? `${accounts.length} hesap` : 'Hesap bağla'}
+            <Link2 size={14} /> {accounts.length ? t('calendar.accounts', { count: accounts.length }) : t('calendar.connectAccount')}
           </button>
-          <button type="button" className="calendar-button" onClick={goToday}>Bugün</button>
-          <div className="calendar-month-nav" aria-label="Ay seçimi">
-            <button type="button" onClick={() => moveMonth(-1)} aria-label="Önceki ay"><ChevronLeft size={17} /></button>
-            <button type="button" onClick={() => moveMonth(1)} aria-label="Sonraki ay"><ChevronRight size={17} /></button>
+          <button type="button" className="calendar-button" onClick={goToday}>{t('calendar.today')}</button>
+          <div className="calendar-month-nav" aria-label={t('calendar.monthSelection')}>
+            <button type="button" onClick={() => moveMonth(-1)} aria-label={t('calendar.previousMonth')}><ChevronLeft size={17} /></button>
+            <button type="button" onClick={() => moveMonth(1)} aria-label={t('calendar.nextMonth')}><ChevronRight size={17} /></button>
           </div>
-          <button type="button" className="calendar-icon-button" onClick={refreshCalendar} aria-label="Takvimi yenile">
+          <button type="button" className="calendar-icon-button" onClick={refreshCalendar} aria-label={t('calendar.refresh')}>
             <RefreshCw size={16} className={loading ? 'spin' : ''} />
           </button>
         </div>
@@ -301,7 +295,7 @@ const CalendarApp = ({ target = null }) => {
       <div className="calendar-layout">
         <section className="calendar-month" aria-label={monthTitle(month)}>
           <div className="calendar-weekdays">
-            {WEEKDAYS.map((weekday) => <span key={weekday}>{weekday}</span>)}
+            {weekdays.map((weekday) => <span key={weekday}>{weekday}</span>)}
           </div>
           <div className="calendar-grid">
             {days.map((day) => {
@@ -316,7 +310,7 @@ const CalendarApp = ({ target = null }) => {
                     day.isToday ? 'is-today' : '',
                     selectedDate === day.isoDate ? 'is-selected' : ''
                   ].filter(Boolean).join(' ')}
-                  aria-label={`${longDate(day.isoDate)}, ${dayEvents.length} etkinlik`}
+                  aria-label={`${longDate(day.isoDate)}, ${t('calendar.eventsCount', { count: dayEvents.length })}`}
                   aria-pressed={selectedDate === day.isoDate}
                   onClick={() => selectDate(day.isoDate)}
                 >
@@ -338,33 +332,33 @@ const CalendarApp = ({ target = null }) => {
         <aside className="calendar-agenda">
           <div className="calendar-agenda-header">
             <div>
-              <span>Seçili gün</span>
+              <span>{t('calendar.selectedDay')}</span>
               <h2>{longDate(selectedDate)}</h2>
             </div>
             <button type="button" className="calendar-add-button" onClick={beginCreate}>
-              <Plus size={15} /> Etkinlik
+              <Plus size={15} /> {t('calendar.event')}
             </button>
           </div>
 
           {formOpen ? (
             <form className="calendar-event-form" onSubmit={saveEvent}>
               <div className="calendar-form-heading">
-                <strong>{editingId ? 'Etkinliği Düzenle' : 'Yeni Etkinlik'}</strong>
-                <button type="button" aria-label="Formu kapat" onClick={() => setFormOpen(false)}><X size={16} /></button>
+                <strong>{editingId ? t('calendar.editEvent') : t('calendar.newEvent')}</strong>
+                <button type="button" aria-label={t('calendar.closeForm')} onClick={() => setFormOpen(false)}><X size={16} /></button>
               </div>
               <label>
-                Başlık
+                {t('calendar.title')}
                 <input
                   value={form.title}
                   maxLength={120}
                   required
                   autoFocus
                   onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))}
-                  placeholder="Etkinlik adı"
+                  placeholder={t('calendar.eventName')}
                 />
               </label>
               <label>
-                Takvim
+                {t('calendar.calendar')}
                 <select
                   value={form.sourceKey}
                   disabled={Boolean(editingId)}
@@ -379,14 +373,14 @@ const CalendarApp = ({ target = null }) => {
                 >
                   {sources.filter((source) => source.writable).map((source) => (
                     <option key={source.id} value={source.id}>
-                      {source.provider === 'local' ? source.name : `${source.accountName} · ${source.name}`}
+                      {source.provider === 'local' ? t('calendar.localCalendar') : `${source.accountName} · ${source.name}`}
                     </option>
                   ))}
                 </select>
-                {editingId && <small>Mevcut etkinliğin takvimi değiştirilemez.</small>}
+                {editingId && <small>{t('calendar.calendarImmutable')}</small>}
               </label>
               <label>
-                Tarih
+                {t('calendar.date')}
                 <input
                   type="date"
                   min="1970-01-01"
@@ -402,38 +396,38 @@ const CalendarApp = ({ target = null }) => {
                   checked={form.allDay}
                   onChange={(event) => setForm((current) => ({ ...current, allDay: event.target.checked }))}
                 />
-                Tüm gün
+                {t('calendar.allDay')}
               </label>
               {!form.allDay && (
                 <div className="calendar-time-fields">
                   <label>
-                    Başlangıç
+                    {t('calendar.start')}
                     <input type="time" value={form.startTime} required onChange={(event) => setForm((current) => ({ ...current, startTime: event.target.value }))} />
                   </label>
                   <label>
-                    Bitiş
+                    {t('calendar.end')}
                     <input type="time" value={form.endTime} onChange={(event) => setForm((current) => ({ ...current, endTime: event.target.value }))} />
                   </label>
                 </div>
               )}
               <label>
-                Konum
-                <input value={form.location} maxLength={160} onChange={(event) => setForm((current) => ({ ...current, location: event.target.value }))} placeholder="İsteğe bağlı" />
+                {t('calendar.location')}
+                <input value={form.location} maxLength={160} onChange={(event) => setForm((current) => ({ ...current, location: event.target.value }))} placeholder={t('calendar.optional')} />
               </label>
               <label>
-                Notlar
-                <textarea value={form.notes} maxLength={2000} rows={3} onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))} placeholder="İsteğe bağlı" />
+                {t('calendar.notes')}
+                <textarea value={form.notes} maxLength={2000} rows={3} onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))} placeholder={t('calendar.optional')} />
               </label>
               {formSource.provider === 'local' && (
                 <fieldset className="calendar-color-field">
-                  <legend>Renk</legend>
+                  <legend>{t('calendar.color')}</legend>
                   <div>
                     {COLORS.map((color) => (
                       <button
                         type="button"
                         key={color}
                         className={`calendar-color is-${color}${form.color === color ? ' is-active' : ''}`}
-                        aria-label={`${color} renk`}
+                        aria-label={t('calendar.colorLabel', { color: t(`calendar.colors.${color}`) })}
                         aria-pressed={form.color === color}
                         onClick={() => setForm((current) => ({ ...current, color }))}
                       />
@@ -442,34 +436,34 @@ const CalendarApp = ({ target = null }) => {
                 </fieldset>
               )}
               <button type="submit" className="calendar-save-button" disabled={saving || !form.title.trim()}>
-                {saving ? 'Kaydediliyor…' : editingId ? 'Değişiklikleri Kaydet' : 'Etkinliği Ekle'}
+                {saving ? t('calendar.saving') : editingId ? t('calendar.saveChanges') : t('calendar.addEvent')}
               </button>
             </form>
           ) : (
             <div className="calendar-event-list">
               {loading && events.length === 0 ? (
-                <div className="calendar-empty"><RefreshCw size={19} className="spin" /> Takvim yükleniyor…</div>
+                <div className="calendar-empty"><RefreshCw size={19} className="spin" /> {t('calendar.loading')}</div>
               ) : selectedEvents.length === 0 ? (
                 <div className="calendar-empty">
                   <CalendarDays size={24} />
-                  <span>Bu gün için etkinlik yok.</span>
-                  <button type="button" onClick={beginCreate}>İlk etkinliği ekle</button>
+                  <span>{t('calendar.empty')}</span>
+                  <button type="button" onClick={beginCreate}>{t('calendar.addFirst')}</button>
                 </div>
               ) : selectedEvents.map((event) => (
                 <article key={event.id} className={`calendar-event-card is-${event.color}`}>
                   <button type="button" className="calendar-event-main" onClick={() => beginEdit(event)}>
                     <strong>{event.title}</strong>
                     <span><Clock3 size={13} /> {eventTime(event)}</span>
-                    <span className="calendar-event-source">{event.calendarName || 'FoxOS Takvimi'}{event.source === 'remote' && event.accountName ? ` · ${event.accountName}` : ''}</span>
+                    <span className="calendar-event-source">{event.source === 'local' ? t('calendar.localCalendar') : event.calendarName || t('calendar.localCalendar')}{event.source === 'remote' && event.accountName ? ` · ${event.accountName}` : ''}</span>
                     {event.location && <span><MapPin size={13} /> {event.location}</span>}
                     {event.notes && <p>{event.notes}</p>}
                   </button>
                   <div className="calendar-event-actions">
                     {event.externalUrl && (
-                      <a href={event.externalUrl} target="_blank" rel="noreferrer" aria-label="Sağlayıcıda aç"><ExternalLink size={14} /></a>
+                      <a href={event.externalUrl} target="_blank" rel="noreferrer" aria-label={t('calendar.openProvider')}><ExternalLink size={14} /></a>
                     )}
-                    {event.editable && <button type="button" onClick={() => beginEdit(event)} aria-label="Etkinliği düzenle"><Pencil size={14} /></button>}
-                    {event.editable && <button type="button" onClick={() => deleteEvent(event)} aria-label="Etkinliği sil"><Trash2 size={14} /></button>}
+                    {event.editable && <button type="button" onClick={() => beginEdit(event)} aria-label={t('calendar.edit')}><Pencil size={14} /></button>}
+                    {event.editable && <button type="button" onClick={() => deleteEvent(event)} aria-label={t('calendar.delete')}><Trash2 size={14} /></button>}
                   </div>
                 </article>
               ))}

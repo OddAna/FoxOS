@@ -19,6 +19,7 @@ import ApplicationLogo from '../components/ApplicationLogo';
 import ApplicationStatus from '../components/ApplicationStatus';
 import { useApplicationInventory } from '../contexts/ApplicationContext';
 import { useDialog } from '../contexts/DialogContext';
+import { useI18n } from '../contexts/LocaleContext';
 import {
   applyApplicationUpdate,
   checkAndPlanApplicationUpdate,
@@ -26,7 +27,7 @@ import {
   updateConfirmationMessage
 } from '../utils/applicationUpdates';
 
-const copyText = async (value) => {
+const copyText = async (value, errorMessage) => {
   if (navigator.clipboard && window.isSecureContext) {
     await navigator.clipboard.writeText(value);
     return;
@@ -40,7 +41,7 @@ const copyText = async (value) => {
   textarea.select();
   const copied = document.execCommand('copy');
   textarea.remove();
-  if (!copied) throw new Error('Adres kopyalanamadı');
+  if (!copied) throw new Error(errorMessage);
 };
 
 const accessUrlForApplication = (application, containerSettings) => {
@@ -64,6 +65,7 @@ const ApplicationManager = ({ target }) => {
     setDesktopShortcut
   } = useApplicationInventory();
   const { showDialog } = useDialog();
+  const { locale, t } = useI18n();
   const [selectedApplicationId, setSelectedApplicationId] = useState(target && target.applicationId || null);
   const [targetContainerId, setTargetContainerId] = useState(target && target.containerId || null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -258,8 +260,8 @@ const ApplicationManager = ({ target }) => {
         editable: false,
         files: [],
         reason: selectedInstallationState === 'host-service'
-          ? 'Bu servis doğrudan sunucuya kurulmuş; Docker Compose kaynağı bulunmuyor.'
-          : 'Bu deaktif kurulumun çalışan container metadata’sı olmadığı için bağlı Compose kaynağı henüz doğrulanamıyor.'
+          ? t('applications.composeUnavailableHost')
+          : t('applications.composeUnavailableInactive')
       });
       return undefined;
     }
@@ -291,23 +293,23 @@ const ApplicationManager = ({ target }) => {
       });
 
     return () => { active = false; };
-  }, [selectedApplicationId, selectedInstallationState, canEditSelectedCompose]);
+  }, [canEditSelectedCompose, selectedApplicationId, selectedInstallationState, t]);
 
   const displayedApplications = useMemo(() => {
-    const query = searchQuery.trim().toLocaleLowerCase('tr-TR');
+    const query = searchQuery.trim().toLocaleLowerCase(locale);
     if (!query) return applications;
     return applications.filter((application) => (
       `${application.name} ${application.instanceName || ''} ${application.externalUrl || ''} ${(application.declaredUrls || []).join(' ')} ${application.category || ''}`
-        .toLocaleLowerCase('tr-TR')
+        .toLocaleLowerCase(locale)
         .includes(query)
     ));
-  }, [applications, searchQuery]);
+  }, [applications, locale, searchQuery]);
 
   const openApplication = (application) => {
     if (application.runtime.operationalState !== 'running') {
       showDialog({
-        title: 'Servis Kapalı',
-        message: 'Bu uygulamayı açmak için önce servisi başlatın.',
+        title: t('applications.serviceStoppedTitle'),
+        message: t('applications.serviceStoppedMessage'),
         type: 'warning'
       });
       return;
@@ -320,8 +322,8 @@ const ApplicationManager = ({ target }) => {
 
     if (!application.hostPort) {
       showDialog({
-        title: 'Erişim Adresi Bulunamadı',
-        message: 'Bu uygulama için açılabilir bir alan adı veya yayın portu bulunamadı.',
+        title: t('applications.noAccessTitle'),
+        message: t('applications.noAccessMessage'),
         type: 'info'
       });
       return;
@@ -330,8 +332,8 @@ const ApplicationManager = ({ target }) => {
     const localFoxOS = ['127.0.0.1', 'localhost'].includes(window.location.hostname);
     if (application.bindAddress === '127.0.0.1' && !localFoxOS) {
       showDialog({
-        title: 'Özel Erişim',
-        message: `Bu uygulama 127.0.0.1:${application.hostPort} üzerinde çalışıyor. Aynı portu SSH tüneliyle açın.`,
+        title: t('applications.privateAccessTitle'),
+        message: t('applications.privateAccessMessage', { port: application.hostPort }),
         type: 'info'
       });
       return;
@@ -347,8 +349,12 @@ const ApplicationManager = ({ target }) => {
     setMessage(null);
     try {
       await runApplicationAction(application, action);
-      const labels = { start: 'başlatıldı', stop: 'durduruldu', restart: 'yeniden başlatıldı' };
-      setMessage({ type: 'success', text: `${application.name} ${labels[action]}.` });
+      const labelKeys = {
+        start: 'applications.actionStarted',
+        stop: 'applications.actionStopped',
+        restart: 'applications.actionRestarted'
+      };
+      setMessage({ type: 'success', text: t('applications.actionSuccess', { name: application.name, action: t(labelKeys[action]) }) });
     } catch (actionError) {
       setMessage({ type: 'error', text: actionError.message });
     }
@@ -368,7 +374,7 @@ const ApplicationManager = ({ target }) => {
         setHostSettings(payload.settings);
         setHostBootState(payload.settings.bootEnabled ? 'enabled' : 'disabled');
         await refreshApplications({ quiet: true });
-        setMessage({ type: 'success', text: 'Ayar kaydedildi.' });
+        setMessage({ type: 'success', text: t('applications.settingSaved') });
       } catch (settingsError) {
         setMessage({ type: 'error', text: settingsError.message });
       } finally {
@@ -389,7 +395,7 @@ const ApplicationManager = ({ target }) => {
       const payload = await response.json();
       setContainerSettings(payload.settings);
       setRestartPolicy(payload.settings.restartPolicy);
-      setMessage({ type: 'success', text: 'Ayar kaydedildi.' });
+      setMessage({ type: 'success', text: t('applications.settingSaved') });
     } catch (settingsError) {
       setMessage({ type: 'error', text: settingsError.message });
     } finally {
@@ -406,7 +412,7 @@ const ApplicationManager = ({ target }) => {
       await setDesktopShortcut(selectedApplication, visible);
       setMessage({
         type: 'success',
-        text: visible ? 'Masaüstü kısayolu oluşturuldu.' : 'Masaüstü kısayolu kaldırıldı.'
+        text: visible ? t('applications.shortcutCreated') : t('applications.shortcutRemoved')
       });
     } catch (shortcutError) {
       setMessage({ type: 'error', text: shortcutError.message });
@@ -426,12 +432,12 @@ const ApplicationManager = ({ target }) => {
       setUpdateStatus(update);
       if (plan) {
         showDialog({
-          title: 'Güncellemeyi Uygula',
-          message: updateConfirmationMessage(plan),
+          title: t('applications.applyUpdateTitle'),
+          message: updateConfirmationMessage(plan, t),
           type: 'confirm',
-          confirmText: 'Güncelle',
-          cancelText: 'Vazgeç',
-          pendingText: 'Güncelleniyor…',
+          confirmText: t('applications.update'),
+          cancelText: t('common.cancel'),
+          pendingText: t('applications.updating'),
           onConfirm: () => runApplicationUpdate(plan)
         });
       }
@@ -456,7 +462,7 @@ const ApplicationManager = ({ target }) => {
         message: operation.message
       });
       await refreshApplications();
-      showDialog({ title: 'Güncelleme Tamamlandı', message: operation.message, type: 'success' });
+      showDialog({ title: t('applications.updateCompleteTitle'), message: operation.message, type: 'success' });
     } catch (updateError) {
       setMessage({ type: 'error', text: updateError.message });
     } finally {
@@ -467,12 +473,12 @@ const ApplicationManager = ({ target }) => {
   const confirmUpdateRollback = () => {
     if (!updateOperation || !updateOperation.rollbackAvailable) return;
     showDialog({
-      title: 'Güncellemeyi Geri Al',
-      message: 'Uygulama güncelleme öncesindeki imajlara ve şifreli veri yedeğine dönecek. Güncellemeden sonra oluşan veriler kaybolur.',
+      title: t('applications.rollbackUpdateTitle'),
+      message: t('applications.rollbackUpdateMessage'),
       type: 'warning',
-      confirmText: 'Geri Al',
-      cancelText: 'Vazgeç',
-      pendingText: 'Geri alınıyor…',
+      confirmText: t('applications.rollback'),
+      cancelText: t('common.cancel'),
+      pendingText: t('applications.rollingBack'),
       onConfirm: async () => {
         setUpdateApplying(true);
         setMessage(null);
@@ -540,11 +546,11 @@ const ApplicationManager = ({ target }) => {
 
   const confirmComposeSave = (file) => {
     showDialog({
-      title: 'Compose Dosyasını Kaydet',
-      message: 'YAML doğrulanacak, mevcut revision şifreli yedeklenecek ve gerçek sunucu dosyası atomik olarak değiştirilecek. Çalışan servis otomatik yeniden oluşturulmayacak.',
+      title: t('applications.saveComposeTitle'),
+      message: t('applications.saveComposeMessage'),
       type: 'confirm',
-      confirmText: 'Kaydet',
-      cancelText: 'Vazgeç',
+      confirmText: t('common.save'),
+      cancelText: t('common.cancel'),
       onConfirm: () => saveComposeFile(file)
     });
   };
@@ -563,14 +569,19 @@ const ApplicationManager = ({ target }) => {
       const payload = await response.json();
       const plan = payload.plan;
       const dnsChange = plan.dnsAutomation && plan.dnsAutomation.mutationRequired
-        ? ` Cloudflare üzerinde A kaydı ${plan.dnsAutomation.publicIpv4} adresine ayarlanacak${plan.dnsAutomation.removesIpv6 ? ` ve ${plan.dnsAutomation.removesIpv6} AAAA kaydı kaldırılacak` : ''}; işlem tamamlanamazsa DNS değişikliği geri alınacak.`
+        ? t('applications.dnsMutation', {
+          ip: plan.dnsAutomation.publicIpv4,
+          ipv6: plan.dnsAutomation.removesIpv6
+            ? t('applications.dnsRemoveIpv6', { count: plan.dnsAutomation.removesIpv6 })
+            : ''
+        })
         : '';
       showDialog({
-        title: 'Erişim Linki Ekle',
-        message: `https://${plan.domain} sunucu yönlendirmesi, TLS ve uygulama sağlığıyla doğrulanacak.${dnsChange} Yeni link birincil olur; mevcut erişim linkleri açık kalır.`,
+        title: t('applications.addAccessTitle'),
+        message: t('applications.addAccessMessage', { domain: plan.domain, dns: dnsChange }),
         type: 'confirm',
-        confirmText: 'Ekle',
-        cancelText: 'Vazgeç',
+        confirmText: t('applications.add'),
+        cancelText: t('common.cancel'),
         onConfirm: () => applyDomainPlan(plan)
       });
     } catch (domainError) {
@@ -604,7 +615,10 @@ const ApplicationManager = ({ target }) => {
       await refreshDomainStatus(applicationId);
       setDomainMessage({
         type: 'success',
-        text: `${plan.dnsAutomation && plan.dnsAutomation.mutationRequired ? 'Cloudflare DNS kaydıyla birlikte ' : ''}https://${plan.domain} erişim linki eklendi. Mevcut linkler açık bırakıldı.`
+        text: t('applications.accessAdded', {
+          dns: plan.dnsAutomation && plan.dnsAutomation.mutationRequired ? t('applications.withCloudflareDns') : '',
+          domain: plan.domain
+        })
       });
     } catch (domainError) {
       setDomainMessage({ type: 'error', text: domainError.message });
@@ -617,16 +631,16 @@ const ApplicationManager = ({ target }) => {
     const operation = domainStatus && domainStatus.latestOperation;
     if (!selectedApplication || !operation || !domainStatus.rollbackConfirmation) return;
     const applicationId = selectedApplication.id;
-    const previousAddress = operation.previousDomain ? `https://${operation.previousDomain}` : 'önceki erişim adresi';
+    const previousAddress = operation.previousDomain ? `https://${operation.previousDomain}` : t('applications.previousAccess');
     const dnsRollback = operation.dnsAutomation && operation.dnsAutomation.mutationRequired
-      ? ' Bu işlemde değiştirilen Cloudflare DNS kayıtları da önceki durumuna getirilecek.'
+      ? t('applications.dnsRollback')
       : '';
     showDialog({
-      title: 'Önceki Adrese Dön',
-      message: `Erişim linki yeniden ${previousAddress} olacak. Sonradan eklenen ${operation.primaryDomain} rotası güvenle kaldırılacak.${dnsRollback}`,
+      title: t('applications.rollbackAccessTitle'),
+      message: t('applications.rollbackAccessMessage', { previous: previousAddress, domain: operation.primaryDomain, dns: dnsRollback }),
       type: 'confirm',
-      confirmText: 'Geri Dön',
-      cancelText: 'Vazgeç',
+      confirmText: t('applications.rollbackAccessConfirm'),
+      cancelText: t('common.cancel'),
       onConfirm: async () => {
         setDomainApplying(true);
         setDomainMessage(null);
@@ -639,7 +653,7 @@ const ApplicationManager = ({ target }) => {
           });
           await refreshApplications();
           await refreshDomainStatus(applicationId);
-          setDomainMessage({ type: 'success', text: `Erişim linki ${previousAddress} olarak geri alındı.` });
+          setDomainMessage({ type: 'success', text: t('applications.accessRolledBack', { previous: previousAddress }) });
         } catch (domainError) {
           setDomainMessage({ type: 'error', text: domainError.message });
         } finally {
@@ -689,7 +703,7 @@ const ApplicationManager = ({ target }) => {
           onClick={closeApplication}
           style={{ background: 'transparent', color: '#aaa', border: 'none', padding: '0', marginBottom: '24px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}
         >
-          <ArrowLeft size={16} /> Uygulamalara Dön
+          <ArrowLeft size={16} /> {t('applications.backToApplications')}
         </button>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '18px', paddingBottom: '24px', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
@@ -710,29 +724,29 @@ const ApplicationManager = ({ target }) => {
         )}
 
         <section style={{ padding: '26px 0', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
-          <h3 style={{ margin: '0 0 14px 0', fontSize: '16px' }}>Kontroller</h3>
+          <h3 style={{ margin: '0 0 14px 0', fontSize: '16px' }}>{t('applications.controls')}</h3>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
             <button type="button" onClick={() => openApplication(selectedApplication)} disabled={!selectedApplication.capabilities.open || selectedApplication.runtime.operationalState !== 'running'} style={{ background: '#0ea5e9', color: '#fff', border: 'none', padding: '9px 14px', borderRadius: '8px', cursor: selectedApplication.capabilities.open && selectedApplication.runtime.operationalState === 'running' ? 'pointer' : 'not-allowed', opacity: selectedApplication.capabilities.open && selectedApplication.runtime.operationalState === 'running' ? 1 : 0.5, display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px', fontWeight: 'bold' }}>
-              <ExternalLink size={15} /> Aç
+              <ExternalLink size={15} /> {t('applications.open')}
             </button>
             {canStop ? (
               <button type="button" onClick={() => runAction(selectedApplication, 'stop')} disabled={Boolean(pendingAction)} style={{ background: 'rgba(255,255,255,0.08)', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 14px', borderRadius: '8px', cursor: pendingAction ? 'wait' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px' }}>
-                {pendingAction === 'stop' ? <Loader2 size={15} className="spin" /> : <Square size={15} />} Durdur
+                {pendingAction === 'stop' ? <Loader2 size={15} className="spin" /> : <Square size={15} />} {t('applications.stop')}
               </button>
             ) : (
               <button type="button" onClick={() => runAction(selectedApplication, 'start')} disabled={Boolean(pendingAction) || !canStart} style={{ background: 'rgba(255,255,255,0.08)', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 14px', borderRadius: '8px', cursor: pendingAction || !canStart ? 'not-allowed' : 'pointer', opacity: canStart ? 1 : 0.5, display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px' }}>
-                {pendingAction === 'start' ? <Loader2 size={15} className="spin" /> : <Play size={15} />} Başlat
+                {pendingAction === 'start' ? <Loader2 size={15} className="spin" /> : <Play size={15} />} {t('applications.start')}
               </button>
             )}
             <button type="button" onClick={() => runAction(selectedApplication, 'restart')} disabled={Boolean(pendingAction) || !canRestart} style={{ background: 'rgba(255,255,255,0.08)', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 14px', borderRadius: '8px', cursor: pendingAction || !canRestart ? 'not-allowed' : 'pointer', opacity: canRestart ? 1 : 0.5, display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px' }}>
-              {pendingAction === 'restart' ? <Loader2 size={15} className="spin" /> : <RotateCw size={15} />} Yeniden Başlat
+              {pendingAction === 'restart' ? <Loader2 size={15} className="spin" /> : <RotateCw size={15} />} {t('applications.restart')}
             </button>
             <button type="button" onClick={checkForUpdates} disabled={updateChecking || updateApplying || !selectedApplication.capabilities.checkUpdates} style={{ background: 'rgba(255,255,255,0.08)', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 14px', borderRadius: '8px', cursor: updateChecking || updateApplying ? 'wait' : selectedApplication.capabilities.checkUpdates ? 'pointer' : 'not-allowed', opacity: selectedApplication.capabilities.checkUpdates ? 1 : 0.5, display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px' }}>
-              {updateChecking || updateApplying ? <Loader2 size={15} className="spin" /> : <RotateCw size={15} />} {updateApplying ? 'Güncelleniyor...' : 'Güncellemeleri Denetle'}
+              {updateChecking || updateApplying ? <Loader2 size={15} className="spin" /> : <RotateCw size={15} />} {updateApplying ? t('applications.updating') : t('applications.checkUpdates')}
             </button>
             <button type="button" onClick={changeDesktopShortcut} disabled={shortcutSaving} style={{ background: 'rgba(255,255,255,0.08)', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 14px', borderRadius: '8px', cursor: shortcutSaving ? 'wait' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px' }}>
               {shortcutSaving ? <Loader2 size={15} className="spin" /> : selectedApplication.desktopShortcutVisible === false ? <Plus size={15} /> : <X size={15} />}
-              {selectedApplication.desktopShortcutVisible === false ? 'Masaüstüne Kısayol Oluştur' : 'Masaüstü Kısayolunu Kaldır'}
+              {selectedApplication.desktopShortcutVisible === false ? t('applications.createShortcut') : t('applications.removeShortcut')}
             </button>
           </div>
           {updateStatus && (
@@ -740,12 +754,12 @@ const ApplicationManager = ({ target }) => {
               <div>{updateStatus.message}</div>
               {(updateStatus.current && updateStatus.current.version || updateStatus.latest && updateStatus.latest.version) && (
                 <div style={{ marginTop: '4px', color: '#aaa', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '12px' }}>
-                  {updateStatus.current && updateStatus.current.version || 'bilinmiyor'} → {updateStatus.latest && updateStatus.latest.version || 'bilinmiyor'}
+                  {updateStatus.current && updateStatus.current.version || t('applications.unknown')} → {updateStatus.latest && updateStatus.latest.version || t('applications.unknown')}
                 </div>
               )}
               {updateOperation && updateOperation.rollbackAvailable && (
                 <button type="button" onClick={confirmUpdateRollback} disabled={updateApplying} style={{ marginTop: '10px', background: 'transparent', color: '#fbbf24', border: '1px solid rgba(245,158,11,0.5)', padding: '7px 11px', borderRadius: '8px', cursor: updateApplying ? 'wait' : 'pointer', fontSize: '12px' }}>
-                  Güncellemeyi Geri Al
+                  {t('applications.rollbackUpdateTitle')}
                 </button>
               )}
             </div>
@@ -753,8 +767,8 @@ const ApplicationManager = ({ target }) => {
         </section>
 
         <section style={{ padding: '26px 0', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
-          <h3 style={{ margin: '0 0 6px 0', fontSize: '16px' }}>Erişim Linkleri</h3>
-          <div style={{ marginBottom: '14px', color: '#888', fontSize: '13px' }}>Uygulamayı açan etkin adresler.</div>
+          <h3 style={{ margin: '0 0 6px 0', fontSize: '16px' }}>{t('applications.accessLinks')}</h3>
+          <div style={{ marginBottom: '14px', color: '#888', fontSize: '13px' }}>{t('applications.accessLinksDescription')}</div>
           {activeAccessUrls.length ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
               {activeAccessUrls.map((url) => {
@@ -762,24 +776,24 @@ const ApplicationManager = ({ target }) => {
                 return (
                   <div key={url} style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'stretch' }}>
                     <div style={{ flex: '1 1 280px', minWidth: 0, padding: '9px 12px', borderRadius: '8px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: '#ccc', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {url}{primary && <span style={{ marginLeft: '9px', color: '#75da85', fontFamily: 'inherit' }}>Birincil</span>}
+                      {url}{primary && <span style={{ marginLeft: '9px', color: '#75da85', fontFamily: 'inherit' }}>{t('applications.primary')}</span>}
                     </div>
                     <button type="button" onClick={() => window.open(url, '_blank', 'noopener,noreferrer')} style={{ background: 'rgba(255,255,255,0.08)', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 12px', borderRadius: '8px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px' }}>
-                      <ExternalLink size={14} /> Aç
+                      <ExternalLink size={14} /> {t('applications.open')}
                     </button>
                     <button
                       type="button"
                       onClick={async () => {
                         try {
-                          await copyText(url);
-                          setMessage({ type: 'success', text: 'Erişim linki kopyalandı.' });
+                          await copyText(url, t('applications.copyError'));
+                          setMessage({ type: 'success', text: t('applications.copied') });
                         } catch (copyError) {
                           setMessage({ type: 'error', text: copyError.message });
                         }
                       }}
                       style={{ background: 'rgba(255,255,255,0.08)', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 12px', borderRadius: '8px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px' }}
                     >
-                      <Copy size={14} /> Kopyala
+                      <Copy size={14} /> {t('applications.copy')}
                     </button>
                   </div>
                 );
@@ -790,28 +804,28 @@ const ApplicationManager = ({ target }) => {
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 {selectedApplication.declaredUrls.map((url) => (
                   <div key={url} style={{ padding: '9px 12px', borderRadius: '8px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: '#888', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {url} · tanımda kayıtlı, şu anda çalışmıyor
+                    {url} · {t('applications.declaredInactive')}
                   </div>
                 ))}
               </div>
             ) : (
-              <div style={{ color: '#888', fontSize: '13px' }}>Bu uygulama için yayınlanmış bir web adresi bulunamadı.</div>
+              <div style={{ color: '#888', fontSize: '13px' }}>{t('applications.noPublishedAddress')}</div>
             )
           )}
 
           <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
-            <div style={{ marginBottom: '8px', color: '#ccc', fontSize: '13px', fontWeight: 'bold' }}>Yeni Link Ekle</div>
+            <div style={{ marginBottom: '8px', color: '#ccc', fontSize: '13px', fontWeight: 'bold' }}>{t('applications.addNewLink')}</div>
             {canEditSelectedDomain ? (
               domainLoading && !domainStatus ? (
-                <div style={{ color: '#888', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}><Loader2 size={15} className="spin" /> Erişim linki okunuyor...</div>
+                <div style={{ color: '#888', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}><Loader2 size={15} className="spin" /> {t('applications.loadingAccess')}</div>
               ) : domainStatus && !domainStatus.editable ? (
                 <div style={{ color: '#888', fontSize: '13px', lineHeight: 1.5 }}>{domainStatus.reason}</div>
               ) : (
                 <>
                   <div style={{ marginBottom: '10px', color: '#888', fontSize: '13px', lineHeight: 1.5 }}>
                     {domainStatus && domainStatus.dnsAutomation && domainStatus.dnsAutomation.connected
-                      ? 'Yeni HTTPS adresini yazın. Bağlı Cloudflare hesabı bu alan adını kapsıyorsa gerekli DNS kaydı otomatik hazırlanır. Ekleme güvenle tamamlanamazsa hiçbir değişiklik yapılmadan sorun burada gösterilir.'
-                      : 'Yeni HTTPS adresini yazın. Cloudflare bağlantısı yoksa alan adının A kaydı önce bu sunucuya yönlenmiş olmalıdır. Ekleme güvenle tamamlanamazsa hiçbir değişiklik yapılmaz.'}
+                      ? t('applications.domainWithCloudflare')
+                      : t('applications.domainWithoutCloudflare')}
                   </div>
                   <form onSubmit={(event) => { event.preventDefault(); addDomain(); }} style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center' }}>
                     <input
@@ -819,13 +833,13 @@ const ApplicationManager = ({ target }) => {
                       value={domainInput}
                       onChange={(event) => { setDomainInput(event.target.value); setDomainMessage(null); }}
                       disabled={domainLoading || domainApplying}
-                      placeholder="uygulama.ornek.com"
+                      placeholder={t('applications.domainPlaceholder')}
                       autoComplete="off"
                       spellCheck={false}
                       style={{ flex: '1 1 280px', minWidth: 0, background: '#24242a', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 12px', borderRadius: '8px', outline: 'none', fontSize: '13px' }}
                     />
                     <button type="submit" disabled={domainLoading || domainApplying || !domainInput.trim()} style={{ background: '#0ea5e9', color: '#fff', border: 'none', padding: '9px 14px', borderRadius: '8px', cursor: domainLoading || domainApplying || !domainInput.trim() ? 'not-allowed' : 'pointer', opacity: domainLoading || domainApplying || !domainInput.trim() ? 0.5 : 1, display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px', fontWeight: 'bold' }}>
-                      {domainLoading || domainApplying ? <Loader2 size={15} className="spin" /> : <Save size={15} />} Ekle
+                      {domainLoading || domainApplying ? <Loader2 size={15} className="spin" /> : <Save size={15} />} {t('applications.add')}
                     </button>
                   </form>
 
@@ -837,63 +851,63 @@ const ApplicationManager = ({ target }) => {
 
                   {domainStatus && domainStatus.latestOperation && domainStatus.latestOperation.rollbackAvailable && (
                     <button type="button" onClick={rollbackDomain} disabled={domainApplying} style={{ marginTop: '12px', background: 'transparent', color: '#aaa', border: 'none', padding: 0, cursor: domainApplying ? 'wait' : 'pointer', textDecoration: 'underline', fontSize: '12px' }}>
-                      Önceki adrese dön: {domainStatus.latestOperation.previousDomain}
+                      {t('applications.returnPrevious', { domain: domainStatus.latestOperation.previousDomain })}
                     </button>
                   )}
                 </>
               )
             ) : (
               <div style={{ color: '#888', fontSize: '13px', lineHeight: 1.5 }}>
-                Bu uygulama için doğrulanmış bir web hedefi henüz bulunamadı. Sunucu taramasını yenileyip tekrar deneyin.
+                {t('applications.noVerifiedTarget')}
               </div>
             )}
           </div>
         </section>
 
         <section style={{ padding: '26px 0', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
-          <h3 style={{ margin: '0 0 6px 0', fontSize: '16px' }}>Otomatik Başlatma</h3>
+          <h3 style={{ margin: '0 0 6px 0', fontSize: '16px' }}>{t('applications.autostart')}</h3>
           <div style={{ marginBottom: '14px', color: '#888', fontSize: '13px' }}>
             {selectedInstallationState === 'host-service'
-              ? 'Sunucu yeniden başladığında systemd servisinin davranışı.'
-              : 'Sunucu veya Docker yeniden başladığında containerın davranışı.'}
+              ? t('applications.hostAutostartDescription')
+              : t('applications.containerAutostartDescription')}
           </div>
           {settingsLoading ? (
-            <div style={{ color: '#888', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}><Loader2 size={15} className="spin" /> Ayarlar okunuyor...</div>
+            <div style={{ color: '#888', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}><Loader2 size={15} className="spin" /> {t('applications.loadingSettings')}</div>
           ) : selectedInstallationState === 'host-service' && hostSettings ? (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center' }}>
               <select value={hostBootState} onChange={(event) => setHostBootState(event.target.value)} style={{ minWidth: '210px', background: '#24242a', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 12px', borderRadius: '8px', outline: 'none', fontSize: '13px' }}>
-                <option value="enabled">Açılışta başlat</option>
-                <option value="disabled">Açılışta başlatma</option>
+                <option value="enabled">{t('applications.startOnBoot')}</option>
+                <option value="disabled">{t('applications.doNotStartOnBoot')}</option>
               </select>
               <button type="button" onClick={saveContainerSettings} disabled={settingsSaving} style={{ background: '#0ea5e9', color: '#fff', border: 'none', padding: '9px 14px', borderRadius: '8px', cursor: settingsSaving ? 'not-allowed' : 'pointer', opacity: settingsSaving ? 0.5 : 1, display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px', fontWeight: 'bold' }}>
-                {settingsSaving ? <Loader2 size={15} className="spin" /> : <Save size={15} />} Kaydet
+                {settingsSaving ? <Loader2 size={15} className="spin" /> : <Save size={15} />} {t('common.save')}
               </button>
             </div>
           ) : !selectedContainerId ? (
             <div style={{ color: '#888', fontSize: '13px', lineHeight: 1.5 }}>
-              Çalışan container bulunmadığı için otomatik başlatma ayarı henüz kullanılamıyor.
+              {t('applications.unavailableAutostart')}
             </div>
           ) : (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center' }}>
               <select value={restartPolicy} onChange={(event) => setRestartPolicy(event.target.value)} disabled={!containerSettings} style={{ minWidth: '210px', background: '#24242a', color: '#fff', border: '1px solid rgba(255,255,255,0.16)', padding: '9px 12px', borderRadius: '8px', outline: 'none', fontSize: '13px' }}>
-                <option value="no">Kapalı</option>
-                <option value="unless-stopped">Elle durdurulana kadar</option>
-                <option value="always">Her zaman</option>
+                <option value="no">{t('applications.restartOff')}</option>
+                <option value="unless-stopped">{t('applications.restartUnlessStopped')}</option>
+                <option value="always">{t('applications.restartAlways')}</option>
               </select>
               <button type="button" onClick={saveContainerSettings} disabled={settingsSaving || !containerSettings} style={{ background: '#0ea5e9', color: '#fff', border: 'none', padding: '9px 14px', borderRadius: '8px', cursor: settingsSaving || !containerSettings ? 'not-allowed' : 'pointer', opacity: settingsSaving || !containerSettings ? 0.5 : 1, display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px', fontWeight: 'bold' }}>
-                {settingsSaving ? <Loader2 size={15} className="spin" /> : <Save size={15} />} Kaydet
+                {settingsSaving ? <Loader2 size={15} className="spin" /> : <Save size={15} />} {t('common.save')}
               </button>
             </div>
           )}
         </section>
 
         <section style={{ padding: '26px 0', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
-          <h3 style={{ margin: '0 0 6px 0', fontSize: '16px' }}>Compose Dosyaları</h3>
+          <h3 style={{ margin: '0 0 6px 0', fontSize: '16px' }}>{t('applications.composeFiles')}</h3>
           <div style={{ marginBottom: '14px', color: '#888', fontSize: '13px', lineHeight: 1.5 }}>
-            Docker metadata’sında bu uygulamaya bağlı olduğu doğrulanan gerçek Compose kaynakları.
+            {t('applications.composeDescription')}
           </div>
           {composeLoading ? (
-            <div style={{ color: '#888', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}><Loader2 size={15} className="spin" /> Compose dosyaları okunuyor...</div>
+            <div style={{ color: '#888', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}><Loader2 size={15} className="spin" /> {t('applications.loadingCompose')}</div>
           ) : composeError && !composeState ? (
             <div aria-live="polite" style={{ padding: '10px 12px', borderRadius: '8px', background: 'rgba(255,95,86,0.12)', border: '1px solid rgba(255,95,86,0.35)', color: '#ff8a84', fontSize: '13px', lineHeight: 1.5 }}>{composeError}</div>
           ) : composeState && !composeState.editable ? (
@@ -902,7 +916,7 @@ const ApplicationManager = ({ target }) => {
             <>
               {composeState.providerMayOverwrite && (
                 <div style={{ marginBottom: '14px', padding: '10px 12px', borderRadius: '8px', background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.35)', color: '#fbbf24', fontSize: '13px', lineHeight: 1.5 }}>
-                  Geçiş tamamlanana kadar mevcut sağlayıcının sonraki dağıtımı bu dosyayı yeniden yazabilir.
+                  {t('applications.providerMayOverwrite')}
                 </div>
               )}
               {composeState.files.length > 1 && (
@@ -924,10 +938,10 @@ const ApplicationManager = ({ target }) => {
               />
               <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '12px', marginTop: '10px' }}>
                 <div style={{ color: '#888', fontSize: '12px', lineHeight: 1.5, flex: '1 1 320px' }}>
-                  Kaydetme YAML’i doğrular ve önceki revision’ı şifreli yedekler. Çalışan servis kendiliğinden yeniden oluşturulmaz.
+                  {t('applications.composeSaveNote')}
                 </div>
                 <button type="button" onClick={() => confirmComposeSave(selectedComposeFile)} disabled={composeSaving || composeContent === selectedComposeFile.content} style={{ background: '#0ea5e9', color: '#fff', border: 'none', padding: '9px 14px', borderRadius: '8px', cursor: composeSaving || composeContent === selectedComposeFile.content ? 'not-allowed' : 'pointer', opacity: composeSaving || composeContent === selectedComposeFile.content ? 0.5 : 1, display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '13px', fontWeight: 'bold' }}>
-                  {composeSaving ? <Loader2 size={15} className="spin" /> : <Save size={15} />} Dosyayı Kaydet
+                  {composeSaving ? <Loader2 size={15} className="spin" /> : <Save size={15} />} {t('applications.saveFile')}
                 </button>
               </div>
               {composeMessage && (
@@ -938,22 +952,28 @@ const ApplicationManager = ({ target }) => {
               )}
             </>
           ) : (
-            <div style={{ color: '#888', fontSize: '13px' }}>Compose kaynağı bulunamadı.</div>
+            <div style={{ color: '#888', fontSize: '13px' }}>{t('applications.noCompose')}</div>
           )}
         </section>
 
         <section style={{ padding: '26px 0 0 0' }}>
-          <h3 style={{ margin: '0 0 14px 0', fontSize: '16px' }}>Uygulama</h3>
+          <h3 style={{ margin: '0 0 14px 0', fontSize: '16px' }}>{t('applications.application')}</h3>
           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 160px) minmax(0, 1fr)', rowGap: '10px', columnGap: '16px', fontSize: '13px', wordBreak: 'break-word' }}>
-            <div style={{ color: '#888' }}>Instance</div><div>{selectedApplication.instanceName || selectedApplication.runtime.containerName || 'Deaktif kurulum'}</div>
-            <div style={{ color: '#888' }}>{selectedApplication.installation.state === 'host-service' ? 'Servis' : 'Container'}</div><div>{selectedApplication.installation.state === 'host-service' ? selectedApplication.runtime.serviceUnit || 'systemd servisi' : selectedApplication.runtime.containerName || 'Çalışan container yok'}</div>
-            <div style={{ color: '#888' }}>Yönetim</div><div>{selectedApplication.installation && selectedApplication.installation.state === 'inactive-definition' ? 'Kurulum tanımı bulundu · şu anda çalışmıyor' : selectedApplication.installation && selectedApplication.installation.state === 'host-service' ? 'Sunucuya doğrudan kurulu · sunucu yönetiminde' : selectedApplication.managedByServer ? 'Sunucu tarafından yönetiliyor' : `${selectedApplication.provenance.source === 'coolify' ? 'Coolify' : 'Mevcut'} kurulumundan çalışıyor · geçiş tamamlanmadı`}</div>
-            <div style={{ color: '#888' }}>Durum</div><div>{selectedApplication.runtime.status || selectedApplication.runtime.state}</div>
+            <div style={{ color: '#888' }}>{t('applications.instance')}</div><div>{selectedApplication.instanceName || selectedApplication.runtime.containerName || t('applications.inactiveInstallation')}</div>
+            <div style={{ color: '#888' }}>{selectedApplication.installation.state === 'host-service' ? t('applications.service') : 'Container'}</div><div>{selectedApplication.installation.state === 'host-service' ? selectedApplication.runtime.serviceUnit || t('applications.systemdService') : selectedApplication.runtime.containerName || t('applications.noRunningContainer')}</div>
+            <div style={{ color: '#888' }}>{t('applications.management')}</div><div>{selectedApplication.installation && selectedApplication.installation.state === 'inactive-definition'
+              ? t('applications.inactiveManagement')
+              : selectedApplication.installation && selectedApplication.installation.state === 'host-service'
+                ? t('applications.hostManagement')
+                : selectedApplication.managedByServer
+                  ? t('applications.serverManaged')
+                  : t('applications.providerManaged', { provider: selectedApplication.provenance.source === 'coolify' ? 'Coolify' : t('applications.currentProvider') })}</div>
+            <div style={{ color: '#888' }}>{t('applications.state')}</div><div>{selectedApplication.runtime.status || selectedApplication.runtime.state}</div>
             {containerSettings && containerSettings.ports.length > 0 && (
-              <><div style={{ color: '#888' }}>Portlar</div><div>{containerSettings.ports.map((port) => `${port.hostIp}:${port.hostPort} → ${port.privatePort}`).join(', ')}</div></>
+              <><div style={{ color: '#888' }}>{t('applications.ports')}</div><div>{containerSettings.ports.map((port) => `${port.hostIp}:${port.hostPort} → ${port.privatePort}`).join(', ')}</div></>
             )}
             {containerSettings && containerSettings.mounts.length > 0 && (
-              <><div style={{ color: '#888' }}>Depolama</div><div>{containerSettings.mounts.map((mount) => `${mount.name || mount.source} → ${mount.destination}${mount.readOnly ? ' (salt okunur)' : ''}`).join(', ')}</div></>
+              <><div style={{ color: '#888' }}>{t('applications.storage')}</div><div>{containerSettings.mounts.map((mount) => `${mount.name || mount.source} → ${mount.destination}${mount.readOnly ? ` (${t('applications.readOnly')})` : ''}`).join(', ')}</div></>
             )}
           </div>
         </section>
@@ -965,10 +985,10 @@ const ApplicationManager = ({ target }) => {
     <div data-application-manager>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '16px', marginBottom: '20px' }}>
         <div style={{ color: '#888', fontSize: '13px', lineHeight: 1.5 }}>
-          Sunucuda keşfedilen kurulu uygulamalar ve servisler. Çalışan, deaktif ve doğrudan sunucuya kurulu her kayıt ayrı görünür.
+          {t('applications.inventoryDescription')}
         </div>
         <button type="button" onClick={() => refreshApplications().catch(() => {})} disabled={loading} style={{ background: 'rgba(255,255,255,0.1)', color: '#fff', border: '1px solid rgba(255,255,255,0.2)', padding: '8px 12px', borderRadius: '8px', cursor: loading ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 'bold' }}>
-          <RotateCw size={14} className={loading ? 'spin' : ''} /> Yenile
+          <RotateCw size={14} className={loading ? 'spin' : ''} /> {t('applications.refresh')}
         </button>
       </div>
 
@@ -976,7 +996,7 @@ const ApplicationManager = ({ target }) => {
         <Search size={16} color="#888" style={{ marginRight: '8px' }} />
         <input
           type="text"
-          placeholder="Uygulamalarda ara..."
+          placeholder={t('applications.searchPlaceholder')}
           value={searchQuery}
           onChange={(event) => setSearchQuery(event.target.value)}
           style={{ background: 'transparent', border: 'none', color: '#fff', outline: 'none', width: '100%', fontSize: '13px' }}
@@ -985,16 +1005,16 @@ const ApplicationManager = ({ target }) => {
 
       {error && applications.length > 0 && (
         <div style={{ marginBottom: '20px', padding: '10px 12px', borderRadius: '8px', background: 'rgba(255,95,86,0.12)', border: '1px solid rgba(255,95,86,0.35)', color: '#ff8a84', fontSize: '13px' }}>
-          Envanter yenilenemedi. Son doğrulanmış liste korunuyor: {error}
+          {t('applications.inventoryWarning', { error })}
         </div>
       )}
 
       {loading && applications.length === 0 ? (
-        <div style={{ padding: '40px', color: '#888', textAlign: 'center' }}><Loader2 size={20} className="spin" /> Uygulamalar yükleniyor...</div>
+        <div style={{ padding: '40px', color: '#888', textAlign: 'center' }}><Loader2 size={20} className="spin" /> {t('applications.loading')}</div>
       ) : error && applications.length === 0 ? (
         <div style={{ padding: '40px', color: '#ff8a84', textAlign: 'center' }}>{error}</div>
       ) : displayedApplications.length === 0 ? (
-        <div style={{ padding: '40px', color: '#888', textAlign: 'center' }}>Eşleşen uygulama bulunamadı.</div>
+        <div style={{ padding: '40px', color: '#888', textAlign: 'center' }}>{t('applications.empty')}</div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '16px' }}>
           {displayedApplications.map((application) => (
@@ -1005,7 +1025,7 @@ const ApplicationManager = ({ target }) => {
                 </div>
                 <div style={{ minWidth: 0 }}>
                   <h3 style={{ margin: '0 0 4px 0', fontSize: '16px', fontWeight: 'bold', overflow: 'hidden', textOverflow: 'ellipsis' }}>{application.name}</h3>
-                  <div style={{ fontSize: '12px', color: '#888', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{application.instanceName || application.runtime.containerName || 'Deaktif kurulum'}</div>
+                  <div style={{ fontSize: '12px', color: '#888', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{application.instanceName || application.runtime.containerName || t('applications.inactiveInstallation')}</div>
                 </div>
               </div>
               <div style={{ margin: '0 0 20px 0', fontSize: '12px', color: '#888', lineHeight: '1.5', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -1014,7 +1034,7 @@ const ApplicationManager = ({ target }) => {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '16px' }}>
                 <ApplicationStatus application={application} pendingAction={actions[application.id]} compact />
                 <button type="button" onClick={() => { setSelectedApplicationId(application.id); setMessage(null); }} style={{ background: 'transparent', color: '#0ea5e9', border: '1px solid #0ea5e9', padding: '6px 14px', borderRadius: '16px', fontSize: '13px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <Settings size={14} /> Ayarlar
+                  <Settings size={14} /> {t('applications.settings')}
                 </button>
               </div>
             </div>

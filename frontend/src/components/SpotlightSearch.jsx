@@ -20,17 +20,18 @@ import {
 import ApplicationLogo from './ApplicationLogo';
 import { apiFetch } from '../api';
 import { normalizeSpotlightText, searchSpotlightItems } from '../utils/spotlightSearch';
+import { useI18n } from '../contexts/LocaleContext';
 
 const resultIcon = (icon) => (
   <span className="spotlight-result-icon" aria-hidden="true">{icon}</span>
 );
 
-const applicationStateLabel = (application) => {
+const applicationStateLabel = (application, t) => {
   const state = application.runtime?.operationalState || application.runtime?.state;
-  if (state === 'running') return 'Çalışıyor';
-  if (state === 'paused') return 'Duraklatıldı';
-  if (state === 'starting') return 'Başlatılıyor';
-  return 'Kapalı';
+  if (state === 'running') return t('spotlight.applicationStateRunning');
+  if (state === 'paused') return t('spotlight.applicationStatePaused');
+  if (state === 'starting') return t('spotlight.applicationStateStarting');
+  return t('spotlight.applicationStateStopped');
 };
 
 const SpotlightSearch = ({
@@ -43,6 +44,7 @@ const SpotlightSearch = ({
   onOpenWindow,
   onRefreshDesktop
 }) => {
+  const { t } = useI18n();
   const inputRef = useRef(null);
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -54,30 +56,30 @@ const SpotlightSearch = ({
   const openSettings = useCallback((tab) => () => onOpenWindow({
     id: 'settings',
     type: 'settings',
-    title: 'Ayarlar',
+    title: t('common.settings'),
     component: null,
     width: 1000,
     height: 680,
     navigation: { tab, requestId: Date.now() }
-  }), [onOpenWindow]);
+  }), [onOpenWindow, t]);
 
   const items = useMemo(() => [
     {
       id: 'system-server',
-      title: 'Sunucu',
-      subtitle: 'Host durumu ve containerlar',
-      category: 'FoxOS',
+      title: t('common.server'),
+      subtitle: t('spotlight.serverSubtitle'),
+      category: t('spotlight.categoryFoxos'),
       keywords: ['host', 'docker', 'container', 'cpu', 'ram', 'disk'],
       icon: resultIcon(<Gauge size={20} />),
       featured: true,
       priority: 10,
-      run: openSystemWindow({ id: 'server', type: 'server', title: 'Sunucu', component: null, width: 1050, height: 680 })
+      run: openSystemWindow({ id: 'server', type: 'server', title: t('common.server'), component: null, width: 1050, height: 680 })
     },
     {
       id: 'settings-applications',
-      title: 'Uygulama Yöneticisi',
-      subtitle: 'Uygulamaları ve servisleri yönet',
-      category: 'Ayarlar',
+      title: t('spotlight.applicationManager'),
+      subtitle: t('spotlight.applicationsSubtitle'),
+      category: t('spotlight.categorySettings'),
       keywords: ['uygulamalar', 'servisler', 'containers', 'docker'],
       icon: resultIcon(<Box size={20} />),
       featured: true,
@@ -86,20 +88,20 @@ const SpotlightSearch = ({
     },
     {
       id: 'system-files',
-      title: 'Dosyalar',
-      subtitle: 'Sunucu dosyalarını aç',
-      category: 'FoxOS',
+      title: t('common.files'),
+      subtitle: t('spotlight.filesSubtitle'),
+      category: t('spotlight.categoryFoxos'),
       keywords: ['finder', 'belgeler', 'resimler', 'masaustu', 'server files'],
       icon: resultIcon(<FolderOpen size={20} />),
       featured: true,
       priority: 30,
-      run: openSystemWindow({ id: 'files', type: 'files', title: 'Dosyalar', component: null, initialPath: 'Masaüstü', width: 900, height: 600 })
+      run: openSystemWindow({ id: 'files', type: 'files', title: t('common.files'), component: null, initialPath: 'Masaüstü', width: 900, height: 600 })
     },
     {
       id: 'system-codex',
       title: 'Codex',
-      subtitle: 'Sunucu asistanını aç',
-      category: 'FoxOS',
+      subtitle: t('spotlight.codexSubtitle'),
+      category: t('spotlight.categoryFoxos'),
       keywords: ['ai', 'yapay zeka', 'asistan', 'chat'],
       icon: resultIcon(<Bot size={20} />),
       featured: true,
@@ -108,9 +110,9 @@ const SpotlightSearch = ({
     },
     {
       id: 'system-calendar',
-      title: 'Takvim',
-      subtitle: 'Etkinlikleri görüntüle ve düzenle',
-      category: 'FoxOS',
+      title: t('spotlight.calendar'),
+      subtitle: t('spotlight.calendarSubtitle'),
+      category: t('spotlight.categoryFoxos'),
       keywords: ['calendar', 'etkinlik', 'randevu', 'ajanda', 'tarih'],
       icon: resultIcon(<CalendarDays size={20} />),
       featured: true,
@@ -118,7 +120,7 @@ const SpotlightSearch = ({
       run: () => onOpenWindow({
         id: 'calendar',
         type: 'calendar',
-        title: 'Takvim',
+        title: t('common.calendar'),
         component: null,
         width: 920,
         height: 640,
@@ -127,20 +129,20 @@ const SpotlightSearch = ({
     },
     {
       id: 'system-weather',
-      title: 'Hava Durumu',
-      subtitle: 'Anlık hava ve 7 günlük tahmin',
-      category: 'FoxOS',
+      title: t('common.weather'),
+      subtitle: t('spotlight.weatherSubtitle'),
+      category: t('spotlight.categoryFoxos'),
       keywords: ['weather', 'hava', 'sicaklik', 'yagmur', 'tahmin', 'sehir'],
       icon: resultIcon(<CloudSun size={20} />),
       featured: true,
       priority: 36,
-      run: openSystemWindow({ id: 'weather', type: 'weather', title: 'Hava Durumu', component: null, width: 780, height: 590 })
+      run: openSystemWindow({ id: 'weather', type: 'weather', title: t('common.weather'), component: null, width: 780, height: 590 })
     },
     {
       id: 'system-terminal',
       title: 'Terminal',
-      subtitle: 'Host terminalini aç',
-      category: 'FoxOS',
+      subtitle: t('spotlight.terminalSubtitle'),
+      category: t('spotlight.categoryFoxos'),
       keywords: ['shell', 'komut', 'console', 'pty'],
       icon: resultIcon(<Terminal size={20} />),
       featured: true,
@@ -149,20 +151,20 @@ const SpotlightSearch = ({
     },
     {
       id: 'system-store',
-      title: 'Mağaza',
-      subtitle: 'FoxOS uygulama mağazasını aç',
-      category: 'FoxOS',
+      title: t('spotlight.store'),
+      subtitle: t('spotlight.storeSubtitle'),
+      category: t('spotlight.categoryFoxos'),
       keywords: ['store', 'app store', 'uygulama kur'],
       icon: resultIcon(<Box size={20} />),
       featured: true,
       priority: 60,
-      run: openSystemWindow({ id: 'store', type: 'store', title: 'Mağaza', component: null, width: 1200, height: 750 })
+      run: openSystemWindow({ id: 'store', type: 'store', title: t('spotlight.store'), component: null, width: 1200, height: 750 })
     },
     {
       id: 'system-settings',
-      title: 'Ayarlar',
-      subtitle: 'FoxOS ayarlarını aç',
-      category: 'FoxOS',
+      title: t('common.settings'),
+      subtitle: t('spotlight.settingsSubtitle'),
+      category: t('spotlight.categoryFoxos'),
       keywords: ['settings', 'genel', 'tercihler'],
       icon: resultIcon(<Settings size={20} />),
       featured: true,
@@ -171,9 +173,9 @@ const SpotlightSearch = ({
     },
     {
       id: 'settings-connections',
-      title: 'Bağlantılar',
-      subtitle: 'Takvim hesapları, Codex, Gemini ve diğer servisler',
-      category: 'Ayarlar',
+      title: t('common.connections'),
+      subtitle: t('spotlight.connectionsSubtitle'),
+      category: t('spotlight.categorySettings'),
       keywords: ['connections', 'hesaplar', 'entegrasyonlar'],
       icon: resultIcon(<Link2 size={20} />),
       priority: 80,
@@ -181,9 +183,9 @@ const SpotlightSearch = ({
     },
     {
       id: 'settings-migration',
-      title: 'Sunucu Geçişi',
-      subtitle: 'Mevcut kaynakları incele ve geçir',
-      category: 'Ayarlar',
+      title: t('spotlight.serverMigration'),
+      subtitle: t('spotlight.migrationSubtitle'),
+      category: t('spotlight.categorySettings'),
       keywords: ['migration', 'tasima', 'kaynaklar', 'coolify'],
       icon: resultIcon(<Server size={20} />),
       priority: 90,
@@ -191,19 +193,19 @@ const SpotlightSearch = ({
     },
     {
       id: 'system-trash',
-      title: 'Çöp Kutusu',
-      subtitle: 'Silinen dosyaları görüntüle',
-      category: 'FoxOS',
+      title: t('dock.trash'),
+      subtitle: t('spotlight.trashSubtitle'),
+      category: t('spotlight.categoryFoxos'),
       keywords: ['trash', 'silinenler'],
       icon: resultIcon(<Trash2 size={20} />),
       priority: 100,
-      run: openSystemWindow({ id: 'trash', type: 'files', title: 'Çöp Kutusu', component: null, initialPath: 'Çöp Kutusu', width: 900, height: 600 })
+      run: openSystemWindow({ id: 'trash', type: 'files', title: t('dock.trash'), component: null, initialPath: 'Çöp Kutusu', width: 900, height: 600 })
     },
     ...applications.map((application, index) => ({
       id: `application-${application.id}`,
       title: application.name,
-      subtitle: `${applicationStateLabel(application)} · Sunucu uygulaması`,
-      category: 'Uygulamalar',
+      subtitle: `${applicationStateLabel(application, t)} · ${t('spotlight.serverApplication')}`,
+      category: t('spotlight.categoryApplications'),
       keywords: [application.id, application.image, application.externalUrl, 'uygulama'],
       icon: (
         <span className="spotlight-result-icon is-application" aria-hidden="true">
@@ -216,8 +218,8 @@ const SpotlightSearch = ({
     ...fileResults.map((file, index) => ({
       id: `file-${file.id}`,
       title: file.name,
-      subtitle: `${file.parentPath || '/'} · ${file.type === 'folder' ? 'Klasör' : 'Dosya'}`,
-      category: 'Dosyalar',
+      subtitle: `${file.parentPath || '/'} · ${file.type === 'folder' ? t('spotlight.folder') : t('spotlight.file')}`,
+      category: t('spotlight.categoryFiles'),
       keywords: [file.path, file.ext, file.type, 'dosya', 'klasor'],
       icon: resultIcon(file.type === 'folder' ? <Folder size={20} /> : <File size={20} />),
       priority: 300 + index,
@@ -225,9 +227,9 @@ const SpotlightSearch = ({
     })),
     {
       id: 'action-refresh',
-      title: 'Masaüstünü Yenile',
-      subtitle: 'Dosya ve uygulama listesini güncelle',
-      category: 'Eylemler',
+      title: t('spotlight.refreshDesktop'),
+      subtitle: t('spotlight.refreshDesktopSubtitle'),
+      category: t('spotlight.categoryActions'),
       keywords: ['refresh', 'yenile', 'guncelle'],
       icon: resultIcon(<RefreshCw size={20} />),
       priority: 400,
@@ -235,15 +237,15 @@ const SpotlightSearch = ({
     },
     {
       id: 'action-lock',
-      title: 'Ekranı Kilitle',
-      subtitle: 'FoxOS oturumunu kilitle',
-      category: 'Eylemler',
+      title: t('spotlight.lockScreen'),
+      subtitle: t('spotlight.lockScreenSubtitle'),
+      category: t('spotlight.categoryActions'),
       keywords: ['lock', 'cikis', 'oturum'],
       icon: resultIcon(<Lock size={20} />),
       priority: 410,
       run: onLock
     }
-  ], [applications, fileResults, onLock, onOpenApplication, onOpenFileResult, onOpenWindow, onRefreshDesktop, openSettings, openSystemWindow]);
+  ], [applications, fileResults, onLock, onOpenApplication, onOpenFileResult, onOpenWindow, onRefreshDesktop, openSettings, openSystemWindow, t]);
 
   const results = useMemo(() => searchSpotlightItems(items, query, 12), [items, query]);
   const activeIndex = results.length ? Math.min(selectedIndex, results.length - 1) : 0;
@@ -282,7 +284,7 @@ const SpotlightSearch = ({
       } catch (error) {
         if (error.name === 'AbortError') return;
         setFileResults([]);
-        setFileSearchError(error.message || 'Dosya araması tamamlanamadı.');
+        setFileSearchError(error.message || t('spotlight.fileSearchError'));
       } finally {
         if (!controller.signal.aborted) setFileSearchLoading(false);
       }
@@ -292,7 +294,7 @@ const SpotlightSearch = ({
       window.clearTimeout(timeout);
       controller.abort();
     };
-  }, [isOpen, query]);
+  }, [isOpen, query, t]);
 
   if (!isOpen) return null;
 
@@ -330,7 +332,7 @@ const SpotlightSearch = ({
         className="spotlight-panel"
         role="dialog"
         aria-modal="true"
-        aria-label="FoxOS Arama"
+        aria-label={t('spotlight.dialogLabel')}
         onPointerDown={(event) => event.stopPropagation()}
       >
         <div className="spotlight-input-row">
@@ -341,8 +343,8 @@ const SpotlightSearch = ({
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Uygulama, ayar veya dosya ara"
-            aria-label="FoxOS’ta ara"
+            placeholder={t('spotlight.placeholder')}
+            aria-label={t('shell.search')}
             aria-controls="spotlight-results"
             aria-activedescendant={results[activeIndex] ? `spotlight-option-${results[activeIndex].id}` : undefined}
             aria-autocomplete="list"
@@ -376,20 +378,24 @@ const SpotlightSearch = ({
           )) : fileSearchLoading ? (
             <div className="spotlight-empty">
               <RefreshCw size={22} className="spin" aria-hidden="true" />
-              <span>FoxOS dosyaları aranıyor…</span>
+              <span>{t('spotlight.searchingFoxosFiles')}</span>
             </div>
           ) : (
             <div className="spotlight-empty">
               <Search size={22} aria-hidden="true" />
-              <span>{fileSearchError || `“${query}” için sonuç bulunamadı.`}</span>
+              <span>{fileSearchError || t('spotlight.noResults', { query })}</span>
             </div>
           )}
         </div>
 
         <footer className="spotlight-footer">
-          <span><kbd>↑</kbd><kbd>↓</kbd> seç</span>
-          <span><kbd>Enter</kbd> aç</span>
-          <span>{fileSearchLoading ? 'Dosyalar aranıyor…' : query ? `${results.length} sonuç` : 'Hızlı Erişim'}</span>
+          <span><kbd>↑</kbd><kbd>↓</kbd> {t('spotlight.select')}</span>
+          <span><kbd>Enter</kbd> {t('spotlight.open')}</span>
+          <span>{fileSearchLoading
+            ? t('spotlight.searchingFiles')
+            : query
+              ? t('spotlight.resultCount', { count: results.length })
+              : t('spotlight.quickAccess')}</span>
         </footer>
       </section>
     </div>

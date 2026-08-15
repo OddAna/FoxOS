@@ -19,22 +19,25 @@ import {
 } from 'lucide-react';
 import { apiFetch } from '../api';
 import { publishWeatherUpdate } from '../utils/weatherStatus';
+import { useI18n } from '../contexts/LocaleContext';
 import './WeatherApp.css';
 
 const weatherDetails = (code, isDay = true) => {
   const value = Number(code);
-  if (value === 0) return { label: 'Açık', Icon: Sun };
-  if ([1, 2].includes(value)) return { label: 'Parçalı bulutlu', Icon: CloudSun };
-  if (value === 3) return { label: 'Kapalı', Icon: Cloud };
-  if ([45, 48].includes(value)) return { label: 'Sisli', Icon: CloudFog };
-  if ([51, 53, 55, 56, 57].includes(value)) return { label: 'Çisenti', Icon: CloudDrizzle };
-  if ([61, 63, 65, 66, 67, 80, 81, 82].includes(value)) return { label: 'Yağmurlu', Icon: CloudRain };
-  if ([71, 73, 75, 77, 85, 86].includes(value)) return { label: 'Karlı', Icon: Snowflake };
-  if ([95, 96, 99].includes(value)) return { label: 'Gök gürültülü', Icon: CloudLightning };
-  return { label: isDay ? 'Hava durumu' : 'Gece', Icon: CloudSun };
+  if (value === 0) return { labelKey: 'weatherApp.conditions.clear', Icon: Sun };
+  if ([1, 2].includes(value)) return { labelKey: 'weatherApp.conditions.partlyCloudy', Icon: CloudSun };
+  if (value === 3) return { labelKey: 'weatherApp.conditions.overcast', Icon: Cloud };
+  if ([45, 48].includes(value)) return { labelKey: 'weatherApp.conditions.fog', Icon: CloudFog };
+  if ([51, 53, 55, 56, 57].includes(value)) return { labelKey: 'weatherApp.conditions.drizzle', Icon: CloudDrizzle };
+  if ([61, 63, 65, 66, 67, 80, 81, 82].includes(value)) return { labelKey: 'weatherApp.conditions.rain', Icon: CloudRain };
+  if ([71, 73, 75, 77, 85, 86].includes(value)) return { labelKey: 'weatherApp.conditions.snow', Icon: Snowflake };
+  if ([95, 96, 99].includes(value)) return { labelKey: 'weatherApp.conditions.thunderstorm', Icon: CloudLightning };
+  return { labelKey: isDay ? 'weatherApp.conditions.weather' : 'weatherApp.conditions.night', Icon: CloudSun };
 };
 
-const rounded = (value, suffix = '') => Number.isFinite(value) ? `${Math.round(value)}${suffix}` : '—';
+const rounded = (value, formatNumber, suffix = '', maximumFractionDigits = 0) => Number.isFinite(value)
+  ? `${formatNumber(value, { maximumFractionDigits })}${suffix}`
+  : '—';
 
 const locationLabel = (location) => [
   location.name,
@@ -42,12 +45,10 @@ const locationLabel = (location) => [
   location.country
 ].filter(Boolean).join(', ');
 
-const dayLabel = (date, index) => {
-  if (index === 0) return 'Bugün';
-  return new Date(`${date}T12:00:00`).toLocaleDateString('tr-TR', { weekday: 'short', day: 'numeric' });
+const dayLabel = (date, index, t, formatDate) => {
+  if (index === 0) return t('weatherApp.today');
+  return formatDate(`${date}T12:00:00`, { weekday: 'short', day: 'numeric' });
 };
-
-const clockLabel = (value) => typeof value === 'string' && value.includes('T') ? value.slice(-5) : '—';
 
 const WeatherIcon = ({ code, isDay = true, size = 28 }) => {
   const { Icon } = weatherDetails(code, isDay);
@@ -55,6 +56,7 @@ const WeatherIcon = ({ code, isDay = true, size = 28 }) => {
 };
 
 const WeatherApp = () => {
+  const { formatDate, formatNumber, formatTime, measurementSystem, t } = useI18n();
   const [weather, setWeather] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -75,11 +77,11 @@ const WeatherApp = () => {
       setLocationMode(payload.configured !== true);
       setError('');
     } catch (requestError) {
-      setError(requestError.message || 'Hava durumu yüklenemedi.');
+      setError(requestError.message || t('weatherApp.loadError'));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     loadWeather();
@@ -97,7 +99,7 @@ const WeatherApp = () => {
       setLocationResults(Array.isArray(payload.locations) ? payload.locations : []);
     } catch (requestError) {
       setLocationResults([]);
-      setError(requestError.message || 'Konum aranamadı.');
+      setError(requestError.message || t('weatherApp.searchError'));
     } finally {
       setSearching(false);
       setLocationSearchComplete(true);
@@ -120,7 +122,7 @@ const WeatherApp = () => {
       setLocationResults([]);
       await loadWeather({ force: true });
     } catch (requestError) {
-      setError(requestError.message || 'Konum kaydedilemedi.');
+      setError(requestError.message || t('weatherApp.saveError'));
     } finally {
       setSavingLocation(false);
     }
@@ -130,7 +132,7 @@ const WeatherApp = () => {
     return (
       <div className="weather-app weather-loading">
         <RefreshCw size={24} className="spin" />
-        <span>Hava durumu yükleniyor…</span>
+        <span>{t('weatherApp.loading')}</span>
       </div>
     );
   }
@@ -139,16 +141,16 @@ const WeatherApp = () => {
     return (
       <div className="weather-app">
         <header className="weather-toolbar">
-          <div className="weather-toolbar-title"><CloudSun size={21} /> <strong>Hava Durumu</strong></div>
+          <div className="weather-toolbar-title"><CloudSun size={21} /> <strong>{t('weatherApp.title')}</strong></div>
           {weather?.configured === true && (
-            <button type="button" className="weather-secondary-button" onClick={() => setLocationMode(false)}>Vazgeç</button>
+            <button type="button" className="weather-secondary-button" onClick={() => setLocationMode(false)}>{t('common.cancel')}</button>
           )}
         </header>
         <main className="weather-location-picker">
           <div className="weather-location-intro">
             <span className="weather-location-icon"><MapPin size={27} /></span>
-            <h2>Şehrini seç</h2>
-            <p>Anlık hava durumu ve yedi günlük tahmin için şehir veya ilçe ara.</p>
+            <h2>{t('weatherApp.selectCity')}</h2>
+            <p>{t('weatherApp.selectDescription')}</p>
           </div>
           <form className="weather-location-search" onSubmit={searchLocations}>
             <Search size={18} aria-hidden="true" />
@@ -159,14 +161,14 @@ const WeatherApp = () => {
                 setLocationResults([]);
                 setLocationSearchComplete(false);
               }}
-              placeholder="Örn. İstanbul, Berlin"
-              aria-label="Şehir veya ilçe ara"
+              placeholder={t('weatherApp.locationPlaceholder')}
+              aria-label={t('weatherApp.locationSearchLabel')}
               minLength={2}
               maxLength={80}
               autoFocus
             />
             <button type="submit" disabled={locationQuery.trim().length < 2 || searching}>
-              {searching ? 'Aranıyor…' : 'Ara'}
+              {t(searching ? 'weatherApp.searching' : 'common.search')}
             </button>
           </form>
           {error && <div className="weather-error" role="alert">{error}</div>}
@@ -185,7 +187,7 @@ const WeatherApp = () => {
             ))}
             {!searching && locationQuery && locationResults.length === 0 && !error && (
               <p className="weather-location-hint">
-                {locationSearchComplete ? 'Bu arama için konum bulunamadı.' : 'Aramak için Enter’a bas.'}
+                {t(locationSearchComplete ? 'weatherApp.noLocation' : 'weatherApp.pressEnter')}
               </p>
             )}
           </div>
@@ -196,6 +198,24 @@ const WeatherApp = () => {
 
   const currentDetails = weatherDetails(weather.current.weatherCode, weather.current.isDay);
   const CurrentIcon = currentDetails.Icon;
+  const temperatureLabel = (value) => rounded(
+    measurementSystem === 'imperial' ? (value * 9 / 5) + 32 : value,
+    formatNumber,
+    measurementSystem === 'imperial' ? '°F' : '°C'
+  );
+  const windLabel = (value) => t(
+    measurementSystem === 'imperial' ? 'weatherApp.windImperial' : 'weatherApp.windMetric',
+    { value: rounded(measurementSystem === 'imperial' ? value * 0.621371 : value, formatNumber) }
+  );
+  const precipitationLabel = (value) => t(
+    measurementSystem === 'imperial' ? 'weatherApp.precipitationImperial' : 'weatherApp.precipitationMetric',
+    { value: rounded(measurementSystem === 'imperial' ? value / 25.4 : value, formatNumber, '', measurementSystem === 'imperial' ? 2 : 1) }
+  );
+  const clockLabel = (value) => {
+    if (typeof value !== 'string' || !value.includes('T')) return '—';
+    const [hour, minute] = value.slice(-5).split(':').map(Number);
+    return formatTime(new Date(Date.UTC(2000, 0, 1, hour, minute)), { timeZone: 'UTC' });
+  };
 
   return (
     <div className="weather-app">
@@ -208,8 +228,8 @@ const WeatherApp = () => {
           </div>
         </div>
         <div className="weather-toolbar-actions">
-          <button type="button" className="weather-secondary-button" onClick={() => setLocationMode(true)}>Konumu Değiştir</button>
-          <button type="button" className="weather-icon-button" onClick={() => loadWeather({ force: true })} disabled={loading} aria-label="Hava durumunu yenile">
+          <button type="button" className="weather-secondary-button" onClick={() => setLocationMode(true)}>{t('weatherApp.changeLocation')}</button>
+          <button type="button" className="weather-icon-button" onClick={() => loadWeather({ force: true })} disabled={loading} aria-label={t('weatherApp.refreshLabel')}>
             <RefreshCw size={16} className={loading ? 'spin' : ''} />
           </button>
         </div>
@@ -222,31 +242,31 @@ const WeatherApp = () => {
           <div className="weather-current-primary">
             <CurrentIcon size={88} strokeWidth={1.15} aria-hidden="true" />
             <div>
-              <div className="weather-temperature">{rounded(weather.current.temperature, '°')}</div>
-              <strong>{currentDetails.label}</strong>
-              <span>Hissedilen {rounded(weather.current.apparentTemperature, '°')}</span>
+              <div className="weather-temperature">{temperatureLabel(weather.current.temperature)}</div>
+              <strong>{t(currentDetails.labelKey)}</strong>
+              <span>{t('weatherApp.feelsLike', { temperature: temperatureLabel(weather.current.apparentTemperature) })}</span>
             </div>
           </div>
           <div className="weather-current-metrics">
-            <div><Droplets size={18} /><span>Nem<strong>{rounded(weather.current.relativeHumidity, '%')}</strong></span></div>
-            <div><Wind size={18} /><span>Rüzgâr<strong>{rounded(weather.current.windSpeed, ' km/sa')}</strong></span></div>
-            <div><Umbrella size={18} /><span>Yağış<strong>{rounded(weather.current.precipitation, ' mm')}</strong></span></div>
+            <div><Droplets size={18} /><span>{t('weatherApp.humidity')}<strong>{rounded(weather.current.relativeHumidity, formatNumber, '%')}</strong></span></div>
+            <div><Wind size={18} /><span>{t('weatherApp.wind')}<strong>{windLabel(weather.current.windSpeed)}</strong></span></div>
+            <div><Umbrella size={18} /><span>{t('weatherApp.precipitation')}<strong>{precipitationLabel(weather.current.precipitation)}</strong></span></div>
           </div>
         </section>
 
-        <section className="weather-forecast" aria-label="Yedi günlük tahmin">
+        <section className="weather-forecast" aria-label={t('weatherApp.forecastLabel')}>
           <div className="weather-section-heading">
-            <h2>7 Günlük Tahmin</h2>
+            <h2>{t('weatherApp.forecastTitle')}</h2>
             <span>{locationLabel(weather.location)}</span>
           </div>
           <div className="weather-days">
             {weather.daily.map((day, index) => (
               <article key={day.date} className="weather-day">
-                <strong>{dayLabel(day.date, index)}</strong>
+                <strong>{dayLabel(day.date, index, t, formatDate)}</strong>
                 <WeatherIcon code={day.weatherCode} size={27} />
-                <span className="weather-day-condition">{weatherDetails(day.weatherCode).label}</span>
-                <span className="weather-day-rain"><Droplets size={12} /> {rounded(day.precipitationProbability, '%')}</span>
-                <span className="weather-day-temperatures"><b>{rounded(day.temperatureMax, '°')}</b> {rounded(day.temperatureMin, '°')}</span>
+                <span className="weather-day-condition">{t(weatherDetails(day.weatherCode).labelKey)}</span>
+                <span className="weather-day-rain"><Droplets size={12} /> {rounded(day.precipitationProbability, formatNumber, '%')}</span>
+                <span className="weather-day-temperatures"><b>{temperatureLabel(day.temperatureMax)}</b> {temperatureLabel(day.temperatureMin)}</span>
               </article>
             ))}
           </div>
@@ -254,15 +274,15 @@ const WeatherApp = () => {
 
         {weather.daily[0] && (
           <section className="weather-sun-times">
-            <div><Sunrise size={19} /><span>Gün doğumu<strong>{clockLabel(weather.daily[0].sunrise)}</strong></span></div>
-            <div><Sunset size={19} /><span>Gün batımı<strong>{clockLabel(weather.daily[0].sunset)}</strong></span></div>
+            <div><Sunrise size={19} /><span>{t('weatherApp.sunrise')}<strong>{clockLabel(weather.daily[0].sunrise)}</strong></span></div>
+            <div><Sunset size={19} /><span>{t('weatherApp.sunset')}<strong>{clockLabel(weather.daily[0].sunset)}</strong></span></div>
           </section>
         )}
       </main>
 
       <footer className="weather-footer">
-        <span>{new Date(weather.fetchedAt).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })} itibarıyla</span>
-        <a href={weather.attributionUrl} target="_blank" rel="noreferrer">Tahmin verisi: Open-Meteo</a>
+        <span>{t('weatherApp.asOf', { time: formatTime(weather.fetchedAt) })}</span>
+        <a href={weather.attributionUrl} target="_blank" rel="noreferrer">{t('weatherApp.attribution')}</a>
       </footer>
     </div>
   );

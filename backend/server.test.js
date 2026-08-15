@@ -532,6 +532,13 @@ test('health is public while management APIs require a session', async () => {
   assert.equal((await fetch(baseUrl() + '/api/calendar/events?from=2026-08-01&to=2026-08-31')).status, 401);
   assert.equal((await fetch(baseUrl() + '/api/calendar/sources')).status, 401);
   assert.equal((await fetch(baseUrl() + '/api/weather')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/notifications')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/notifications/settings')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/notifications/telegram')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/tasks/codex-review')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/notifications/ingest', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
   const fileDownloadResponse = await fetch(baseUrl() + '/api/file-download?path=Masa%C3%BCst%C3%BC%2Ftest.zip');
   assert.equal(fileDownloadResponse.status, 401);
 
@@ -604,6 +611,8 @@ test('health is public while management APIs require a session', async () => {
     method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{}'
   })).status, 401);
   assert.equal((await fetch(baseUrl() + '/api/connections/antigravity')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/cli-usage')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/cli-usage/refresh', { method: 'POST' })).status, 401);
   assert.equal((await fetch(baseUrl() + '/api/connections/antigravity/install', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
   })).status, 401);
@@ -678,6 +687,18 @@ test('health is public while management APIs require a session', async () => {
     body: '{}'
   });
   assert.equal(initialSetupCompleteResponse.status, 401);
+  const localeSettingsResponse = await fetch(baseUrl() + '/api/settings/locale', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}'
+  });
+  assert.equal(localeSettingsResponse.status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/security/overview')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/security/sessions')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/security/events')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/security/recovery-codes', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
   const statelessMigrationsResponse = await fetch(baseUrl() + '/api/stateless-migrations');
   assert.equal(statelessMigrationsResponse.status, 401);
   const statelessMigrationPlanResponse = await fetch(baseUrl() + '/api/stateless-migrations/plans', {
@@ -703,6 +724,14 @@ test('health is public while management APIs require a session', async () => {
 });
 
 test('setup creates an authenticated session and server-owned onboarding state', async () => {
+  const localePreferences = {
+    language: 'en',
+    region: 'GB',
+    timeZone: 'Europe/London',
+    hourCycle: 'h23',
+    weekStartsOn: 'monday',
+    measurementSystem: 'metric'
+  };
   const weakPasswordResponse = await fetch(baseUrl() + '/api/auth/setup', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -713,13 +742,18 @@ test('setup creates an authenticated session and server-owned onboarding state',
   const setupResponse = await fetch(baseUrl() + '/api/auth/setup', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: 'tester', password: 'correct-horse-battery' })
+    body: JSON.stringify({
+      username: 'tester',
+      password: 'correct-horse-battery',
+      localePreferences
+    })
   });
   assert.equal(setupResponse.status, 201);
   assert.deepEqual(await setupResponse.json(), {
     success: true,
     username: 'tester',
-    onboardingRequired: true
+    onboardingRequired: true,
+    localePreferences
   });
   const cookie = setupResponse.headers.get('set-cookie').split(';')[0];
 
@@ -732,12 +766,20 @@ test('setup creates an authenticated session and server-owned onboarding state',
   const statusResponse = await fetch(baseUrl() + '/api/auth/status', {
     headers: { Cookie: cookie }
   });
-  assert.deepEqual(await statusResponse.json(), {
+  const status = await statusResponse.json();
+  assert.deepEqual((({ isSetup, authenticated, username, onboardingRequired }) => ({
+    isSetup, authenticated, username, onboardingRequired
+  }))(status), {
     isSetup: true,
     authenticated: true,
     username: 'tester',
     onboardingRequired: true
   });
+  assert.equal(status.passkeyAvailable, false);
+  assert.equal(status.recoveryAvailable, false);
+  assert.deepEqual(status.localePreferences, localePreferences);
+  assert.match(status.session.id, /^ses_[a-f0-9]{32}$/);
+  assert.equal(status.session.authMethod, 'password');
 
   const invalidOnboardingResponse = await fetch(baseUrl() + '/api/setup/onboarding/complete', {
     method: 'POST',
@@ -778,12 +820,50 @@ test('setup creates an authenticated session and server-owned onboarding state',
   );
   const authFile = path.join(process.env.DATA_ROOT, 'auth.json');
   assert.equal(fs.statSync(authFile).mode & 0o777, 0o600);
-  assert.equal(JSON.parse(fs.readFileSync(authFile, 'utf8')).initialSetup.status, 'completed');
+  const completedAuthRecord = JSON.parse(fs.readFileSync(authFile, 'utf8'));
+  assert.equal(completedAuthRecord.initialSetup.status, 'completed');
+  assert.equal(completedAuthRecord.localePreferences.schemaVersion, 1);
+  assert.deepEqual(
+    (({ language, region, timeZone, hourCycle, weekStartsOn, measurementSystem }) => ({
+      language, region, timeZone, hourCycle, weekStartsOn, measurementSystem
+    }))(completedAuthRecord.localePreferences),
+    localePreferences
+  );
+
+  const invalidLocaleResponse = await fetch(baseUrl() + '/api/settings/locale', {
+    method: 'PUT',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ localePreferences: { ...localePreferences, region: 'ZZ' } })
+  });
+  assert.equal(invalidLocaleResponse.status, 400);
+  assert.equal((await invalidLocaleResponse.json()).code, 'locale-region-invalid');
+
+  const updatedLocalePreferences = {
+    language: 'tr',
+    region: 'TR',
+    timeZone: 'Europe/Istanbul',
+    hourCycle: 'regional',
+    weekStartsOn: 'regional',
+    measurementSystem: 'regional'
+  };
+  const localeUpdateResponse = await fetch(baseUrl() + '/api/settings/locale', {
+    method: 'PUT',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ localePreferences: updatedLocalePreferences })
+  });
+  assert.equal(localeUpdateResponse.status, 200);
+  assert.deepEqual((await localeUpdateResponse.json()).localePreferences, updatedLocalePreferences);
+  const localeReadResponse = await fetch(baseUrl() + '/api/settings/locale', { headers: { Cookie: cookie } });
+  assert.equal(localeReadResponse.status, 200);
+  assert.deepEqual((await localeReadResponse.json()).localePreferences, updatedLocalePreferences);
 
   const completedStatusResponse = await fetch(baseUrl() + '/api/auth/status', {
     headers: { Cookie: cookie }
   });
-  assert.deepEqual(await completedStatusResponse.json(), {
+  const completedStatus = await completedStatusResponse.json();
+  assert.deepEqual((({ isSetup, authenticated, username, onboardingRequired }) => ({
+    isSetup, authenticated, username, onboardingRequired
+  }))(completedStatus), {
     isSetup: true,
     authenticated: true,
     username: 'tester',
@@ -837,14 +917,161 @@ test('setup creates an authenticated session and server-owned onboarding state',
   });
   assert.equal(shortLocationQueryResponse.status, 400);
 
+  const initialNotificationsResponse = await fetch(baseUrl() + '/api/notifications', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(initialNotificationsResponse.status, 200);
+  assert.equal((await initialNotificationsResponse.json()).stats.unread, 0);
+  const notificationSettingsResponse = await fetch(baseUrl() + '/api/notifications/settings', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(notificationSettingsResponse.status, 200);
+  const notificationSettings = await notificationSettingsResponse.json();
+  assert.equal(notificationSettings.settings.browserPush.enabled, false);
+  assert.match(notificationSettings.push.publicKey, /^[A-Za-z0-9_-]{40,200}$/);
+  assert.equal(notificationSettings.telegram.configured, false);
+  assert.equal(notificationSettings.telegram.tokenIncluded, false);
+  assert.equal(notificationSettings.codexReview.enabled, false);
+  assert.equal(notificationSettings.codexReview.intervalMinutes, 120);
+  assert.equal(notificationSettings.codexReview.decisionAuthority, 'codex');
+  assert.equal(notificationSettings.codexReview.fallback, 'none');
+  assert.deepEqual(
+    notificationSettings.codexReview.sources.map((source) => source.id),
+    ['work-gmail', 'work-chat', 'telegram', 'whatsapp']
+  );
+  const codexReviewStatusResponse = await fetch(baseUrl() + '/api/tasks/codex-review', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(codexReviewStatusResponse.status, 200);
+  assert.equal((await codexReviewStatusResponse.json()).codexReview.enabled, false);
+  const invalidCodexReviewResponse = await fetch(baseUrl() + '/api/tasks/codex-review', {
+    method: 'PUT',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ intervalMinutes: 7 })
+  });
+  assert.equal(invalidCodexReviewResponse.status, 400);
+  assert.equal((await invalidCodexReviewResponse.json()).code, 'codex-review-settings-invalid');
+  const telegramStatusResponse = await fetch(baseUrl() + '/api/notifications/telegram', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(telegramStatusResponse.status, 200);
+  assert.equal((await telegramStatusResponse.json()).configured, false);
+  const invalidTelegramConfigureResponse = await fetch(baseUrl() + '/api/notifications/telegram/configure', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ botToken: 'not-a-token' })
+  });
+  assert.equal(invalidTelegramConfigureResponse.status, 400);
+  assert.equal((await invalidTelegramConfigureResponse.json()).code, 'notification-telegram-token-invalid');
+  const testNotificationResponse = await fetch(baseUrl() + '/api/notifications/test', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: '{}'
+  });
+  assert.equal(testNotificationResponse.status, 201);
+  const testNotification = (await testNotificationResponse.json()).notification;
+  assert.equal(testNotification.source, 'foxos');
+  const readNotificationResponse = await fetch(baseUrl() + '/api/notifications/' + testNotification.id, {
+    method: 'PATCH',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: 'read' })
+  });
+  assert.equal(readNotificationResponse.status, 200);
+  assert.equal((await readNotificationResponse.json()).notification.status, 'read');
+  const ingestToken = JSON.parse(fs.readFileSync(
+    path.join(process.env.DATA_ROOT, 'notifications', 'ingest-token.json'),
+    'utf8'
+  )).token;
+  const ingestedNotificationResponse = await fetch(baseUrl() + '/api/notifications/ingest', {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer ' + ingestToken,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ source: 'test-agent', title: 'Ajan bildirimi', dedupeKey: 'agent-test' })
+  });
+  assert.equal(ingestedNotificationResponse.status, 201);
+  assert.equal((await ingestedNotificationResponse.json()).notification.source, 'test-agent');
+  const resolvedIngestResponse = await fetch(baseUrl() + '/api/notifications/ingest/resolve', {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer ' + ingestToken,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ source: 'test-agent', dedupeKey: 'agent-test' })
+  });
+  assert.equal(resolvedIngestResponse.status, 200);
+  assert.equal((await resolvedIngestResponse.json()).notification.status, 'resolved');
+
+  const initialTasksResponse = await fetch(baseUrl() + '/api/tasks', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(initialTasksResponse.status, 200);
+  assert.deepEqual((await initialTasksResponse.json()).stats, {
+    total: 0,
+    open: 0,
+    overdue: 0,
+    completed: 0
+  });
+  const taskCreateResponse = await fetch(baseUrl() + '/api/tasks', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      title: 'API checklist testi',
+      dueAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      timeZone: 'UTC'
+    })
+  });
+  assert.equal(taskCreateResponse.status, 201);
+  const task = (await taskCreateResponse.json()).task;
+  assert.match(task.id, /^tsk_[a-f0-9]{32}$/);
+  const taskCompleteResponse = await fetch(baseUrl() + '/api/tasks/' + task.id + '/complete', {
+    method: 'POST',
+    headers: { Cookie: cookie }
+  });
+  assert.equal(taskCompleteResponse.status, 200);
+  assert.equal((await taskCompleteResponse.json()).task.status, 'completed');
+
+  const ingestedTaskResponse = await fetch(baseUrl() + '/api/tasks/ingest', {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer ' + ingestToken,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      title: 'Ajan checklist testi',
+      dueAt: new Date(Date.now() - 1_000).toISOString(),
+      timeZone: 'UTC',
+      source: 'test-agent',
+      externalKey: 'server-api-task-test'
+    })
+  });
+  assert.equal(ingestedTaskResponse.status, 201);
+  const ingestedTask = (await ingestedTaskResponse.json()).task;
+  assert.match(ingestedTask.reminderNotificationId, /^ntf_[a-f0-9]{32}$/);
+  const ingestTaskCompleteResponse = await fetch(
+    baseUrl() + '/api/tasks/ingest/' + ingestedTask.id + '/complete',
+    {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + ingestToken }
+    }
+  );
+  assert.equal(ingestTaskCompleteResponse.status, 200);
+  assert.equal((await ingestTaskCompleteResponse.json()).task.status, 'completed');
+  const unauthorizedTaskIngest = await fetch(baseUrl() + '/api/tasks/ingest');
+  assert.equal(unauthorizedTaskIngest.status, 401);
+
   const legacyAuthRecord = JSON.parse(fs.readFileSync(authFile, 'utf8'));
   delete legacyAuthRecord.initialSetup;
+  delete legacyAuthRecord.localePreferences;
   legacyAuthRecord.version = 2;
   fs.writeFileSync(authFile, JSON.stringify(legacyAuthRecord), { mode: 0o600 });
   const legacyStatusResponse = await fetch(baseUrl() + '/api/auth/status', {
     headers: { Cookie: cookie }
   });
-  assert.equal((await legacyStatusResponse.json()).onboardingRequired, false);
+  const legacyStatus = await legacyStatusResponse.json();
+  assert.equal(legacyStatus.onboardingRequired, false);
+  assert.equal(legacyStatus.localePreferences, null);
 
   const removalPlanId = 'arplan_' + '1'.repeat(32);
   const wrongRemovalPassword = await fetch(baseUrl() + '/api/application-removal-plans/' + removalPlanId + '/apply', {
@@ -1614,6 +1841,65 @@ test('setup creates an authenticated session and server-owned onboarding state',
   assert.equal(blockedAdoptionResponse.status, 403);
   assert.equal((await blockedAdoptionResponse.json()).code, 'pilot-resource-only');
   assert.equal(dockerRequestLog.every((request) => request.method === 'GET'), true);
+
+  const securityOverviewResponse = await fetch(baseUrl() + '/api/security/overview', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(securityOverviewResponse.status, 200);
+  const securityOverview = await securityOverviewResponse.json();
+  assert.equal(securityOverview.security.username, 'tester');
+  assert.equal(securityOverview.security.password.modern, true);
+  assert.deepEqual(securityOverview.security.passkeys, []);
+  assert.equal(securityOverview.security.recovery.configured, false);
+  assert.equal(securityOverview.posture.attentionRequired, true);
+  assert.equal(securityOverview.posture.activeSessionCount, 1);
+  assert.equal(securityOverview.sessions[0].current, true);
+
+  const rejectedRecoveryCodesResponse = await fetch(baseUrl() + '/api/security/recovery-codes', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ currentPassword: 'definitely-wrong-password' })
+  });
+  assert.equal(rejectedRecoveryCodesResponse.status, 401);
+
+  const recoveryCodesResponse = await fetch(baseUrl() + '/api/security/recovery-codes', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ currentPassword: 'correct-horse-battery' })
+  });
+  assert.equal(recoveryCodesResponse.status, 201);
+  const recoveryCodes = await recoveryCodesResponse.json();
+  assert.equal(recoveryCodes.codes.length, 10);
+  assert.equal(new Set(recoveryCodes.codes).size, 10);
+  assert.equal(recoveryCodes.security.recovery.availableCodes, 10);
+  const persistedAuth = fs.readFileSync(authFile, 'utf8');
+  assert.equal(persistedAuth.includes(recoveryCodes.codes[0]), false);
+
+  const securityEventsResponse = await fetch(baseUrl() + '/api/security/events?limit=20', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(securityEventsResponse.status, 200);
+  const securityEvents = (await securityEventsResponse.json()).events;
+  assert.equal(securityEvents.some((event) => event.type === 'recovery-codes-created'), true);
+  assert.equal(JSON.stringify(securityEvents).includes(recoveryCodes.codes[0]), false);
+
+  const passwordChangeResponse = await fetch(baseUrl() + '/api/security/password', {
+    method: 'PUT',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      currentPassword: 'correct-horse-battery',
+      newPassword: 'a-distinct-long-password-for-the-foxos-owner'
+    })
+  });
+  assert.equal(passwordChangeResponse.status, 200);
+  const changedCookie = passwordChangeResponse.headers.get('set-cookie').split(';')[0];
+  assert.notEqual(changedCookie, cookie);
+  assert.equal((await fetch(baseUrl() + '/api/security/overview', {
+    headers: { Cookie: cookie }
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/security/overview', {
+    headers: { Cookie: changedCookie }
+  })).status, 200);
   mockContainer = null;
 });
 

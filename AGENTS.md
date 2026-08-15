@@ -9,10 +9,10 @@
   needs isolation.
 - Merge `develop` into `main` only when Burak explicitly requests a release and
   the complete validation suite passes.
-- Published version tags are immutable. `v0.0.1` and `v0.0.2` are frozen at
-  their released commits and must never be force-moved.
-- Do not change the package/README version from `0.0.2` until Burak explicitly
-  chooses the next release version.
+- Published version tags are immutable. `v0.0.1`, `v0.0.2` and `v0.0.3` are
+  frozen at their released commits and must never be force-moved.
+- The current package/README version is `0.0.3`. Do not advance it until Burak
+  explicitly chooses another release version.
 - Public users update deliberately from a stable release. Never introduce a
   forced or silent updater.
 

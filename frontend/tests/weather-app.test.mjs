@@ -10,7 +10,9 @@ test('weather app uses server-proxied location and forecast APIs with attributio
   assert.match(weather, /\/api\/weather\/locations\?q=/);
   assert.match(weather, /\/api\/weather\/location/);
   assert.match(weather, /\/api\/weather\?refresh=1/);
-  assert.match(weather, /Tahmin verisi: Open-Meteo/);
+  assert.match(weather, /weatherApp\.attribution/);
+  assert.match(weather, /measurementSystem === 'imperial'/);
+  assert.match(weather, /value \* 0\.621371/);
 });
 
 test('menu weather temperature is rounded only for a configured forecast', () => {
@@ -30,7 +32,8 @@ test('weather app is available from the window renderer, menu bar and Spotlight'
   assert.match(topBar, /topbar-weather-trigger/);
   assert.match(topBar, /type: 'weather'/);
   assert.match(topBar, /apiFetch\('\/api\/weather'\)/);
-  assert.match(topBar, /weatherTemperature.*°/);
+  assert.match(topBar, /measurementSystem === 'imperial'/);
+  assert.match(topBar, /shell\.openWeatherTemperature/);
   assert.match(weather, /publishWeatherUpdate\(payload\)/);
   assert.match(spotlight, /id: 'system-weather'/);
 });

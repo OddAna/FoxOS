@@ -52,6 +52,8 @@ function searchScore(entry, query) {
 function createFileSearchManager({
   diskRoot,
   excludedRootNames = DEFAULT_EXCLUDED_ROOTS,
+  followedSymlinkRootNames = [],
+  allowedSymlinkTargetRoots = [],
   maxDepth = 12,
   maxEntries = 20_000,
   maxScanMs = 350,
@@ -64,8 +66,23 @@ function createFileSearchManager({
   if (![maxDepth, maxEntries, maxScanMs, cacheTtlMs].every(Number.isSafeInteger)) {
     throw new TypeError('File search manager limits must be integers');
   }
+  if (
+    !Array.isArray(followedSymlinkRootNames) ||
+    followedSymlinkRootNames.some((name) => (
+      typeof name !== 'string' || !name.trim() || name.includes('/') || name.includes('\\')
+    ))
+  ) {
+    throw new TypeError('Followed symlink roots must be workspace root names');
+  }
+  if (
+    !Array.isArray(allowedSymlinkTargetRoots) ||
+    allowedSymlinkTargetRoots.some((root) => typeof root !== 'string' || !path.isAbsolute(root))
+  ) {
+    throw new TypeError('Allowed symlink target roots must be absolute paths');
+  }
 
   const excludedRoots = new Set(excludedRootNames.map(String));
+  const followedSymlinkRoots = new Set(followedSymlinkRootNames.map((name) => name.trim()));
   let cachedIndex = null;
   let indexPromise = null;
 
@@ -82,7 +99,24 @@ function createFileSearchManager({
       );
     }
 
-    const queue = [{ absolutePath: diskRoot, relativePath: '', depth: 0 }];
+    const allowedRealSymlinkRoots = [realRoot];
+    for (const allowedRoot of allowedSymlinkTargetRoots) {
+      try {
+        allowedRealSymlinkRoots.push(await fs.promises.realpath(allowedRoot));
+      } catch {
+        // An unavailable optional target root cannot authorize traversal.
+      }
+    }
+
+    const queue = [{
+      absolutePath: diskRoot,
+      relativePath: '',
+      depth: 0,
+      realBoundary: realRoot,
+      realAncestors: [],
+      allowDirectorySymlink: false,
+      insideFollowedSymlink: false
+    }];
     let queueIndex = 0;
     const entries = [];
     let visited = 0;
@@ -96,11 +130,20 @@ function createFileSearchManager({
 
       const directory = queue[queueIndex];
       queueIndex += 1;
+      let realAncestors;
       try {
         const directoryStats = await fs.promises.lstat(directory.absolutePath);
-        if (!directoryStats.isDirectory() || directoryStats.isSymbolicLink()) continue;
+        if (directoryStats.isSymbolicLink()) {
+          if (!directory.allowDirectorySymlink) continue;
+          const targetStats = await fs.promises.stat(directory.absolutePath);
+          if (!targetStats.isDirectory()) continue;
+        } else if (!directoryStats.isDirectory()) {
+          continue;
+        }
         const realDirectory = await fs.promises.realpath(directory.absolutePath);
-        if (!isWithinRoot(realRoot, realDirectory)) continue;
+        if (!isWithinRoot(directory.realBoundary, realDirectory)) continue;
+        if (directory.realAncestors.includes(realDirectory)) continue;
+        realAncestors = [...directory.realAncestors, realDirectory];
       } catch {
         continue;
       }
@@ -131,7 +174,51 @@ function createFileSearchManager({
           continue;
         }
         visited += 1;
-        if (stats.isSymbolicLink()) continue;
+
+        if (stats.isSymbolicLink()) {
+          const rootName = relativePath.split(path.sep)[0];
+          if (directory.insideFollowedSymlink || !followedSymlinkRoots.has(rootName)) continue;
+
+          let targetStats;
+          let realTarget;
+          try {
+            targetStats = await fs.promises.stat(absolutePath);
+            realTarget = await fs.promises.realpath(absolutePath);
+          } catch {
+            continue;
+          }
+          if (!allowedRealSymlinkRoots.some((root) => isWithinRoot(root, realTarget))) continue;
+
+          const type = targetStats.isDirectory() ? 'folder' : targetStats.isFile() ? 'file' : null;
+          if (!type) continue;
+          const workspacePath = '/' + relativePath.split(path.sep).join('/');
+          entries.push({
+            id: crypto.createHash('sha1').update(workspacePath).digest('hex').slice(0, 16),
+            name: child.name,
+            path: workspacePath,
+            parentPath: '/' + path.dirname(relativePath).split(path.sep).join('/').replace(/^\.$/, ''),
+            type,
+            ext: type === 'file' ? path.extname(child.name).toLowerCase() : null,
+            size: type === 'file' ? targetStats.size : 0,
+            mtime: targetStats.mtime.toISOString(),
+            symlink: true
+          });
+
+          if (type === 'folder' && directory.depth < maxDepth && !realAncestors.includes(realTarget)) {
+            queue.push({
+              absolutePath,
+              relativePath,
+              depth: directory.depth + 1,
+              realBoundary: realTarget,
+              realAncestors,
+              allowDirectorySymlink: true,
+              insideFollowedSymlink: true
+            });
+          } else if (type === 'folder' && directory.depth >= maxDepth) {
+            truncated = true;
+          }
+          continue;
+        }
 
         const type = stats.isDirectory() ? 'folder' : stats.isFile() ? 'file' : null;
         if (!type) continue;
@@ -144,11 +231,20 @@ function createFileSearchManager({
           type,
           ext: type === 'file' ? path.extname(child.name).toLowerCase() : null,
           size: type === 'file' ? stats.size : 0,
-          mtime: stats.mtime.toISOString()
+          mtime: stats.mtime.toISOString(),
+          symlink: false
         });
 
         if (type === 'folder' && directory.depth < maxDepth) {
-          queue.push({ absolutePath, relativePath, depth: directory.depth + 1 });
+          queue.push({
+            absolutePath,
+            relativePath,
+            depth: directory.depth + 1,
+            realBoundary: directory.realBoundary,
+            realAncestors,
+            allowDirectorySymlink: false,
+            insideFollowedSymlink: directory.insideFollowedSymlink
+          });
         } else if (type === 'folder' && directory.depth >= maxDepth) {
           truncated = true;
         }

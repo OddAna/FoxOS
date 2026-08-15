@@ -50,6 +50,44 @@ test('file search never follows workspace symlinks and excludes server and trash
   }
 });
 
+test('file search follows an allowed Desktop folder shortcut without escaping through nested symlinks', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-file-search-'));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-file-search-outside-'));
+  const forbidden = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-file-search-forbidden-'));
+  try {
+    fs.mkdirSync(path.join(root, 'Masaüstü'), { recursive: true });
+    fs.mkdirSync(path.join(outside, 'Müşteri'), { recursive: true });
+    fs.writeFileSync(path.join(outside, 'Müşteri', 'Çalışma Raporu.txt'), 'test');
+    fs.writeFileSync(path.join(forbidden, 'gizli-hedef.txt'), 'secret');
+    fs.symlinkSync(forbidden, path.join(outside, 'Müşteri', 'Atlama'), 'dir');
+    fs.symlinkSync(outside, path.join(root, 'Masaüstü', 'Proje Arşivi'), 'dir');
+
+    const manager = createFileSearchManager({
+      diskRoot: root,
+      followedSymlinkRootNames: ['Masaüstü'],
+      allowedSymlinkTargetRoots: [outside],
+      maxScanMs: 10_000
+    });
+    const shortcut = await manager.search('proje arsivi');
+    const file = await manager.search('calisma raporu');
+    const nestedEscape = await manager.search('gizli hedef');
+
+    const shortcutEntry = shortcut.items.find((item) => item.path === '/Masaüstü/Proje Arşivi');
+    assert.ok(shortcutEntry);
+    assert.equal(shortcutEntry.type, 'folder');
+    assert.equal(shortcutEntry.symlink, true);
+    assert.equal(file.items.length, 1);
+    assert.equal(file.items[0].path, '/Masaüstü/Proje Arşivi/Müşteri/Çalışma Raporu.txt');
+    assert.equal(file.items[0].type, 'file');
+    assert.deepEqual(nestedEscape.items, []);
+    assert.equal(file.truncated, false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+    fs.rmSync(forbidden, { recursive: true, force: true });
+  }
+});
+
 test('file search validates short queries and bounds result count', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxos-file-search-'));
   try {

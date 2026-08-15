@@ -27,16 +27,17 @@ import { useApplicationInventory } from '../contexts/ApplicationContext';
 import { useApplicationRemoval } from '../contexts/ApplicationRemovalContext';
 import { apiFetch } from '../api';
 import ApplicationLogo from '../components/ApplicationLogo';
+import { useI18n } from '../contexts/LocaleContext';
 
 const CATEGORIES = [
-  { id: 'kesfet', name: 'Keşfet', icon: <Compass size={18} /> },
-  { id: 'gelistirici', name: 'Geliştirici Araçları', icon: <Code size={18} /> },
-  { id: 'diller', name: 'Programlama Dilleri', icon: <Terminal size={18} /> },
-  { id: 'veritabani', name: 'Veritabanları', icon: <Database size={18} /> },
-  { id: 'devops', name: 'DevOps', icon: <Terminal size={18} /> },
-  { id: 'guncellemeler', name: 'Güncellemeler', icon: <RotateCw size={18} /> },
-  { id: 'medya', name: 'Medya ve Eğlence', icon: <Film size={18} /> },
-  { id: 'webapp', name: 'Web Uygulamaları', icon: <Globe size={18} /> }
+  { id: 'kesfet', labelKey: 'appStore.categories.discover', icon: <Compass size={18} /> },
+  { id: 'gelistirici', labelKey: 'appStore.categories.developer', icon: <Code size={18} /> },
+  { id: 'diller', labelKey: 'appStore.categories.languages', icon: <Terminal size={18} /> },
+  { id: 'veritabani', labelKey: 'appStore.categories.databases', icon: <Database size={18} /> },
+  { id: 'devops', labelKey: 'appStore.categories.devops', icon: <Terminal size={18} /> },
+  { id: 'guncellemeler', labelKey: 'appStore.categories.updates', icon: <RotateCw size={18} /> },
+  { id: 'medya', labelKey: 'appStore.categories.media', icon: <Film size={18} /> },
+  { id: 'webapp', labelKey: 'appStore.categories.webApps', icon: <Globe size={18} /> }
 ];
 
 const APP_VISUALS = {
@@ -57,6 +58,7 @@ const decorateApp = (app) => ({
 });
 
 const AppStoreApp = () => {
+  const { locale, t } = useI18n();
   const [activeCategory, setActiveCategory] = useState('kesfet');
   const [apps, setApps] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -81,12 +83,12 @@ const AppStoreApp = () => {
       setApps((payload.apps || []).map(decorateApp));
     } catch (error) {
       if (!quiet) {
-        showDialog({ title: 'Mağaza Hatası', message: error.message, type: 'error' });
+        showDialog({ title: t('appStore.storeErrorTitle'), message: error.message, type: 'error' });
       }
     } finally {
       if (!quiet) setLoading(false);
     }
-  }, [showDialog]);
+  }, [showDialog, t]);
 
   useEffect(() => {
     loadApps();
@@ -122,12 +124,12 @@ const AppStoreApp = () => {
       await loadApps({ quiet: true });
       await refreshApplications({ quiet: true });
       showDialog({
-        title: 'Yüklendi',
-        message: `${app.name} sunucuya kuruldu. Uygulama portu güvenlik için yalnızca sunucunun kendisine bağlandı.`,
+        title: t('appStore.installedTitle'),
+        message: t('appStore.installedMessage', { name: app.name }),
         type: 'success'
       });
     } catch (error) {
-      showDialog({ title: 'Kurulum Hatası', message: error.message, type: 'error' });
+      showDialog({ title: t('appStore.installErrorTitle'), message: error.message, type: 'error' });
     } finally {
       setInstalling((current) => ({ ...current, [app.id]: false }));
     }
@@ -152,7 +154,7 @@ const AppStoreApp = () => {
       }
       await loadApps({ quiet: true });
     } catch (error) {
-      showDialog({ title: 'İşlem Hatası', message: error.message, type: 'error' });
+      showDialog({ title: t('desktop.operationErrorTitle'), message: error.message, type: 'error' });
     } finally {
       setActionRunning((current) => ({ ...current, [app.id]: null }));
     }
@@ -166,8 +168,8 @@ const AppStoreApp = () => {
     ));
     if (!inventoryApplication) {
       showDialog({
-        title: 'Kaldırma Hatası',
-        message: 'Uygulamanın sunucu envanteri doğrulanamadı. Mağazayı yenileyip tekrar deneyin.',
+        title: t('appStore.uninstallErrorTitle'),
+        message: t('appStore.inventoryError'),
         type: 'error'
       });
       return;
@@ -180,7 +182,7 @@ const AppStoreApp = () => {
   const handleOpenApp = (event, app) => {
     event.stopPropagation();
     if (app.state !== 'running') {
-      showDialog({ title: 'Servis Kapalı', message: 'Bu uygulamayı açmak için önce servisi başlatın.', type: 'warning' });
+      showDialog({ title: t('applications.serviceStoppedTitle'), message: t('applications.serviceStoppedMessage'), type: 'warning' });
       return;
     }
     if (app.externalUrl) {
@@ -189,15 +191,15 @@ const AppStoreApp = () => {
     }
 
     if (!app.hostPort) {
-      showDialog({ title: 'Port Bulunamadı', message: 'Docker yayın portu okunamadı.', type: 'error' });
+      showDialog({ title: t('appStore.portMissingTitle'), message: t('appStore.portMissingMessage'), type: 'error' });
       return;
     }
 
     const localFoxOS = ['127.0.0.1', 'localhost'].includes(window.location.hostname);
     if (app.bindAddress === '127.0.0.1' && !localFoxOS) {
       showDialog({
-        title: 'Özel Erişim',
-        message: `Bu uygulama güvenlik için 127.0.0.1:${app.hostPort} üzerinde çalışıyor. Aynı portu SSH tüneliyle açın.`,
+        title: t('applications.privateAccessTitle'),
+        message: t('appStore.privateAccessMessage', { port: app.hostPort }),
         type: 'info'
       });
       return;
@@ -213,7 +215,7 @@ const AppStoreApp = () => {
     openWindow({
       id: 'settings',
       type: 'settings',
-      title: 'Ayarlar',
+      title: t('common.settings'),
       component: null,
       width: 1000,
       height: 680,
@@ -227,8 +229,8 @@ const AppStoreApp = () => {
 
   const displayedApps = useMemo(() => {
     if (searchQuery) {
-      const query = searchQuery.toLocaleLowerCase('tr-TR');
-      return apps.filter((app) => `${app.name} ${app.description}`.toLocaleLowerCase('tr-TR').includes(query));
+      const query = searchQuery.toLocaleLowerCase(locale);
+      return apps.filter((app) => `${app.name} ${app.description}`.toLocaleLowerCase(locale).includes(query));
     }
 
     const filters = {
@@ -241,7 +243,7 @@ const AppStoreApp = () => {
       webapp: () => true
     };
     return activeCategory === 'kesfet' ? apps : apps.filter(filters[activeCategory] || (() => true));
-  }, [activeCategory, apps, searchQuery]);
+  }, [activeCategory, apps, locale, searchQuery]);
 
   const featuredApp = apps.find((app) => app.featured);
 
@@ -255,13 +257,15 @@ const AppStoreApp = () => {
           background: actionRunning[app.id] ? '#ffbd2e' : app.state === 'running' ? '#27c93f' : '#ff5f56',
           boxShadow: '0 2px 5px rgba(0,0,0,0.5)'
         }}
-        title={`Durum: ${app.state}`}
+        title={t('desktop.applicationState', {
+          state: t(app.state === 'running' ? 'applications.status.running' : 'applications.status.stopped')
+        })}
       />
       <button
         type="button"
         data-app-menu
-        aria-label={`${app.name} seçenekleri`}
-        title={`${app.name} seçenekleri`}
+        aria-label={t('appStore.options', { name: app.name })}
+        title={t('appStore.options', { name: app.name })}
         onClick={(event) => {
           event.stopPropagation();
           const menuId = `${app.id}-${suffix}`;
@@ -277,18 +281,18 @@ const AppStoreApp = () => {
       </button>
       {activeMenu === `${app.id}-${suffix}` && (
         <div data-app-menu style={{ position: 'absolute', top: suffix === 'featured' ? '100%' : 'auto', bottom: suffix === 'featured' ? 'auto' : '100%', right: suffix === 'featured' ? '90px' : '70px', background: 'rgba(30, 30, 35, 0.95)', backdropFilter: 'blur(10px)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', padding: '4px', zIndex: 10, minWidth: '150px', boxShadow: '0 10px 25px rgba(0,0,0,0.5)' }}>
-          <div onClick={(event) => handleOpenApp(event, app)} style={{ padding: '8px 12px', fontSize: '13px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '8px' }} className="menu-item"><ExternalLink size={14} /> Aç</div>
+          <div onClick={(event) => handleOpenApp(event, app)} style={{ padding: '8px 12px', fontSize: '13px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '8px' }} className="menu-item"><ExternalLink size={14} /> {t('common.open')}</div>
           {app.state === 'running' ? (
-            <div onClick={(event) => runAction(event, app, 'stop')} style={{ padding: '8px 12px', fontSize: '13px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '8px' }} className="menu-item"><Square size={14} /> Durdur</div>
+            <div onClick={(event) => runAction(event, app, 'stop')} style={{ padding: '8px 12px', fontSize: '13px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '8px' }} className="menu-item"><Square size={14} /> {t('applications.stop')}</div>
           ) : (
-            <div onClick={(event) => runAction(event, app, 'start')} style={{ padding: '8px 12px', fontSize: '13px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '8px' }} className="menu-item"><Play size={14} /> Başlat</div>
+            <div onClick={(event) => runAction(event, app, 'start')} style={{ padding: '8px 12px', fontSize: '13px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '8px' }} className="menu-item"><Play size={14} /> {t('applications.start')}</div>
           )}
-          <div onClick={(event) => runAction(event, app, 'restart')} style={{ padding: '8px 12px', fontSize: '13px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '8px' }} className="menu-item"><RotateCw size={14} /> Yeniden Başlat</div>
-          <div onClick={(event) => handleSettings(event, app)} style={{ padding: '8px 12px', fontSize: '13px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '8px' }} className="menu-item"><Settings size={14} /> Ayarlar</div>
+          <div onClick={(event) => runAction(event, app, 'restart')} style={{ padding: '8px 12px', fontSize: '13px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '8px' }} className="menu-item"><RotateCw size={14} /> {t('applications.restart')}</div>
+          <div onClick={(event) => handleSettings(event, app)} style={{ padding: '8px 12px', fontSize: '13px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '8px' }} className="menu-item"><Settings size={14} /> {t('common.settings')}</div>
           {app.managedByFoxOS && (
             <>
               <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '4px 0' }} />
-              <div onClick={(event) => handleUninstall(event, app)} style={{ padding: '8px 12px', fontSize: '13px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '8px', color: '#ff5f56' }} className="menu-item"><Trash2 size={14} /> Uygulamayı Kaldır</div>
+              <div onClick={(event) => handleUninstall(event, app)} style={{ padding: '8px 12px', fontSize: '13px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '8px', color: '#ff5f56' }} className="menu-item"><Trash2 size={14} /> {t('desktop.removeApplication')}</div>
             </>
           )}
         </div>
@@ -304,7 +308,7 @@ const AppStoreApp = () => {
             <Search size={16} color="#888" style={{ marginRight: '8px' }} />
             <input
               type="text"
-              placeholder="Ara..."
+              placeholder={t('appStore.searchPlaceholder')}
               value={searchQuery}
               onChange={(event) => {
                 setSearchQuery(event.target.value);
@@ -315,7 +319,7 @@ const AppStoreApp = () => {
         </div>
 
         <div className="store-categories" style={{ display: 'flex', flexDirection: 'column', gap: '4px', padding: '0 10px' }}>
-          <div className="store-categories-title" style={{ fontSize: '11px', color: '#888', fontWeight: 'bold', padding: '8px 10px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Kategoriler</div>
+          <div className="store-categories-title" style={{ fontSize: '11px', color: '#888', fontWeight: 'bold', padding: '8px 10px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('appStore.categoriesTitle')}</div>
           {CATEGORIES.map((category) => (
             <div
               key={category.id}
@@ -332,7 +336,7 @@ const AppStoreApp = () => {
               }}
             >
               {category.icon}
-              {category.name}
+              {t(category.labelKey)}
             </div>
           ))}
         </div>
@@ -341,7 +345,7 @@ const AppStoreApp = () => {
       <div className="store-main" style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: '0 0 40px 0' }}>
         {activeCategory === 'kesfet' && !searchQuery && featuredApp && (
           <div className="store-feature-wrap" style={{ padding: '30px 40px 10px 40px' }}>
-            <div style={{ fontSize: '12px', color: '#888', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '10px' }}>Öne Çıkan</div>
+            <div style={{ fontSize: '12px', color: '#888', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '10px' }}>{t('appStore.featured')}</div>
             <div className="store-feature-card" style={{ background: featuredApp.banner, borderRadius: '16px', padding: '30px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 10px 30px rgba(0,0,0,0.3)', position: 'relative', overflow: 'hidden' }}>
               <div className="store-feature-copy" style={{ zIndex: 1, maxWidth: '70%' }}>
                 <h1 style={{ margin: '0 0 10px 0', fontSize: '32px', fontWeight: 'bold' }}>{featuredApp.name}</h1>
@@ -351,11 +355,11 @@ const AppStoreApp = () => {
                   {featuredApp.installed ? (
                     <button type="button" onClick={(event) => handleOpenApp(event, featuredApp)} style={{ background: 'rgba(255,255,255,0.2)', color: '#fff', border: '1px solid rgba(255,255,255,0.4)', padding: '8px 24px', borderRadius: '20px', fontSize: '14px', fontWeight: 'bold', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
                       <Check size={16} />
-                      Aç
+                      {t('common.open')}
                     </button>
                   ) : (
                     <button type="button" onClick={(event) => handleInstall(event, featuredApp)} disabled={installing[featuredApp.id]} style={{ background: '#fff', color: '#000', border: 'none', padding: '8px 24px', borderRadius: '20px', fontSize: '14px', fontWeight: 'bold', cursor: installing[featuredApp.id] ? 'wait' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                      {installing[featuredApp.id] ? <Loader2 size={16} className="spin" /> : <Download size={16} />} {installing[featuredApp.id] ? 'Bekle...' : 'Yükle'}
+                      {installing[featuredApp.id] ? <Loader2 size={16} className="spin" /> : <Download size={16} />} {t(installing[featuredApp.id] ? 'appStore.wait' : 'appStore.install')}
                     </button>
                   )}
                 </div>
@@ -370,18 +374,18 @@ const AppStoreApp = () => {
         {activeCategory === 'guncellemeler' && (
           <div className="store-updates-header" style={{ padding: '30px 40px 10px 40px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
-              <h1 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: 'bold' }}>Güncellemeler</h1>
-              <div style={{ fontSize: '14px', color: '#888' }}>Yüklü uygulamaların canlı durumu Docker üzerinden okunuyor.</div>
+              <h1 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: 'bold' }}>{t('appStore.categories.updates')}</h1>
+              <div style={{ fontSize: '14px', color: '#888' }}>{t('appStore.updatesDescription')}</div>
             </div>
             <button type="button" onClick={() => loadApps()} disabled={loading} style={{ background: 'rgba(255,255,255,0.1)', color: '#fff', border: '1px solid rgba(255,255,255,0.2)', padding: '8px 16px', borderRadius: '8px', cursor: loading ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 'bold' }}>
-              <RotateCw size={14} className={loading ? 'spin' : ''} /> Yenile
+              <RotateCw size={14} className={loading ? 'spin' : ''} /> {t('common.refresh')}
             </button>
           </div>
         )}
 
         <div className="store-grid-wrap" style={{ padding: '20px 40px' }}>
           {loading ? (
-            <div style={{ padding: '40px', color: '#888', textAlign: 'center' }}><Loader2 size={20} className="spin" /> Katalog yükleniyor...</div>
+            <div style={{ padding: '40px', color: '#888', textAlign: 'center' }}><Loader2 size={20} className="spin" /> {t('appStore.catalogLoading')}</div>
           ) : (
             <div className="store-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
               {displayedApps.map((app) => (
@@ -400,12 +404,12 @@ const AppStoreApp = () => {
                       {app.installed && app.canManage && renderServiceMenu(app, 'grid')}
                       {app.installed ? (
                         <button type="button" onClick={(event) => handleOpenApp(event, app)} style={{ background: 'transparent', color: '#0ea5e9', border: '1px solid #0ea5e9', padding: '6px 16px', borderRadius: '16px', fontSize: '13px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          <Check size={14} /> Aç
+                          <Check size={14} /> {t('common.open')}
                         </button>
                       ) : installing[app.id] ? (
-                        <button type="button" disabled style={{ background: 'rgba(255,255,255,0.1)', color: '#888', border: 'none', padding: '6px 16px', borderRadius: '16px', fontSize: '13px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '6px' }}><Loader2 size={14} className="spin" /> Bekle...</button>
+                        <button type="button" disabled style={{ background: 'rgba(255,255,255,0.1)', color: '#888', border: 'none', padding: '6px 16px', borderRadius: '16px', fontSize: '13px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '6px' }}><Loader2 size={14} className="spin" /> {t('appStore.wait')}</button>
                       ) : (
-                        <button type="button" onClick={(event) => handleInstall(event, app)} style={{ background: 'rgba(255,255,255,0.9)', color: '#000', border: 'none', padding: '6px 16px', borderRadius: '16px', fontSize: '13px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}><Download size={14} /> Yükle</button>
+                        <button type="button" onClick={(event) => handleInstall(event, app)} style={{ background: 'rgba(255,255,255,0.9)', color: '#000', border: 'none', padding: '6px 16px', borderRadius: '16px', fontSize: '13px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}><Download size={14} /> {t('appStore.install')}</button>
                       )}
                     </div>
                   </div>

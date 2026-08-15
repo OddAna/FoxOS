@@ -95,6 +95,11 @@ const {
   codexDaemonSocket,
   createCodexDaemonTransport
 } = require('./codexHostRuntime');
+const {
+  createCliUsageManager,
+  normalizeAntigravityUsage,
+  normalizeCodexRateLimits
+} = require('./cliUsageManager');
 const { createCoolifyMigrationReader } = require('./coolifyMigrationReader');
 const { createDockerClient } = require('./dockerClient');
 const { createEncryptionStore } = require('./encryptionStore');
@@ -103,6 +108,17 @@ const { HostServiceError, createHostServiceManager } = require('./hostServiceMan
 const { createRouteManager } = require('./routeManager');
 const { createSecretManager } = require('./secretManager');
 const { createSessionStore } = require('./sessionStore');
+const {
+  createLocalePreferencesRecord,
+  publicLocalePreferences,
+  validateLocalePreferences
+} = require('./localePreferences');
+const {
+  PASSWORD_MIN_LENGTH,
+  createPasswordCredential,
+  validateNewPassword
+} = require('./passwordSecurity');
+const { SecurityError, createSecurityManager } = require('./securityManager');
 const { createHostTerminalPtyFactory } = require('./hostTerminalPty');
 const { createTerminalSessionManager } = require('./terminalSessionManager');
 const {
@@ -113,6 +129,15 @@ const { FileSearchError, createFileSearchManager } = require('./fileSearchManage
 const { CalendarError, createCalendarManager } = require('./calendarManager');
 const { createCalendarConnectionManager } = require('./calendarConnectionManager');
 const { WeatherError, createWeatherManager } = require('./weatherManager');
+const { NotificationError, createNotificationManager } = require('./notificationManager');
+const { createWebPushManager } = require('./webPushManager');
+const { createTelegramNotificationManager } = require('./telegramNotificationManager');
+const { TaskError, createTaskManager } = require('./taskManager');
+const {
+  CodexChecklistReviewError,
+  createCodexChecklistReviewManager
+} = require('./codexChecklistReviewManager');
+const { createCodexReviewSources } = require('./codexReviewSources');
 const {
   WorkloadEvidenceError,
   createWorkloadEvidenceManager
@@ -195,10 +220,11 @@ const HOST_EXECUTION = process.env.HOST_EXECUTION || 'local';
 const DOCKER_SOCKET = process.env.DOCKER_SOCKET || '/var/run/docker.sock';
 const AUTH_FILE = path.join(DATA_ROOT, 'auth.json');
 const SESSIONS_FILE = path.join(DATA_ROOT, 'sessions.json');
+const SECURITY_EVENTS_FILE = path.join(DATA_ROOT, 'security-events.jsonl');
 const THUMBNAIL_CACHE_ROOT = path.join(DATA_ROOT, 'thumbnail-cache');
 const PUBLIC_DIR = path.resolve(process.env.PUBLIC_DIR || path.join(__dirname, 'public'));
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
-const SESSION_RENEWAL_WINDOW_MS = Math.floor(SESSION_TTL_MS / 2);
+const SESSION_IDLE_TTL_MS = 30 * 60 * 1000;
 const INITIAL_SETUP_SCHEMA_VERSION = 1;
 const COMPLETE_INITIAL_SETUP_CONFIRMATION = 'COMPLETE INITIAL SETUP';
 const COMMAND_TIMEOUT_MS = Number.parseInt(process.env.COMMAND_TIMEOUT_MS || '120000', 10);
@@ -209,6 +235,7 @@ const CODEX_HOST_CONFIG_HOME = path.posix.join(CODEX_HOST_STATE_ROOT, '.codex');
 const CODEX_HOST_BINARY = path.posix.join(CODEX_HOST_STATE_ROOT, '.local', 'bin', 'codex');
 const CODEX_HOST_DAEMON_SOCKET = codexDaemonSocket(CODEX_HOST_CONFIG_HOME);
 const CODEX_MEMORY_VAULT = path.posix.join(CODEX_HOST_STATE_ROOT, 'ana-memory', 'vault');
+const CODEX_REVIEW_CONNECTORS_FILE = path.join(DATA_ROOT, 'tasks', 'codex-review', 'connectors.json');
 const GEMINI_HOST_STATE_ROOT = process.env.FOXOS_GEMINI_HOST_STATE_ROOT || '/var/lib/foxos/gemini';
 const GEMINI_HOST_HOME = GEMINI_HOST_STATE_ROOT;
 const GEMINI_INSTALL_PREFIX = path.posix.join(GEMINI_HOST_STATE_ROOT, '.local');
@@ -265,8 +292,14 @@ const mediaThumbnailManager = createMediaThumbnailManager({
 const sessionStore = createSessionStore({
   filePath: SESSIONS_FILE,
   ttlMs: SESSION_TTL_MS,
-  renewalWindowMs: SESSION_RENEWAL_WINDOW_MS,
+  idleTtlMs: SESSION_IDLE_TTL_MS,
   onError: (error) => console.error('Could not read authentication sessions:', error.message)
+});
+
+const securityManager = createSecurityManager({
+  authFilePath: AUTH_FILE,
+  eventFilePath: SECURITY_EVENTS_FILE,
+  onError: (error) => console.error('Could not read security state:', error.message)
 });
 
 app.disable('x-powered-by');
@@ -320,28 +353,90 @@ function parseCookies(header = '') {
   }, {});
 }
 
+function maskNetworkAddress(value) {
+  const address = String(value || '').replace(/^::ffff:/, '');
+  if (['127.0.0.1', '::1'].includes(address)) return 'local';
+  if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(address)) {
+    const parts = address.split('.');
+    return parts.slice(0, 3).join('.') + '.0/24';
+  }
+  if (address.includes(':')) {
+    return address.split(':').slice(0, 4).join(':') + '::/64';
+  }
+  return null;
+}
+
+function summarizeAuthClient(req) {
+  const userAgent = String(req.get('user-agent') || '');
+  const browser = /Edg\//.test(userAgent) ? 'Edge'
+    : /Firefox\//.test(userAgent) ? 'Firefox'
+      : /CriOS\//.test(userAgent) ? 'Chrome iOS'
+        : /Chrome\//.test(userAgent) ? 'Chrome'
+          : /Safari\//.test(userAgent) ? 'Safari'
+            : 'Unknown browser';
+  const osName = /iPhone|iPad/.test(userAgent) ? 'iOS/iPadOS'
+    : /Mac OS X/.test(userAgent) ? 'macOS'
+      : /Android/.test(userAgent) ? 'Android'
+        : /Windows NT/.test(userAgent) ? 'Windows'
+          : /Linux/.test(userAgent) ? 'Linux'
+            : 'Unknown OS';
+  const device = /iPad|Tablet/.test(userAgent) ? 'tablet'
+    : /Mobile|iPhone|Android/.test(userAgent) ? 'mobile'
+      : 'desktop';
+  return {
+    browser,
+    os: osName,
+    device,
+    network: maskNetworkAddress(req.ip || req.socket.remoteAddress)
+  };
+}
+
+function secureSessionCookies() {
+  return process.env.FOXOS_SECURE_COOKIE === 'true';
+}
+
+function primarySessionCookieName() {
+  return secureSessionCookies() ? '__Host-foxos_session' : 'foxos_session';
+}
+
 function getSession(req) {
-  const token = parseCookies(req.headers.cookie).foxos_session;
+  const cookies = parseCookies(req.headers.cookie);
+  const primaryName = primarySessionCookieName();
+  const token = cookies[primaryName] || cookies.foxos_session;
   if (!token) {
     return null;
   }
   const session = sessionStore.get(token);
   if (!session) return null;
-  return { token, ...session };
+  return {
+    token,
+    cookieName: cookies[primaryName] ? primaryName : 'foxos_session',
+    ...session
+  };
 }
 
 function setSessionCookie(res, token) {
-  const secure = process.env.FOXOS_SECURE_COOKIE === 'true' ? '; Secure' : '';
-  res.setHeader(
-    'Set-Cookie',
-    'foxos_session=' + encodeURIComponent(token) +
-      '; HttpOnly; SameSite=Strict; Path=/; Max-Age=' + Math.floor(SESSION_TTL_MS / 1000) + secure
-  );
+  const secure = secureSessionCookies() ? '; Secure' : '';
+  const value = primarySessionCookieName() + '=' + encodeURIComponent(token) +
+    '; HttpOnly; SameSite=Strict; Path=/; Max-Age=' + Math.floor(SESSION_TTL_MS / 1000) + secure;
+  res.setHeader('Set-Cookie', value);
 }
 
-function createSession(res, username) {
-  const token = sessionStore.create(username);
+function migrateLegacySessionCookie(res, session) {
+  if (!secureSessionCookies() || session.cookieName !== 'foxos_session') return;
+  const secureCookie = primarySessionCookieName() + '=' + encodeURIComponent(session.token) +
+    '; HttpOnly; SameSite=Strict; Path=/; Max-Age=' + Math.floor(SESSION_TTL_MS / 1000) + '; Secure';
+  const clearLegacy = 'foxos_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0; Secure';
+  res.setHeader('Set-Cookie', [secureCookie, clearLegacy]);
+}
+
+function createSession(req, res, username, authMethod = 'password') {
+  const token = sessionStore.create(username, {
+    authMethod,
+    client: summarizeAuthClient(req)
+  });
   setSessionCookie(res, token);
+  return { token, ...sessionStore.get(token, { touch: false }) };
 }
 
 function clearSession(req, res) {
@@ -353,8 +448,12 @@ function clearSession(req, res) {
     }
     sessionStore.remove(session.token);
   }
-  const secure = process.env.FOXOS_SECURE_COOKIE === 'true' ? '; Secure' : '';
-  res.setHeader('Set-Cookie', 'foxos_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' + secure);
+  const secure = secureSessionCookies() ? '; Secure' : '';
+  const clears = [primarySessionCookieName() + '=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' + secure];
+  if (primarySessionCookieName() !== 'foxos_session') {
+    clears.push('foxos_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' + secure);
+  }
+  res.setHeader('Set-Cookie', clears);
 }
 
 function requireAuth(req, res, next) {
@@ -362,9 +461,7 @@ function requireAuth(req, res, next) {
   if (!session) {
     return res.status(401).json({ error: 'Authentication required' });
   }
-  if (session.renewed) {
-    setSessionCookie(res, session.token);
-  }
+  migrateLegacySessionCookie(res, session);
   req.session = session;
   next();
 }
@@ -412,22 +509,11 @@ function isLoopbackRequest(req) {
 }
 
 function readAuthRecord() {
-  if (!fs.existsSync(AUTH_FILE)) {
-    return null;
-  }
-  try {
-    return JSON.parse(fs.readFileSync(AUTH_FILE, 'utf8'));
-  } catch (error) {
-    console.error('Could not read authentication data:', error.message);
-    return null;
-  }
+  return securityManager.readRecord();
 }
 
 function writeAuthRecord(record) {
-  const temporaryFile = AUTH_FILE + '.tmp';
-  fs.writeFileSync(temporaryFile, JSON.stringify(record), { mode: 0o600 });
-  fs.renameSync(temporaryFile, AUTH_FILE);
-  fs.chmodSync(AUTH_FILE, 0o600);
+  securityManager.writeRecord(record);
 }
 
 function initialSetupRequired(authRecord) {
@@ -438,17 +524,8 @@ function initialSetupRequired(authRecord) {
   );
 }
 
-function derivePassword(password, salt) {
-  return crypto.scryptSync(password, salt, 64).toString('hex');
-}
-
-function passwordMatches(password, authRecord) {
-  if (!authRecord || !authRecord.salt || !authRecord.passwordHash) {
-    return false;
-  }
-  const actual = Buffer.from(derivePassword(password, authRecord.salt), 'hex');
-  const expected = Buffer.from(authRecord.passwordHash, 'hex');
-  return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+function localePreferencesForSession(authRecord, session) {
+  return session ? publicLocalePreferences(authRecord) : null;
 }
 
 function loginKey(req) {
@@ -576,6 +653,43 @@ function mountedHostPath(hostPath) {
   return mounted;
 }
 
+function installBundledCodexSkill(skillName, executableScripts = []) {
+  const source = [
+    path.join(__dirname, 'skills', skillName),
+    path.join(__dirname, '..', 'skills', skillName)
+  ].find((candidate) => fs.existsSync(path.join(candidate, 'SKILL.md')));
+  if (!source) return { installed: false, reason: 'bundle-unavailable' };
+  const skillsRoot = mountedHostPath(path.posix.join(CODEX_HOST_CONFIG_HOME, 'skills'));
+  const destination = path.join(skillsRoot, skillName);
+  if (fs.existsSync(destination)) return { installed: false, reason: 'already-present', destination };
+  fs.mkdirSync(skillsRoot, { recursive: true, mode: 0o700 });
+  fs.chmodSync(skillsRoot, 0o700);
+  const temporary = destination + '.tmp-' + process.pid + '-' + crypto.randomBytes(4).toString('hex');
+  try {
+    fs.cpSync(source, temporary, { recursive: true, errorOnExist: true, force: false });
+    fs.chmodSync(temporary, 0o700);
+    for (const script of executableScripts) {
+      fs.chmodSync(path.join(temporary, 'scripts', script), 0o755);
+    }
+    fs.renameSync(temporary, destination);
+    return { installed: true, reason: null, destination };
+  } catch (error) {
+    try {
+      fs.rmSync(temporary, { recursive: true, force: true });
+    } catch {
+      // The temporary path may not exist when the copy fails early.
+    }
+    throw error;
+  }
+}
+
+function installBundledCodexSkills() {
+  return [
+    installBundledCodexSkill('foxos-notifications', ['notify.py']),
+    installBundledCodexSkill('foxos-checklist', ['task.py'])
+  ];
+}
+
 function codexHostEnvironment() {
   return {
     HOME: CODEX_HOST_HOME,
@@ -694,6 +808,79 @@ function exactHostExecutableInvocation(hostExecutable, args) {
     args,
     cwd: mountedHostPath('/')
   };
+}
+
+function readCodexReviewConnectorPaths() {
+  let payload;
+  try {
+    payload = JSON.parse(fs.readFileSync(CODEX_REVIEW_CONNECTORS_FILE, 'utf8'));
+  } catch (error) {
+    if (error.code === 'ENOENT') return {};
+    console.error('Codex review connector configuration is invalid.');
+    return {};
+  }
+  const allowed = ['python', 'gmail', 'chat', 'telegram', 'whatsapp'];
+  if (
+    !payload || payload.schemaVersion !== 1 ||
+    Object.keys(payload).some((key) => key !== 'schemaVersion' && !allowed.includes(key))
+  ) {
+    console.error('Codex review connector configuration is invalid.');
+    return {};
+  }
+  const paths = {};
+  for (const key of allowed) {
+    const value = payload[key];
+    if (value === undefined || value === null || value === '') continue;
+    if (
+      typeof value !== 'string' || !path.posix.isAbsolute(value) || value === '/' ||
+      value.length > 512 || /[\r\n\0]/.test(value)
+    ) {
+      console.error('Codex review connector configuration is invalid.');
+      return {};
+    }
+    paths[key] = value;
+  }
+  return paths;
+}
+
+function runCodexReviewHostJson(hostExecutable, args, { timeoutMs = 120_000, maxBytes = 4 * 1024 * 1024 } = {}) {
+  if (
+    typeof hostExecutable !== 'string' || !path.posix.isAbsolute(hostExecutable) ||
+    !Array.isArray(args) || args.some((entry) => (
+      typeof entry !== 'string' || entry.length > 8_192 || /[\r\n\0]/.test(entry)
+    )) || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 300_000 ||
+    !Number.isSafeInteger(maxBytes) || maxBytes < 1_024 || maxBytes > 8 * 1024 * 1024
+  ) {
+    const error = new Error('Codex review host request is invalid');
+    error.code = 'codex-review-source-invalid';
+    return Promise.reject(error);
+  }
+  const invocation = exactHostExecutableInvocation(hostExecutable, args);
+  return new Promise((resolve, reject) => {
+    execFile(invocation.executable, invocation.args, {
+      cwd: invocation.cwd,
+      timeout: timeoutMs,
+      maxBuffer: maxBytes,
+      windowsHide: true
+    }, (error, stdout) => {
+      if (error) {
+        const failure = new Error('Codex review source command failed');
+        failure.code = error.killed
+          ? 'codex-review-source-timeout'
+          : 'codex-review-source-unavailable';
+        return reject(failure);
+      }
+      let payload;
+      try {
+        payload = JSON.parse(String(stdout || ''));
+      } catch {
+        const failure = new Error('Codex review source returned invalid JSON');
+        failure.code = 'codex-review-source-invalid';
+        return reject(failure);
+      }
+      resolve(payload);
+    });
+  });
 }
 
 function hostRootShellInvocation(command) {
@@ -914,6 +1101,39 @@ function inspectHostAntigravityAccount() {
         error && error.killed
           ? 'antigravity-account-verification-timeout'
           : 'antigravity-account-verification-failed'
+      ));
+    });
+  });
+}
+
+function readHostAntigravityUsage() {
+  const invocation = antigravityUsageInvocation();
+  return new Promise((resolve, reject) => {
+    execFile(invocation.executable, invocation.args, {
+      cwd: invocation.cwd,
+      env: antigravityHostEnvironment(true),
+      timeout: 30_000,
+      maxBuffer: 256 * 1024,
+      windowsHide: true
+    }, (error, stdout, stderr) => {
+      const output = String(stdout || '') + '\n' + String(stderr || '');
+      const payload = finalJsonPayload(output);
+      if (!error && payload && payload.status !== 'ERROR' && !payload.error) return resolve(payload);
+      if (/Authentication required|authentication failed|accounts\.google\.com\/o\/oauth2\/auth/i.test(output)) {
+        return reject(new AntigravityConnectionError(
+          'Antigravity hesabı bağlı değil.',
+          409,
+          'antigravity-account-required'
+        ));
+      }
+      reject(new AntigravityConnectionError(
+        error && error.killed
+          ? 'Antigravity kullanım bilgisi zaman aşımına uğradı.'
+          : 'Antigravity kullanım bilgisi okunamadı.',
+        error && error.killed ? 504 : 502,
+        error && error.killed
+          ? 'antigravity-usage-timeout'
+          : 'antigravity-usage-unavailable'
       ));
     });
   });
@@ -1391,13 +1611,75 @@ const dockerRequest = dockerClient.request;
 const encryptionStore = createEncryptionStore({ dataRoot: DATA_ROOT });
 const maintenanceSessionManager = createMaintenanceSessionManager({ dataRoot: DATA_ROOT });
 const desktopShortcutManager = createDesktopShortcutManager({ dataRoot: DATA_ROOT });
-const fileSearchManager = createFileSearchManager({ diskRoot: DISK_ROOT });
+const fileSearchManager = createFileSearchManager({
+  diskRoot: DISK_ROOT,
+  followedSymlinkRootNames: ['Masaüstü'],
+  allowedSymlinkTargetRoots: [HOST_ROOT]
+});
 const calendarManager = createCalendarManager({ dataRoot: DATA_ROOT });
 const calendarConnectionManager = createCalendarConnectionManager({
   dataRoot: DATA_ROOT,
   encryptionStore
 });
 const weatherManager = createWeatherManager({ dataRoot: DATA_ROOT });
+const notificationManager = createNotificationManager({ dataRoot: DATA_ROOT });
+const codexConnectionManager = createCodexConnectionManager({
+  dataRoot: DATA_ROOT,
+  inspectAccount: inspectHostCodexAccount,
+  inspectCli: inspectHostCodexCli,
+  installCli: installHostCodexCli,
+  prepareAppServer: prepareHostCodexAppServer,
+  spawnAppServer: spawnHostCodexAppServer,
+  stopAppServer: stopHostCodexAppServer,
+  memoryVaultPath: CODEX_MEMORY_VAULT
+});
+const taskManager = createTaskManager({
+  dataRoot: DATA_ROOT,
+  notificationManager,
+  onError: (error) => console.error('Checklist reminder pass failed:', error.message)
+});
+const codexReviewSources = createCodexReviewSources({
+  runHostJson: runCodexReviewHostJson,
+  paths: readCodexReviewConnectorPaths()
+});
+const codexChecklistReviewManager = createCodexChecklistReviewManager({
+  dataRoot: DATA_ROOT,
+  taskManager,
+  notificationManager,
+  sourceAdapter: codexReviewSources,
+  codexConnectionManager,
+  onError: (error) => console.error('Codex checklist review failed:', error.code || error.message)
+});
+const webPushManager = createWebPushManager({
+  dataRoot: DATA_ROOT,
+  notificationManager
+});
+const telegramNotificationManager = createTelegramNotificationManager({
+  dataRoot: DATA_ROOT,
+  encryptionStore,
+  notificationManager,
+  taskManager
+});
+notificationManager.ensureIngestToken();
+notificationManager.onNotification((notification) => {
+  webPushManager.deliver(notification).catch((error) => {
+    console.error('Web Push delivery failed:', error.message);
+  });
+  telegramNotificationManager.deliver(notification).catch((error) => {
+    console.error('Telegram notification delivery failed:', error.message);
+  });
+});
+notificationManager.onStatus((notification) => {
+  telegramNotificationManager.syncStatus(notification).catch((error) => {
+    console.error('Telegram notification status sync failed:', error.code || 'telegram-message-sync-failed');
+  });
+});
+telegramNotificationManager.start();
+telegramNotificationManager.reconcileCommands().catch((error) => {
+  console.error('Telegram command reconciliation failed:', error.code || 'telegram-command-reconciliation-failed');
+});
+taskManager.start();
+codexChecklistReviewManager.start();
 
 function calendarPublicBaseUrl(req) {
   const configured = String(process.env.FOXOS_ROUTE_BASE_URL || '').trim();
@@ -1449,6 +1731,60 @@ function sendWeatherError(res, error) {
       : error.message,
     code: error.code || 'weather-operation-failed'
   });
+}
+
+function sendNotificationError(res, error) {
+  const status = error instanceof NotificationError ? error.statusCode : 500;
+  if (status >= 500 && !(error instanceof NotificationError)) {
+    console.error('Notification operation failed:', error.message);
+  }
+  return res.status(status).json({
+    error: status >= 500 && !(error instanceof NotificationError)
+      ? 'Bildirim işlemi tamamlanamadı.'
+      : error.message,
+    code: error.code || 'notification-operation-failed'
+  });
+}
+
+function sendTaskError(res, error) {
+  const status = error instanceof TaskError ? error.statusCode : 500;
+  if (status >= 500 && !(error instanceof TaskError)) {
+    console.error('Checklist operation failed:', error.message);
+  }
+  return res.status(status).json({
+    error: status >= 500 && !(error instanceof TaskError)
+      ? 'Görev işlemi tamamlanamadı.'
+      : error.message,
+    code: error.code || 'task-operation-failed'
+  });
+}
+
+function sendCodexChecklistReviewError(res, error) {
+  const status = error instanceof CodexChecklistReviewError ? error.statusCode : 500;
+  if (status >= 500 && !(error instanceof CodexChecklistReviewError)) {
+    console.error('Codex checklist review operation failed:', error.message);
+  }
+  return res.status(status).json({
+    error: status >= 500 && !(error instanceof CodexChecklistReviewError)
+      ? 'Codex iş kontrolü tamamlanamadı.'
+      : error.message,
+    code: error.code || 'codex-review-operation-failed'
+  });
+}
+
+async function codexChecklistReviewStatus() {
+  const [review, connection] = await Promise.all([
+    Promise.resolve(codexChecklistReviewManager.status()),
+    codexConnectionManager.status()
+  ]);
+  return {
+    ...review,
+    codex: {
+      ready: connection.ready === true && connection.fullServer === true,
+      connected: connection.connected === true,
+      fullServer: connection.fullServer === true
+    }
+  };
 }
 
 function desktopShortcutPathForWorkspaceTarget(target) {
@@ -1544,16 +1880,6 @@ const cloudflareConnectionManager = createCloudflareConnectionManager({
   dataRoot: DATA_ROOT,
   encryptionStore
 });
-const codexConnectionManager = createCodexConnectionManager({
-  dataRoot: DATA_ROOT,
-  inspectAccount: inspectHostCodexAccount,
-  inspectCli: inspectHostCodexCli,
-  installCli: installHostCodexCli,
-  prepareAppServer: prepareHostCodexAppServer,
-  spawnAppServer: spawnHostCodexAppServer,
-  stopAppServer: stopHostCodexAppServer,
-  memoryVaultPath: CODEX_MEMORY_VAULT
-});
 const geminiConnectionManager = createGeminiConnectionManager({
   dataRoot: DATA_ROOT,
   encryptionStore,
@@ -1575,6 +1901,27 @@ const antigravityConnectionManager = createAntigravityConnectionManager({
   inspectAccount: inspectHostAntigravityAccount,
   loginController: antigravityLoginController,
   logoutAccount: logoutHostAntigravityAccount
+});
+const cliUsageManager = createCliUsageManager({
+  providers: [
+    {
+      id: 'codex',
+      name: 'Codex',
+      connection: () => codexConnectionManager.status(),
+      read: () => codexConnectionManager.readRateLimits(),
+      normalize: normalizeCodexRateLimits
+    },
+    {
+      id: 'antigravity-cli',
+      name: 'Antigravity',
+      connection: () => antigravityConnectionManager.status(),
+      read: readHostAntigravityUsage,
+      normalize: normalizeAntigravityUsage
+    }
+  ],
+  onError: (provider, error) => {
+    console.error('CLI usage refresh failed:', provider, error && error.code || 'cli-usage-unavailable');
+  }
 });
 const adoptionManager = createAdoptionManager({
   dataRoot: DATA_ROOT,
@@ -2295,41 +2642,219 @@ async function getApplicationInventory() {
   };
 }
 
+function requireOwnerIngestToken(req, res, next) {
+  const authorization = String(req.get('authorization') || '');
+  const match = /^Bearer ([a-f0-9]{64})$/.exec(authorization);
+  if (!match || !notificationManager.authenticateIngestToken(match[1])) {
+    return res.status(401).json({ error: 'Owner ingest authentication required' });
+  }
+  next();
+}
+
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
+app.post('/api/notifications/ingest', requireOwnerIngestToken, (req, res) => {
+  try {
+    const notification = notificationManager.create(req.body);
+    res.status(201).json({ notification });
+  } catch (error) {
+    sendNotificationError(res, error);
+  }
+});
+
+app.post('/api/notifications/ingest/resolve', requireOwnerIngestToken, (req, res) => {
+  try {
+    const notification = notificationManager.resolveByDedupeKey(req.body);
+    res.json({ notification });
+  } catch (error) {
+    sendNotificationError(res, error);
+  }
+});
+
+app.get('/api/tasks/ingest', requireOwnerIngestToken, (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(taskManager.list({
+      status: req.query.status || 'open',
+      limit: req.query.limit === undefined ? 100 : Number(req.query.limit)
+    }));
+  } catch (error) {
+    sendTaskError(res, error);
+  }
+});
+
+app.post('/api/tasks/ingest', requireOwnerIngestToken, (req, res) => {
+  try {
+    const result = taskManager.create(req.body);
+    res.status(result.created ? 201 : 200).json(result);
+  } catch (error) {
+    sendTaskError(res, error);
+  }
+});
+
+app.patch('/api/tasks/ingest/:taskId', requireOwnerIngestToken, (req, res) => {
+  try {
+    res.json(taskManager.update(req.params.taskId, req.body));
+  } catch (error) {
+    sendTaskError(res, error);
+  }
+});
+
+app.post('/api/tasks/ingest/:taskId/complete', requireOwnerIngestToken, (req, res) => {
+  try {
+    res.json(taskManager.complete(req.params.taskId));
+  } catch (error) {
+    sendTaskError(res, error);
+  }
+});
+
+app.post('/api/tasks/ingest/:taskId/reopen', requireOwnerIngestToken, (req, res) => {
+  try {
+    res.json(taskManager.reopen(req.params.taskId));
+  } catch (error) {
+    sendTaskError(res, error);
+  }
+});
+
+app.post('/api/tasks/ingest/:taskId/snooze', requireOwnerIngestToken, (req, res) => {
+  try {
+    res.json(taskManager.snooze(req.params.taskId, req.body));
+  } catch (error) {
+    sendTaskError(res, error);
+  }
+});
+
+app.get('/api/tasks/codex-review/ingest', requireOwnerIngestToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ codexReview: await codexChecklistReviewStatus() });
+  } catch (error) {
+    sendCodexChecklistReviewError(res, error);
+  }
+});
+
+app.put('/api/tasks/codex-review/ingest', requireOwnerIngestToken, async (req, res) => {
+  try {
+    codexChecklistReviewManager.updateSettings(req.body || {});
+    res.json({ codexReview: await codexChecklistReviewStatus() });
+  } catch (error) {
+    sendCodexChecklistReviewError(res, error);
+  }
+});
+
+app.post('/api/tasks/codex-review/ingest/run', requireOwnerIngestToken, async (req, res) => {
+  try {
+    const result = await codexChecklistReviewManager.runNow();
+    res.json({ result, codexReview: await codexChecklistReviewStatus() });
+  } catch (error) {
+    sendCodexChecklistReviewError(res, error);
+  }
+});
+
+function passkeyContext(req) {
+  const configuredRPID = String(process.env.FOXOS_WEBAUTHN_RP_ID || process.env.FOXOS_DOMAIN || '').trim();
+  const candidateOrigin = String(req.get('origin') || `${req.protocol}://${req.get('host')}`).trim();
+  let origin;
+  try {
+    origin = new URL(candidateOrigin);
+  } catch {
+    throw new SecurityError('Passkey origin is invalid', 400, 'passkey-origin-invalid');
+  }
+  const rpID = configuredRPID || origin.hostname;
+  if (origin.hostname !== rpID && !origin.hostname.endsWith('.' + rpID)) {
+    throw new SecurityError('Passkey origin is not trusted', 403, 'passkey-origin-untrusted');
+  }
+  return { rpID, origin: origin.origin };
+}
+
+function sendSecurityError(res, error) {
+  const status = error instanceof SecurityError ? error.statusCode : 500;
+  if (status >= 500 && !(error instanceof SecurityError)) {
+    console.error('Security operation failed:', error.message);
+  }
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof SecurityError)
+      ? 'Security operation failed'
+      : error.message,
+    code: error.code || 'security-operation-failed'
+  });
+}
+
+function closeRevokedTerminalSessions(removed) {
+  for (const item of removed || []) {
+    if (!item || typeof item.tokenHash !== 'string') continue;
+    for (const terminalManager of activeTerminalManagers) {
+      terminalManager.closeOwnerSessions(item.tokenHash);
+    }
+  }
+}
+
 app.get('/api/auth/status', (req, res) => {
   const authRecord = readAuthRecord();
   const session = getSession(req);
-  if (session && session.renewed) {
-    setSessionCookie(res, session.token);
-  }
+  if (session) migrateLegacySessionCookie(res, session);
+  const security = authRecord ? securityManager.status() : null;
+  res.setHeader('Cache-Control', 'private, no-store');
   res.json({
     isSetup: Boolean(authRecord),
     authenticated: Boolean(session),
     username: session ? session.username : authRecord ? authRecord.username : null,
-    onboardingRequired: Boolean(session && initialSetupRequired(authRecord))
+    onboardingRequired: Boolean(session && initialSetupRequired(authRecord)),
+    localePreferences: localePreferencesForSession(authRecord, session),
+    passkeyAvailable: Boolean(security && security.passkeys.length),
+    recoveryAvailable: Boolean(security && security.recovery.configured),
+    session: session ? {
+      id: session.id,
+      authMethod: session.authMethod,
+      expiresAt: new Date(session.expiresAt).toISOString(),
+      idleExpiresAt: new Date(session.idleExpiresAt).toISOString()
+    } : null
   });
 });
 
-app.post('/api/auth/setup', (req, res) => {
-  const username = typeof req.body.username === 'string' ? req.body.username.trim() : '';
-  const password = typeof req.body.password === 'string' ? req.body.password : '';
-  if (!username || password.length < 10) {
-    return res.status(400).json({ error: 'Use a username and a password of at least 10 characters' });
+app.post('/api/auth/setup', async (req, res) => {
+  const username = typeof (req.body && req.body.username) === 'string' ? req.body.username.trim() : '';
+  const password = typeof (req.body && req.body.password) === 'string' ? req.body.password : '';
+  const localeValidation = validateLocalePreferences(
+    req.body && req.body.localePreferences,
+    { defaultWhenMissing: true }
+  );
+  if (!username || username.length > 128) {
+    return res.status(400).json({ error: 'Use a valid owner name', code: 'username-invalid' });
+  }
+  const validation = validateNewPassword(password, { username });
+  if (!validation.ok) {
+    return res.status(400).json({
+      error: `Use a password of at least ${PASSWORD_MIN_LENGTH} characters`,
+      code: validation.code
+    });
+  }
+  if (!localeValidation.ok) {
+    return res.status(400).json({
+      error: 'Choose supported language and region settings',
+      code: localeValidation.code
+    });
   }
   if (readAuthRecord()) {
     return res.status(409).json({ error: 'FoxOS is already configured' });
   }
 
-  const salt = crypto.randomBytes(16).toString('hex');
   const createdAt = new Date().toISOString();
+  const passwordCredential = await createPasswordCredential(password, { now: createdAt });
+  if (readAuthRecord()) {
+    return res.status(409).json({ error: 'FoxOS is already configured' });
+  }
   writeAuthRecord({
-    version: 3,
+    version: 4,
+    securitySchemaVersion: 1,
     username,
-    salt,
-    passwordHash: derivePassword(password, salt),
+    password: passwordCredential,
+    webauthnUserId: crypto.randomBytes(32).toString('base64url'),
+    passkeys: [],
+    recovery: { salt: null, generatedAt: null, needsRotation: false, codes: [] },
+    localePreferences: createLocalePreferencesRecord(localeValidation.preferences, { now: createdAt }),
     createdAt,
     initialSetup: {
       schemaVersion: INITIAL_SETUP_SCHEMA_VERSION,
@@ -2337,11 +2862,22 @@ app.post('/api/auth/setup', (req, res) => {
       startedAt: createdAt
     }
   });
-  createSession(res, username);
-  res.status(201).json({ success: true, username, onboardingRequired: true });
+  const session = createSession(req, res, username, 'password');
+  securityManager.recordEvent({
+    type: 'owner-created',
+    method: 'password',
+    sessionId: session.id,
+    client: summarizeAuthClient(req)
+  });
+  res.status(201).json({
+    success: true,
+    username,
+    onboardingRequired: true,
+    localePreferences: localeValidation.preferences
+  });
 });
 
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
   const retryAfter = checkLoginRateLimit(req);
   if (retryAfter) {
     res.setHeader('Retry-After', String(retryAfter));
@@ -2353,19 +2889,133 @@ app.post('/api/auth/login', (req, res) => {
     return res.status(400).json({ error: 'FoxOS has not been configured' });
   }
 
-  const password = typeof req.body.password === 'string' ? req.body.password : '';
-  if (!passwordMatches(password, authRecord)) {
+  const password = typeof (req.body && req.body.password) === 'string' ? req.body.password : '';
+  const verification = await securityManager.verifyOwnerPassword(password, {
+    client: summarizeAuthClient(req)
+  });
+  if (!verification.matched) {
     recordFailedLogin(req);
+    securityManager.recordEvent({
+      type: 'login-failed',
+      success: false,
+      method: 'password',
+      client: summarizeAuthClient(req)
+    });
     return res.status(401).json({ error: 'Invalid password' });
   }
 
   loginAttempts.delete(loginKey(req));
-  createSession(res, authRecord.username);
+  const session = createSession(req, res, authRecord.username, 'password');
+  securityManager.recordEvent({
+    type: 'login-succeeded',
+    method: 'password',
+    sessionId: session.id,
+    client: summarizeAuthClient(req)
+  });
   res.json({
     success: true,
     username: authRecord.username,
-    onboardingRequired: initialSetupRequired(authRecord)
+    onboardingRequired: initialSetupRequired(authRecord),
+    localePreferences: publicLocalePreferences(authRecord)
   });
+});
+
+app.post('/api/auth/passkey/options', async (req, res) => {
+  const retryAfter = checkLoginRateLimit(req);
+  if (retryAfter) {
+    res.setHeader('Retry-After', String(retryAfter));
+    return res.status(429).json({ error: 'Too many login attempts. Try again later.' });
+  }
+  res.setHeader('Cache-Control', 'private, no-store');
+  try {
+    res.json(await securityManager.beginPasskeyAuthentication(passkeyContext(req)));
+  } catch (error) {
+    sendSecurityError(res, error);
+  }
+});
+
+app.post('/api/auth/passkey/verify', async (req, res) => {
+  const retryAfter = checkLoginRateLimit(req);
+  if (retryAfter) {
+    res.setHeader('Retry-After', String(retryAfter));
+    return res.status(429).json({ error: 'Too many login attempts. Try again later.' });
+  }
+  res.setHeader('Cache-Control', 'private, no-store');
+  try {
+    const result = await securityManager.finishPasskeyAuthentication({
+      ceremonyId: req.body && req.body.ceremonyId,
+      response: req.body && req.body.response,
+      context: passkeyContext(req),
+      metadata: { client: summarizeAuthClient(req) }
+    });
+    loginAttempts.delete(loginKey(req));
+    const session = createSession(req, res, result.username, 'passkey');
+    securityManager.recordEvent({
+      type: 'login-succeeded',
+      method: 'passkey',
+      sessionId: session.id,
+      client: summarizeAuthClient(req)
+    });
+    const authRecord = readAuthRecord();
+    res.json({
+      success: true,
+      username: result.username,
+      onboardingRequired: initialSetupRequired(authRecord),
+      localePreferences: publicLocalePreferences(authRecord)
+    });
+  } catch (error) {
+    recordFailedLogin(req);
+    securityManager.recordEvent({
+      type: 'login-failed',
+      success: false,
+      method: 'passkey',
+      client: summarizeAuthClient(req)
+    });
+    sendSecurityError(res, error);
+  }
+});
+
+app.post('/api/auth/recovery/reset-password', async (req, res) => {
+  const retryAfter = checkLoginRateLimit(req);
+  if (retryAfter) {
+    res.setHeader('Retry-After', String(retryAfter));
+    return res.status(429).json({ error: 'Too many recovery attempts. Try again later.' });
+  }
+  res.setHeader('Cache-Control', 'private, no-store');
+  try {
+    const result = await securityManager.resetPasswordWithRecovery(
+      req.body && req.body.code,
+      req.body && req.body.newPassword,
+      { client: summarizeAuthClient(req) }
+    );
+    loginAttempts.delete(loginKey(req));
+    const removed = sessionStore.removeAll();
+    closeRevokedTerminalSessions(removed);
+    const session = createSession(req, res, result.username, 'recovery');
+    securityManager.recordEvent({
+      type: 'login-succeeded',
+      method: 'recovery',
+      sessionId: session.id,
+      client: summarizeAuthClient(req)
+    });
+    const authRecord = readAuthRecord();
+    res.json({
+      success: true,
+      username: result.username,
+      onboardingRequired: initialSetupRequired(authRecord),
+      localePreferences: publicLocalePreferences(authRecord),
+      recoveryCodesNeedRotation: true
+    });
+  } catch (error) {
+    recordFailedLogin(req);
+    securityManager.recordEvent({
+      type: 'login-failed',
+      success: false,
+      method: 'recovery',
+      client: summarizeAuthClient(req)
+    });
+    sendSecurityError(res, error);
+  }
 });
 
 app.post('/api/auth/maintenance-session', (req, res) => {
@@ -2374,12 +3024,19 @@ app.post('/api/auth/maintenance-session', (req, res) => {
     const authRecord = readAuthRecord();
     if (!authRecord) return res.status(409).json({ error: 'FoxOS has not been configured' });
     maintenanceSessionManager.consume(req.body && req.body.token);
-    createSession(res, authRecord.username);
+    const session = createSession(req, res, authRecord.username, 'maintenance');
+    securityManager.recordEvent({
+      type: 'login-succeeded',
+      method: 'maintenance',
+      sessionId: session.id,
+      client: summarizeAuthClient(req)
+    });
     res.json({
       success: true,
       username: authRecord.username,
       localOnly: true,
-      onboardingRequired: initialSetupRequired(authRecord)
+      onboardingRequired: initialSetupRequired(authRecord),
+      localePreferences: publicLocalePreferences(authRecord)
     });
   } catch (error) {
     const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
@@ -2393,6 +3050,12 @@ app.post('/api/auth/maintenance-session', (req, res) => {
 });
 
 app.post('/api/auth/logout', requireAuth, (req, res) => {
+  securityManager.recordEvent({
+    type: 'logout',
+    method: req.session.authMethod,
+    sessionId: req.session.id,
+    client: summarizeAuthClient(req)
+  });
   clearSession(req, res);
   res.status(204).end();
 });
@@ -2421,6 +3084,250 @@ app.get('/oauth/calendar/:provider/callback', async (req, res) => {
 });
 
 app.use('/api', requireAuth);
+
+app.get('/api/settings/locale', (req, res) => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.json({ localePreferences: publicLocalePreferences(readAuthRecord()) });
+});
+
+app.put('/api/settings/locale', (req, res) => {
+  const validation = validateLocalePreferences(req.body && req.body.localePreferences);
+  if (!validation.ok) {
+    return res.status(400).json({
+      error: 'Choose supported language and region settings',
+      code: validation.code
+    });
+  }
+  try {
+    const authRecord = readAuthRecord();
+    if (!authRecord) {
+      return res.status(409).json({ error: 'FoxOS has not been configured', code: 'locale-auth-missing' });
+    }
+    const localePreferences = createLocalePreferencesRecord(validation.preferences);
+    writeAuthRecord({ ...authRecord, localePreferences });
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ success: true, localePreferences: validation.preferences });
+  } catch (error) {
+    console.error('Could not save locale preferences:', error.message);
+    res.status(500).json({ error: 'Could not save language and region settings', code: 'locale-write-failed' });
+  }
+});
+
+async function verifySecurityPassword(req, res, password) {
+  const retryAfter = checkLoginRateLimit(req);
+  if (retryAfter) {
+    res.setHeader('Retry-After', String(retryAfter));
+    res.status(429).json({
+      error: 'Too many password attempts. Try again later.',
+      code: 'security-password-rate-limited'
+    });
+    return false;
+  }
+  const verification = await securityManager.verifyOwnerPassword(password, {
+    client: summarizeAuthClient(req),
+    sessionId: req.session.id
+  });
+  if (!verification.matched) {
+    recordFailedLogin(req);
+    securityManager.recordEvent({
+      type: 'login-failed',
+      success: false,
+      method: 'password',
+      sessionId: req.session.id,
+      client: summarizeAuthClient(req)
+    });
+    res.status(401).json({ error: 'Current password is invalid', code: 'current-password-invalid' });
+    return false;
+  }
+  loginAttempts.delete(loginKey(req));
+  return true;
+}
+
+app.get('/api/security/overview', (req, res) => {
+  const security = securityManager.status();
+  const sessions = sessionStore.list(req.session.token);
+  let secureTransport = false;
+  try {
+    secureTransport = passkeyContext(req).origin.startsWith('https://') && secureSessionCookies();
+  } catch {
+    // The overview stays available on the loopback maintenance path. Passkey
+    // ceremonies themselves still enforce the configured HTTPS origin.
+  }
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.json({
+    security,
+    posture: {
+      passkeyReady: security.passkeys.length > 0,
+      recoveryReady: security.recovery.configured && !security.recovery.needsRotation,
+      secureTransport,
+      activeSessionCount: sessions.length,
+      attentionRequired: !security.passkeys.length || !security.recovery.configured || security.recovery.needsRotation
+    },
+    passwordPolicy: {
+      minimumLength: PASSWORD_MIN_LENGTH,
+      maximumLength: 256,
+      compositionRules: false
+    },
+    sessions: sessions.slice(0, 3),
+    events: securityManager.listEvents(8)
+  });
+});
+
+app.get('/api/security/sessions', (req, res) => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.json({ sessions: sessionStore.list(req.session.token) });
+});
+
+app.delete('/api/security/sessions/:sessionId', (req, res) => {
+  if (req.params.sessionId === req.session.id) {
+    return res.status(409).json({ error: 'Use logout to end the current session', code: 'current-session-revoke' });
+  }
+  const removed = sessionStore.removeById(req.params.sessionId);
+  if (!removed.removed) {
+    return res.status(404).json({ error: 'Session was not found', code: 'session-not-found' });
+  }
+  closeRevokedTerminalSessions([removed]);
+  securityManager.recordEvent({
+    type: 'session-revoked',
+    method: req.session.authMethod,
+    sessionId: req.session.id,
+    client: summarizeAuthClient(req),
+    detail: removed.session.authMethod
+  });
+  res.status(204).end();
+});
+
+app.post('/api/security/sessions/revoke-others', (req, res) => {
+  const removed = sessionStore.removeOthers(req.session.token);
+  closeRevokedTerminalSessions(removed);
+  securityManager.recordEvent({
+    type: 'sessions-revoked',
+    method: req.session.authMethod,
+    sessionId: req.session.id,
+    client: summarizeAuthClient(req),
+    detail: String(removed.length)
+  });
+  res.json({ revoked: removed.length, sessions: sessionStore.list(req.session.token) });
+});
+
+app.get('/api/security/events', (req, res) => {
+  const limit = Number.parseInt(req.query.limit || '100', 10);
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.json({ events: securityManager.listEvents(limit) });
+});
+
+app.post('/api/security/passkeys/options', async (req, res) => {
+  try {
+    if (!await verifySecurityPassword(req, res, req.body && req.body.currentPassword)) return;
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(await securityManager.beginPasskeyRegistration({
+      sessionToken: req.session.token,
+      name: req.body && req.body.name,
+      preferredAuthenticatorType: req.body && req.body.preferredAuthenticatorType,
+      context: passkeyContext(req)
+    }));
+  } catch (error) {
+    sendSecurityError(res, error);
+  }
+});
+
+app.post('/api/security/passkeys/verify', async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'private, no-store');
+    const passkey = await securityManager.finishPasskeyRegistration({
+      sessionToken: req.session.token,
+      ceremonyId: req.body && req.body.ceremonyId,
+      response: req.body && req.body.response,
+      context: passkeyContext(req),
+      metadata: {
+        sessionId: req.session.id,
+        client: summarizeAuthClient(req)
+      }
+    });
+    res.status(201).json({ passkey, security: securityManager.status() });
+  } catch (error) {
+    sendSecurityError(res, error);
+  }
+});
+
+app.patch('/api/security/passkeys/:passkeyId', async (req, res) => {
+  try {
+    if (!await verifySecurityPassword(req, res, req.body && req.body.currentPassword)) return;
+    await securityManager.renamePasskey(req.params.passkeyId, req.body && req.body.name, {
+      method: 'password',
+      sessionId: req.session.id,
+      client: summarizeAuthClient(req)
+    });
+    res.json({ security: securityManager.status() });
+  } catch (error) {
+    sendSecurityError(res, error);
+  }
+});
+
+app.delete('/api/security/passkeys/:passkeyId', async (req, res) => {
+  try {
+    if (!await verifySecurityPassword(req, res, req.body && req.body.currentPassword)) return;
+    await securityManager.removePasskey(req.params.passkeyId, {
+      method: 'password',
+      sessionId: req.session.id,
+      client: summarizeAuthClient(req)
+    });
+    res.json({ security: securityManager.status() });
+  } catch (error) {
+    sendSecurityError(res, error);
+  }
+});
+
+app.post('/api/security/recovery-codes', async (req, res) => {
+  try {
+    if (!await verifySecurityPassword(req, res, req.body && req.body.currentPassword)) return;
+    res.setHeader('Cache-Control', 'private, no-store');
+    const codes = await securityManager.rotateRecoveryCodes({
+      method: 'password',
+      sessionId: req.session.id,
+      client: summarizeAuthClient(req)
+    });
+    res.status(201).json({ codes, security: securityManager.status() });
+  } catch (error) {
+    sendSecurityError(res, error);
+  }
+});
+
+app.put('/api/security/password', async (req, res) => {
+  const retryAfter = checkLoginRateLimit(req);
+  if (retryAfter) {
+    res.setHeader('Retry-After', String(retryAfter));
+    return res.status(429).json({
+      error: 'Too many password attempts. Try again later.',
+      code: 'security-password-rate-limited'
+    });
+  }
+  try {
+    await securityManager.changePassword(
+      req.body && req.body.currentPassword,
+      req.body && req.body.newPassword,
+      {
+        method: 'password',
+        sessionId: req.session.id,
+        client: summarizeAuthClient(req)
+      }
+    );
+    loginAttempts.delete(loginKey(req));
+    const removed = sessionStore.removeAll();
+    closeRevokedTerminalSessions(removed);
+    const session = createSession(req, res, req.session.username, 'password');
+    res.json({
+      success: true,
+      session: sessionStore.list(session.token).find((item) => item.current),
+      security: securityManager.status()
+    });
+  } catch (error) {
+    if (error instanceof SecurityError && error.code === 'current-password-invalid') {
+      recordFailedLogin(req);
+    }
+    sendSecurityError(res, error);
+  }
+});
 
 app.post('/api/setup/onboarding/complete', (req, res) => {
   const resolution = req.body && req.body.resolution;
@@ -2559,6 +3466,298 @@ app.get('/api/file-download', (req, res) => {
 });
 
 app.use('/api/static', express.static(DISK_ROOT, { dotfiles: 'deny', fallthrough: false }));
+
+app.get('/api/tasks', (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(taskManager.list({
+      status: req.query.status || 'all',
+      limit: req.query.limit === undefined ? 100 : Number(req.query.limit)
+    }));
+  } catch (error) {
+    sendTaskError(res, error);
+  }
+});
+
+app.post('/api/tasks', (req, res) => {
+  try {
+    const result = taskManager.create(req.body);
+    res.status(result.created ? 201 : 200).json(result);
+  } catch (error) {
+    sendTaskError(res, error);
+  }
+});
+
+app.patch('/api/tasks/:taskId', (req, res) => {
+  try {
+    res.json(taskManager.update(req.params.taskId, req.body));
+  } catch (error) {
+    sendTaskError(res, error);
+  }
+});
+
+app.post('/api/tasks/:taskId/complete', (req, res) => {
+  try {
+    res.json(taskManager.complete(req.params.taskId));
+  } catch (error) {
+    sendTaskError(res, error);
+  }
+});
+
+app.post('/api/tasks/:taskId/reopen', (req, res) => {
+  try {
+    res.json(taskManager.reopen(req.params.taskId));
+  } catch (error) {
+    sendTaskError(res, error);
+  }
+});
+
+app.post('/api/tasks/:taskId/snooze', (req, res) => {
+  try {
+    res.json(taskManager.snooze(req.params.taskId, req.body));
+  } catch (error) {
+    sendTaskError(res, error);
+  }
+});
+
+app.get('/api/tasks/codex-review', async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ codexReview: await codexChecklistReviewStatus() });
+  } catch (error) {
+    sendCodexChecklistReviewError(res, error);
+  }
+});
+
+app.get('/api/tasks/codex-review/telegram-chats', async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(await codexChecklistReviewManager.listTelegramChats());
+  } catch (error) {
+    sendCodexChecklistReviewError(res, error);
+  }
+});
+
+app.put('/api/tasks/codex-review', async (req, res) => {
+  try {
+    codexChecklistReviewManager.updateSettings(req.body || {});
+    res.json({ codexReview: await codexChecklistReviewStatus() });
+  } catch (error) {
+    sendCodexChecklistReviewError(res, error);
+  }
+});
+
+app.post('/api/tasks/codex-review/run', async (req, res) => {
+  try {
+    const result = await codexChecklistReviewManager.runNow();
+    res.json({ result, codexReview: await codexChecklistReviewStatus() });
+  } catch (error) {
+    sendCodexChecklistReviewError(res, error);
+  }
+});
+
+app.get('/api/notifications', (req, res) => {
+  try {
+    const result = notificationManager.list({
+      status: req.query.status || 'all',
+      limit: req.query.limit === undefined ? 50 : Number(req.query.limit),
+      source: req.query.source || null
+    });
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(result);
+  } catch (error) {
+    sendNotificationError(res, error);
+  }
+});
+
+app.post('/api/notifications', (req, res) => {
+  try {
+    const notification = notificationManager.create(req.body);
+    res.status(201).json({ notification });
+  } catch (error) {
+    sendNotificationError(res, error);
+  }
+});
+
+app.patch('/api/notifications/:notificationId', (req, res) => {
+  try {
+    const notification = notificationManager.updateStatus(req.params.notificationId, req.body);
+    res.json({ notification, stats: notificationManager.stats() });
+  } catch (error) {
+    sendNotificationError(res, error);
+  }
+});
+
+app.post('/api/notifications/read-all', (req, res) => {
+  try {
+    res.json(notificationManager.readAll());
+  } catch (error) {
+    sendNotificationError(res, error);
+  }
+});
+
+app.get('/api/notifications/settings', async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({
+      settings: notificationManager.settings(),
+      sources: notificationManager.sources(),
+      push: webPushManager.status(),
+      telegram: telegramNotificationManager.status(),
+      codexReview: await codexChecklistReviewStatus()
+    });
+  } catch (error) {
+    sendNotificationError(res, error);
+  }
+});
+
+app.put('/api/notifications/settings', async (req, res) => {
+  try {
+    const settings = notificationManager.updateSettings(req.body);
+    res.json({
+      settings,
+      sources: notificationManager.sources(),
+      push: webPushManager.status(),
+      telegram: telegramNotificationManager.status(),
+      codexReview: await codexChecklistReviewStatus()
+    });
+  } catch (error) {
+    sendNotificationError(res, error);
+  }
+});
+
+app.get('/api/notifications/push', (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(webPushManager.status());
+  } catch (error) {
+    sendNotificationError(res, error);
+  }
+});
+
+app.post('/api/notifications/push/subscriptions', (req, res) => {
+  try {
+    const result = webPushManager.subscribe(req.body && req.body.subscription, req.get('user-agent') || '');
+    res.status(201).json(result);
+  } catch (error) {
+    sendNotificationError(res, error);
+  }
+});
+
+app.delete('/api/notifications/push/subscriptions', (req, res) => {
+  try {
+    res.json(webPushManager.unsubscribe(req.body && req.body.endpoint));
+  } catch (error) {
+    sendNotificationError(res, error);
+  }
+});
+
+app.get('/api/notifications/telegram', (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(telegramNotificationManager.status());
+  } catch (error) {
+    sendNotificationError(res, error);
+  }
+});
+
+app.post('/api/notifications/telegram/configure', async (req, res) => {
+  try {
+    const telegram = await telegramNotificationManager.configure(req.body || {});
+    res.status(201).json({ telegram });
+  } catch (error) {
+    sendNotificationError(res, error);
+  }
+});
+
+app.post('/api/notifications/telegram/pair', (req, res) => {
+  try {
+    res.status(201).json({ telegram: telegramNotificationManager.startPairing() });
+  } catch (error) {
+    sendNotificationError(res, error);
+  }
+});
+
+app.put('/api/notifications/telegram', (req, res) => {
+  try {
+    res.json({ telegram: telegramNotificationManager.setEnabled(req.body && req.body.enabled) });
+  } catch (error) {
+    sendNotificationError(res, error);
+  }
+});
+
+app.post('/api/notifications/telegram/pause', (req, res) => {
+  try {
+    const hours = req.body && Object.hasOwn(req.body, 'hours') ? req.body.hours : null;
+    res.json({ telegram: telegramNotificationManager.pause(hours) });
+  } catch (error) {
+    sendNotificationError(res, error);
+  }
+});
+
+app.delete('/api/notifications/telegram', (req, res) => {
+  try {
+    res.json({ telegram: telegramNotificationManager.disconnect(req.body && req.body.confirmation) });
+  } catch (error) {
+    sendNotificationError(res, error);
+  }
+});
+
+app.post('/api/notifications/test', (req, res) => {
+  try {
+    const notification = notificationManager.create({
+      source: 'foxos',
+      category: 'test',
+      severity: 'success',
+      title: 'FoxOS bildirimleri hazır',
+      body: 'Bu test hem Bildirim Merkezi’ne hem etkin teslimat kanallarına gönderildi.',
+      target: { app: 'settings', tab: 'notifications' }
+    });
+    res.status(201).json({ notification });
+  } catch (error) {
+    sendNotificationError(res, error);
+  }
+});
+
+app.get('/api/notifications/stream', (req, res) => {
+  let initialStats;
+  let initialTaskStats;
+  try {
+    initialStats = notificationManager.stats();
+    initialTaskStats = taskManager.stats();
+  } catch (error) {
+    if (error instanceof TaskError) return sendTaskError(res, error);
+    return sendNotificationError(res, error);
+  }
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'private, no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders();
+  res.write('retry: 5000\n');
+  res.write(`event: ready\ndata: ${JSON.stringify({ stats: initialStats, tasks: initialTaskStats })}\n\n`);
+  const writeChange = (change) => {
+    try {
+      res.write(`event: change\ndata: ${JSON.stringify({
+        ...change,
+        stats: notificationManager.stats(),
+        tasks: taskManager.stats()
+      })}\n\n`);
+    } catch {
+      // The next successful state change or reconnect will refresh the client.
+    }
+  };
+  const removeNotificationListener = notificationManager.onChange(writeChange);
+  const removeTaskListener = taskManager.onChange(writeChange);
+  const keepAlive = setInterval(() => res.write(': keep-alive\n\n'), 25_000);
+  const close = () => {
+    clearInterval(keepAlive);
+    removeNotificationListener();
+    removeTaskListener();
+  };
+  req.once('close', close);
+  res.once('close', close);
+});
 
 app.get('/api/weather/locations', async (req, res) => {
   try {
@@ -3719,6 +4918,26 @@ app.get('/api/connections', async (req, res) => {
   }
 });
 
+app.get('/api/cli-usage', async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(await cliUsageManager.status());
+  } catch (error) {
+    console.error('CLI usage status failed:', error.message);
+    res.status(500).json({ error: 'CLI kullanım bilgisi alınamadı.', code: 'cli-usage-unavailable' });
+  }
+});
+
+app.post('/api/cli-usage/refresh', async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(await cliUsageManager.status({ force: true }));
+  } catch (error) {
+    console.error('CLI usage refresh failed:', error.message);
+    res.status(500).json({ error: 'CLI kullanım bilgisi yenilenemedi.', code: 'cli-usage-refresh-failed' });
+  }
+});
+
 app.get('/api/connections/calendar', (req, res) => {
   try {
     res.setHeader('Cache-Control', 'private, no-store');
@@ -3784,7 +5003,13 @@ app.get('/api/connections/codex', async (req, res) => {
 
 app.post('/api/connections/codex/install', async (req, res) => {
   try {
-    res.status(201).json(await codexConnectionManager.install(req.body && req.body.confirmation));
+    const result = await codexConnectionManager.install(req.body && req.body.confirmation);
+    try {
+      installBundledCodexSkills();
+    } catch (error) {
+      console.error('Could not install bundled FoxOS skills:', error.message);
+    }
+    res.status(201).json(result);
   } catch (error) {
     sendConnectionError(res, error, 'Could not install Codex CLI');
   }
@@ -4108,10 +5333,21 @@ app.post('/api/application-removal-plans/:planId/apply', async (req, res) => {
       code: 'application-removal-password-rate-limited'
     });
   }
-  const authRecord = readAuthRecord();
   const password = typeof body.password === 'string' ? body.password : '';
-  if (!authRecord || !passwordMatches(password, authRecord)) {
+  const verification = await securityManager.verifyOwnerPassword(password, {
+    client: summarizeAuthClient(req),
+    sessionId: req.session.id
+  });
+  if (!verification.matched) {
     recordFailedLogin(req);
+    securityManager.recordEvent({
+      type: 'login-failed',
+      success: false,
+      method: 'password',
+      sessionId: req.session.id,
+      client: summarizeAuthClient(req),
+      detail: 'application-removal'
+    });
     return res.status(401).json({
       error: 'Şifre hatalı. Uygulama kaldırılmadı.',
       code: 'application-removal-password-invalid'
@@ -4523,6 +5759,9 @@ app.use((error, req, res, next) => {
 
 if (require.main === module) {
   const shutdownAntigravityLogin = () => {
+    telegramNotificationManager.stop();
+    codexChecklistReviewManager.stop();
+    taskManager.stop();
     for (const terminalManager of activeTerminalManagers) terminalManager.shutdown();
     antigravityLoginController.shutdown()
       .catch(() => {})
@@ -4574,6 +5813,10 @@ if (require.main === module) {
         console.log('FoxOS is listening on port ' + PORT);
         console.log('Host execution mode: ' + HOST_EXECUTION);
         console.log('Host filesystem mount: ' + HOST_ROOT);
+
+        inspectHostCodexCli()
+          .then((inspection) => inspection.installed && installBundledCodexSkills())
+          .catch((error) => console.error('Could not reconcile bundled FoxOS skills:', error.message));
 
         if (process.env.FOXOS_RESOURCE_SCAN_ON_STARTUP === 'false') return;
         resourceRegistry.scan()

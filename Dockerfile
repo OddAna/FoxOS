@@ -90,6 +90,7 @@ WORKDIR /app
 COPY backend/package*.json ./
 COPY --from=backend-deps /build/backend/node_modules ./node_modules
 COPY backend/ ./
+COPY skills/ ./skills/
 COPY --from=frontend-builder /build/frontend/dist ./public
 COPY --from=thumbnailer-builder /opt/foxos-thumbnailer /opt/foxos-thumbnailer
 

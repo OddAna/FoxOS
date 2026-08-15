@@ -38,7 +38,7 @@ test('Codex local file metadata preserves source locations and chooses safe prev
 
 test('Codex and Files surfaces expose an explicit file download action', () => {
   assert.match(codexMarkdown, /codex-local-file-download/);
-  assert.match(codexMarkdown, /Dosyayı indir/);
+  assert.match(codexMarkdown, /codexApp\.downloadFile/);
   assert.match(filesApp, /handleDownload/);
-  assert.match(filesApp, /<Download size=\{14\} \/> İndir/);
+  assert.match(filesApp, /t\('filesApp\.download'\)/);
 });

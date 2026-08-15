@@ -31,6 +31,7 @@ services:
       FOXOS_GEMINI_HOST_STATE_ROOT: "${FOXOS_GEMINI_HOST_STATE_ROOT:-/var/lib/foxos/gemini}"
       FOXOS_SECURE_COOKIE: "${FOXOS_SECURE_COOKIE:-false}"
       FOXOS_TRUST_PROXY: "${FOXOS_TRUST_PROXY:-0}"
+      FOXOS_DOMAIN: "${FOXOS_DOMAIN:-}"
     labels:
       com.foxos.core: "true"
     restart: unless-stopped

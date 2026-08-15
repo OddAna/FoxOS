@@ -1,7 +1,9 @@
 import React from 'react';
 import { APPLICATION_STATUS, applicationOperationalState } from '../utils/applicationStatus';
+import { useI18n } from '../contexts/LocaleContext';
 
 const ApplicationStatus = ({ application, pendingAction, compact = false }) => {
+  const { t } = useI18n();
   const state = applicationOperationalState(application, pendingAction);
   const status = APPLICATION_STATUS[state] || APPLICATION_STATUS.stopped;
   const labelColor = state === 'stopped' ? '#aaa' : status.color;
@@ -18,7 +20,7 @@ const ApplicationStatus = ({ application, pendingAction, compact = false }) => {
           boxShadow: '0 2px 5px rgba(0,0,0,0.4)'
         }}
       />
-      <span>{status.label}</span>
+      <span>{t(status.labelKey)}</span>
     </div>
   );
 };

@@ -10,7 +10,8 @@ write to the host filesystem, and control the Docker daemon.
 - Reach FoxOS through an SSH tunnel, a private VPN, or an authenticated HTTPS
   reverse proxy.
 - Do not publish port `8080` directly to the public internet.
-- Use a unique password of at least 10 characters.
+- Use a unique password of at least 15 characters, add a passkey and store the
+  one-time recovery codes away from the server.
 - Keep the server, Docker Engine, and FoxOS image up to date.
 - Back up files before using terminal or file-management write actions.
 - Base `install.sh` must never create a provider account, bucket, subscription,

@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Save, CheckCircle } from 'lucide-react';
 import { apiFetch } from '../api';
+import { useI18n } from '../contexts/LocaleContext';
 
 const TextEditorApp = ({ filePath, initialLine = null }) => {
+  const { t } = useI18n();
   const [content, setContent] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -20,7 +22,7 @@ const TextEditorApp = ({ filePath, initialLine = null }) => {
         setContent(text);
       } catch (err) {
         console.error(err);
-        setError('Dosya yüklenirken hata oluştu.');
+        setError(t('textEditor.loadError'));
       } finally {
         setLoading(false);
       }
@@ -28,7 +30,7 @@ const TextEditorApp = ({ filePath, initialLine = null }) => {
     if (filePath) {
       fetchContent();
     }
-  }, [filePath]);
+  }, [filePath, t]);
 
   useEffect(() => {
     if (loading || !Number.isInteger(initialLine) || initialLine < 1 || !editorRef.current) return;
@@ -60,7 +62,7 @@ const TextEditorApp = ({ filePath, initialLine = null }) => {
       setTimeout(() => setSaved(false), 2000);
     } catch (err) {
       console.error(err);
-      setError('Dosya kaydedilemedi.');
+      setError(t('textEditor.saveError'));
     } finally {
       setSaving(false);
     }
@@ -84,10 +86,10 @@ const TextEditorApp = ({ filePath, initialLine = null }) => {
         
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           {error && <span style={{ color: '#f44336', fontSize: '12px' }}>{error}</span>}
-          {saved && <span style={{ color: '#4caf50', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}><CheckCircle size={14} /> Kaydedildi</span>}
+          {saved && <span style={{ color: '#4caf50', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}><CheckCircle size={14} /> {t('textEditor.saved')}</span>}
           <div 
             onClick={handleSave}
-            title="Kaydet (CTRL+S)"
+            title={t('textEditor.saveShortcut')}
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -103,7 +105,7 @@ const TextEditorApp = ({ filePath, initialLine = null }) => {
             }}
           >
             <Save size={14} />
-            {saving ? 'Kaydediliyor...' : 'Kaydet'}
+            {saving ? t('textEditor.saving') : t('common.save')}
           </div>
         </div>
       </div>
@@ -111,7 +113,7 @@ const TextEditorApp = ({ filePath, initialLine = null }) => {
       {/* Editor Content */}
       <div style={{ flex: 1, padding: '16px', overflowY: 'auto' }}>
         {loading ? (
-          <div style={{ color: '#888', fontSize: '14px' }}>Yükleniyor...</div>
+          <div style={{ color: '#888', fontSize: '14px' }}>{t('textEditor.loading')}</div>
         ) : (
           <textarea
             ref={editorRef}
@@ -123,7 +125,7 @@ const TextEditorApp = ({ filePath, initialLine = null }) => {
                 handleSave();
               }
             }}
-            placeholder="Bir şeyler yazmaya başla..."
+            placeholder={t('textEditor.placeholder')}
             style={{
               width: '100%',
               height: '100%',

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useCallback, useState, useEffect, useMemo, useRef } from 'react';
 import { Play, RotateCw, Settings as SettingsIcon, Square, Trash2, X } from 'lucide-react';
 import './index.css';
 import { WindowProvider, useWindowManager } from './contexts/WindowContext';
@@ -39,6 +39,13 @@ import {
   updateConfirmationMessage
 } from './utils/applicationUpdates';
 import { mobileDesktopLayout, paginateDesktopItems } from './utils/mobileDesktopLayout';
+import {
+  appearanceBackground,
+  appearanceDesktopMetrics,
+  appearanceShellMetrics,
+  useAppearance
+} from './utils/appearance';
+import { useI18n } from './contexts/LocaleContext';
 
 const createDesktopPointerPreview = (draggedItems, fileElements) => {
   const sources = draggedItems.map((item) => ({
@@ -88,6 +95,7 @@ const createDesktopPointerPreview = (draggedItems, fileElements) => {
 };
 
 const Desktop = () => {
+  const { t } = useI18n();
   const { windows, openWindow } = useWindowManager();
   const { showDialog } = useDialog();
   const { openApplicationRemoval } = useApplicationRemoval();
@@ -116,6 +124,10 @@ const Desktop = () => {
   const suppressDesktopClick = useRef(false);
   const mobileDesktopPageRef = useRef(0);
   const [mobileDesktopPage, setMobileDesktopPage] = useState(0);
+  const { appearance } = useAppearance();
+  const desktopAppearance = useMemo(() => appearanceBackground(appearance), [appearance]);
+  const desktopMetrics = useMemo(() => appearanceDesktopMetrics(appearance), [appearance]);
+  const shellMetrics = useMemo(() => appearanceShellMetrics(appearance), [appearance]);
 
   const [windowSize, setWindowSize] = useState({ width: window.innerWidth, height: window.innerHeight });
   const isMobileViewport = windowSize.width <= 720;
@@ -155,7 +167,7 @@ const Desktop = () => {
     ? paginateDesktopItems(desktopItems, mobileLayout.itemsPerPage)
     : [desktopItems];
 
-  const persistNewItemPositions = (items) => {
+  const persistNewItemPositions = useCallback((items) => {
     if (window.innerWidth <= 720) return;
     setPositions((current) => {
       const updated = { ...current };
@@ -164,8 +176,8 @@ const Desktop = () => {
         if (position.col !== undefined) occupied.add(`${position.col},${position.row}`);
       });
 
-      const availableHeight = window.innerHeight - 30 - 80 - 32;
-      const maxRows = Math.max(1, Math.floor(availableHeight / 100));
+      const availableHeight = window.innerHeight - shellMetrics.topbarHeight - shellMetrics.dockReserve - 32;
+      const maxRows = Math.max(1, Math.floor(availableHeight / desktopMetrics.cellTarget));
       let nextIndex = 0;
       let changed = false;
 
@@ -187,29 +199,26 @@ const Desktop = () => {
       localStorage.setItem('desktop_positions_v3', JSON.stringify(updated));
       return updated;
     });
-  };
+  }, [desktopMetrics.cellTarget, shellMetrics.dockReserve, shellMetrics.topbarHeight]);
 
   const getDesktopItemPosition = (item) => {
     const MARGIN_X = 20;
     const MARGIN_Y = 20;
-    const TOPBAR_H = 30;
-    const TASKBAR_H = 80;
     const desktopW = windowSize.width;
-    const desktopH = windowSize.height - TOPBAR_H;
-    
     const availableW = desktopW - (2 * MARGIN_X);
-    const availableH = desktopH - TASKBAR_H - (2 * MARGIN_Y);
+    const availableH = windowSize.height - shellMetrics.topbarHeight - shellMetrics.dockReserve - (2 * MARGIN_Y);
 
-    const maxCols = Math.max(1, Math.floor(availableW / 100));
-    const maxRows = Math.max(1, Math.floor(availableH / 100));
+    const maxCols = Math.max(1, Math.floor(availableW / desktopMetrics.cellTarget));
+    const maxRows = Math.max(1, Math.floor(availableH / desktopMetrics.cellTarget));
 
     const cellW = availableW / maxCols;
     const cellH = availableH / maxRows;
 
     let col, row;
-    if (positions[item.positionKey] && positions[item.positionKey].col !== undefined) {
-      col = Math.min(positions[item.positionKey].col, maxCols - 1);
-      row = Math.min(positions[item.positionKey].row, maxRows - 1);
+    const savedPosition = positions[item.positionKey];
+    if (savedPosition && savedPosition.col !== undefined) {
+      col = Math.min(savedPosition.col, maxCols - 1);
+      row = Math.min(savedPosition.row, maxRows - 1);
     } else {
       const index = desktopItems.findIndex((candidate) => candidate.desktopId === item.desktopId);
       if (index === -1) { col = 0; row = 0; }
@@ -220,15 +229,23 @@ const Desktop = () => {
       }
     }
 
-    return {
-      left: MARGIN_X + (col * cellW),
-      top: MARGIN_Y + (row * cellH),
-      width: cellW,
-      height: cellH
-    };
+    const gridLeft = MARGIN_X + (col * cellW);
+    const gridTop = MARGIN_Y + (row * cellH);
+    if (!appearance.snapToGrid) {
+      const width = Math.min(desktopMetrics.cellTarget, availableW);
+      const height = Math.min(desktopMetrics.cellTarget, availableH);
+      return {
+        left: Math.min(Math.max(MARGIN_X, Number(savedPosition?.x) || gridLeft), Math.max(MARGIN_X, desktopW - MARGIN_X - width)),
+        top: Math.min(Math.max(MARGIN_Y, Number(savedPosition?.y) || gridTop), Math.max(MARGIN_Y, availableH + MARGIN_Y - height)),
+        width,
+        height
+      };
+    }
+
+    return { left: gridLeft, top: gridTop, width: cellW, height: cellH };
   };
 
-  const fetchDesktopFiles = async () => {
+  const fetchDesktopFiles = useCallback(async () => {
     try {
       const response = await apiFetch('/api/files?path=Masaüstü');
       const data = await response.json();
@@ -236,14 +253,14 @@ const Desktop = () => {
       setDesktopFiles(newFiles);
       persistNewItemPositions(newFiles.map((file) => ({ positionKey: file.name })));
     } catch (err) {
-      console.error('Masaüstü dosyaları çekilemedi:', err);
+      console.error('Desktop files could not be loaded:', err);
     }
-  };
+  }, [persistNewItemPositions]);
 
   const refreshDesktop = () => {
     fetchDesktopFiles();
     refreshApplications({ quiet: true }).catch((error) => {
-      console.error('Sunucu uygulamaları çekilemedi:', error);
+      console.error('Server applications could not be loaded:', error);
     });
   };
 
@@ -259,7 +276,7 @@ const Desktop = () => {
       window.removeEventListener('refresh_files', handleRefresh);
       window.removeEventListener('resize', handleResize);
     };
-  }, []);
+  }, [fetchDesktopFiles]);
 
   useEffect(() => () => activePointerDrag.current?.cleanup(), []);
 
@@ -267,7 +284,7 @@ const Desktop = () => {
     persistNewItemPositions(desktopApplications.map((application) => ({
       positionKey: `application:${application.id}`
     })));
-  }, [desktopApplications]);
+  }, [desktopApplications, persistNewItemPositions]);
 
   useEffect(() => {
     if (isMobileViewport) return;
@@ -275,7 +292,7 @@ const Desktop = () => {
       ...desktopFiles.map((file) => ({ positionKey: file.name })),
       ...desktopApplications.map((application) => ({ positionKey: `application:${application.id}` }))
     ]);
-  }, [isMobileViewport, desktopFiles, desktopApplications]);
+  }, [isMobileViewport, desktopFiles, desktopApplications, persistNewItemPositions]);
 
   useEffect(() => {
     const page = Math.min(mobileDesktopPageRef.current, mobileLayout.pageCount - 1);
@@ -305,7 +322,7 @@ const Desktop = () => {
   }, []);
 
   const handleContextMenu = (e, item = null) => {
-    // Dock, pencere veya topbar içindeyken masaüstü menüsünü engelle
+    // Do not open the desktop menu over the Dock, a window, or the menu bar.
     if (!item && (e.target.closest('.window') || e.target.closest('.dock-container') || e.target.closest('.topbar'))) {
       return;
     }
@@ -380,7 +397,7 @@ const Desktop = () => {
       if (file.desktopKind === 'application' && file.applicationId) {
         const application = applications.find((candidate) => candidate.id === file.applicationId);
         if (!application || !targetDesktopPath) {
-          return Promise.reject(new Error('Uygulama yalnız Masaüstü klasörlerine taşınabilir'));
+          return Promise.reject(new Error(t('desktop.applicationMoveRestriction')));
         }
         return setDesktopShortcutLocation(application, targetDesktopPath);
       }
@@ -403,12 +420,12 @@ const Desktop = () => {
         refreshApplications({ quiet: true }).catch(() => {});
       }
     }).catch((error) => {
-      console.error('Taşıma hatası:', error);
-      showDialog({ title: 'Hata', message: 'Öğeler taşınamadı.', type: 'error' });
+      console.error('Move failed:', error);
+      showDialog({ title: t('common.error'), message: t('desktop.moveError'), type: 'error' });
     });
   };
 
-  const applyDesktopDrop = (data, clientX, clientY, desktopRect) => {
+  const applyDesktopDrop = (data, clientX, clientY, gridRect) => {
     const filesToMove = data.files || (data.name ? [{
       name: data.name,
       positionKey: data.name,
@@ -424,24 +441,41 @@ const Desktop = () => {
 
     const marginX = 20;
     const marginY = 20;
-    const taskbarHeight = 80;
-    const availableWidth = desktopRect.width - (2 * marginX);
-    const availableHeight = desktopRect.height - taskbarHeight - (2 * marginY);
-    const maxColumns = Math.max(1, Math.floor(availableWidth / 100));
-    const maxRows = Math.max(1, Math.floor(availableHeight / 100));
+    const availableWidth = gridRect.width - (2 * marginX);
+    const availableHeight = gridRect.height - (2 * marginY);
+    const maxColumns = Math.max(1, Math.floor(availableWidth / desktopMetrics.cellTarget));
+    const maxRows = Math.max(1, Math.floor(availableHeight / desktopMetrics.cellTarget));
     const cellWidth = availableWidth / maxColumns;
     const cellHeight = availableHeight / maxRows;
-    const rawX = (clientX - desktopRect.left) - data.offsetX;
-    const rawY = (clientY - desktopRect.top) - data.offsetY;
+    const rawX = (clientX - gridRect.left) - (Number(data.offsetX) || 0);
+    const rawY = (clientY - gridRect.top) - (Number(data.offsetY) || 0);
     const column = Math.min(maxColumns - 1, Math.max(0, Math.round((rawX - marginX) / cellWidth)));
     const row = Math.min(maxRows - 1, Math.max(0, Math.round((rawY - marginY) / cellHeight)));
+    const freeWidth = Math.min(desktopMetrics.cellTarget, availableWidth);
+    const freeHeight = Math.min(desktopMetrics.cellTarget, availableHeight);
+    const freeX = Math.min(Math.max(marginX, rawX), Math.max(marginX, gridRect.width - marginX - freeWidth));
+    const freeY = Math.min(Math.max(marginY, rawY), Math.max(marginY, gridRect.height - marginY - freeHeight));
 
-    const placements = filesToMove.map((file) => ({
-      file,
-      column: Math.min(maxColumns - 1, Math.max(0, column + Math.round((file.relX || 0) / cellWidth))),
-      row: Math.min(maxRows - 1, Math.max(0, row + Math.round((file.relY || 0) / cellHeight)))
-    }));
-    const collides = placements.some((placement) => desktopItems.some((existing) => {
+    const placements = filesToMove.map((file) => {
+      const positionKey = file.positionKey || file.name;
+      const previousGridPosition = positions[positionKey];
+      const requestedColumn = column + Math.round((file.relX || 0) / cellWidth);
+      const requestedRow = row + Math.round((file.relY || 0) / cellHeight);
+      const nextColumn = Math.min(maxColumns - 1, Math.max(0, !appearance.snapToGrid && previousGridPosition?.col !== undefined
+        ? previousGridPosition.col
+        : requestedColumn));
+      const nextRow = Math.min(maxRows - 1, Math.max(0, !appearance.snapToGrid && previousGridPosition?.row !== undefined
+        ? previousGridPosition.row
+        : requestedRow));
+      const nextX = appearance.snapToGrid
+        ? marginX + (nextColumn * cellWidth)
+        : Math.min(Math.max(marginX, freeX + (file.relX || 0)), Math.max(marginX, gridRect.width - marginX - freeWidth));
+      const nextY = appearance.snapToGrid
+        ? marginY + (nextRow * cellHeight)
+        : Math.min(Math.max(marginY, freeY + (file.relY || 0)), Math.max(marginY, gridRect.height - marginY - freeHeight));
+      return { file, column: nextColumn, row: nextRow, x: nextX, y: nextY };
+    });
+    const collides = appearance.snapToGrid && placements.some((placement) => desktopItems.some((existing) => {
       if (filesToMove.some((dragged) => (
         (dragged.positionKey || dragged.name) === existing.positionKey
       ))) return false;
@@ -451,8 +485,8 @@ const Desktop = () => {
     if (collides) return;
 
     const nextPositions = { ...positions };
-    placements.forEach(({ file, column: nextColumn, row: nextRow }) => {
-      nextPositions[file.positionKey || file.name] = { col: nextColumn, row: nextRow };
+    placements.forEach(({ file, column: nextColumn, row: nextRow, x, y }) => {
+      nextPositions[file.positionKey || file.name] = { col: nextColumn, row: nextRow, x, y };
     });
     setPositions(nextPositions);
     localStorage.setItem('desktop_positions_v3', JSON.stringify(nextPositions));
@@ -463,9 +497,10 @@ const Desktop = () => {
     const dataString = e.dataTransfer.getData('text/plain');
     if (!dataString) return;
     try {
-      applyDesktopDrop(JSON.parse(dataString), e.clientX, e.clientY, e.currentTarget.getBoundingClientRect());
+      const gridRect = gridRef.current?.getBoundingClientRect() || e.currentTarget.getBoundingClientRect();
+      applyDesktopDrop(JSON.parse(dataString), e.clientX, e.clientY, gridRect);
     } catch (error) {
-      console.error('Sürükle bırak parse hatası:', error);
+      console.error('Could not parse drag-and-drop data:', error);
     }
   };
 
@@ -548,8 +583,7 @@ const Desktop = () => {
         return;
       }
       const desktopGrid = hitElement && hitElement.closest('[data-foxos-desktop-grid="true"]');
-      const desktop = desktopGrid && desktopGrid.closest('.desktop');
-      if (desktop) applyDesktopDrop(data, dropX, dropY, desktop.getBoundingClientRect());
+      if (desktopGrid) applyDesktopDrop(data, dropX, dropY, desktopGrid.getBoundingClientRect());
     };
     const onPointerUp = (upEvent) => finishDrag(upEvent, false);
     const onPointerCancel = (cancelEvent) => finishDrag(cancelEvent, true);
@@ -565,10 +599,10 @@ const Desktop = () => {
   const handleDelete = (file) => {
     setDesktopMenu(null);
     showDialog({
-      title: 'Dosyayı Sil',
-      message: `"${file.name}" adlı öğeyi Çöp Kutusuna taşımak istediğinize emin misiniz?`,
+      title: t('desktop.deleteFileTitle'),
+      message: t('desktop.deleteFileMessage', { name: file.name }),
       type: 'warning',
-      confirmText: 'Evet, Sil',
+      confirmText: t('desktop.deleteFileConfirm'),
       onConfirm: async () => {
         try {
           await apiFetch('/api/delete', {
@@ -579,7 +613,7 @@ const Desktop = () => {
           fetchDesktopFiles();
           refreshApplications({ quiet: true }).catch(() => {});
         } catch {
-          showDialog({ title: 'Hata', message: 'Dosya silinemedi.', type: 'error' });
+          showDialog({ title: t('common.error'), message: t('desktop.deleteFileError'), type: 'error' });
         }
       }
     });
@@ -588,11 +622,11 @@ const Desktop = () => {
   const handleRename = (file) => {
     setDesktopMenu(null);
     showDialog({
-      title: 'Yeniden Adlandır',
-      message: `"${file.name}" için yeni bir ad girin:`,
+      title: t('desktop.renameTitle'),
+      message: t('desktop.renameMessage', { name: file.name }),
       type: 'prompt',
       defaultValue: file.name,
-      confirmText: 'Kaydet',
+      confirmText: t('common.save'),
       onConfirm: (newName) => {
         if (!newName || newName === file.name) return;
         apiFetch('/api/rename', {
@@ -603,7 +637,7 @@ const Desktop = () => {
           fetchDesktopFiles();
           refreshApplications({ quiet: true }).catch(() => {});
         })
-          .catch(() => showDialog({ title: 'Hata', message: 'Yeniden adlandırılamadı.', type: 'error' }));
+          .catch(() => showDialog({ title: t('common.error'), message: t('desktop.renameError'), type: 'error' }));
       }
     });
   };
@@ -611,11 +645,11 @@ const Desktop = () => {
   const handleNewFolder = () => {
     setDesktopMenu(null);
     showDialog({
-      title: 'Yeni Klasör',
-      message: 'Oluşturulacak klasörün adını girin:',
+      title: t('desktop.newFolderTitle'),
+      message: t('desktop.newFolderMessage'),
       type: 'prompt',
-      defaultValue: 'Yeni Klasör',
-      confirmText: 'Oluştur',
+      defaultValue: t('desktop.newFolderDefaultName'),
+      confirmText: t('desktop.create'),
       onConfirm: (name) => {
         if (!name) return;
         apiFetch('/api/mkdir', {
@@ -623,7 +657,7 @@ const Desktop = () => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ path: '/Masaüstü', name })
         }).then(() => fetchDesktopFiles())
-          .catch(() => showDialog({ title: 'Hata', message: 'Klasör oluşturulamadı.', type: 'error' }));
+          .catch(() => showDialog({ title: t('common.error'), message: t('desktop.newFolderError'), type: 'error' }));
       }
     });
   };
@@ -653,8 +687,8 @@ const Desktop = () => {
   const handleOpenApplication = (application) => {
     if (application.runtime.operationalState !== 'running') {
       showDialog({
-        title: 'Servis Kapalı',
-        message: 'Bu uygulama şu anda kapalı. Sağ tıklayarak servisi başlatabilirsiniz.',
+        title: t('applications.serviceStoppedTitle'),
+        message: t('desktop.serviceStoppedMessage'),
         type: 'warning'
       });
       return;
@@ -665,8 +699,8 @@ const Desktop = () => {
     }
     if (!application.hostPort) {
       showDialog({
-        title: 'Erişim Adresi Bulunamadı',
-        message: 'Bu uygulama için açılabilir bir alan adı veya yayın portu bulunamadı.',
+        title: t('applications.noAccessTitle'),
+        message: t('applications.noAccessMessage'),
         type: 'info'
       });
       return;
@@ -675,8 +709,8 @@ const Desktop = () => {
     const localFoxOS = ['127.0.0.1', 'localhost'].includes(window.location.hostname);
     if (application.bindAddress === '127.0.0.1' && !localFoxOS) {
       showDialog({
-        title: 'Özel Erişim',
-        message: `Bu uygulama 127.0.0.1:${application.hostPort} üzerinde çalışıyor. Aynı portu SSH tüneliyle açın.`,
+        title: t('applications.privateAccessTitle'),
+        message: t('applications.privateAccessMessage', { port: application.hostPort }),
         type: 'info'
       });
       return;
@@ -693,7 +727,7 @@ const Desktop = () => {
     try {
       await executeApplicationAction(application, action);
     } catch (error) {
-      showDialog({ title: 'İşlem Hatası', message: error.message, type: 'error' });
+      showDialog({ title: t('desktop.operationErrorTitle'), message: error.message, type: 'error' });
     }
   };
 
@@ -702,7 +736,7 @@ const Desktop = () => {
     openWindow({
       id: 'settings',
       type: 'settings',
-      title: 'Ayarlar',
+      title: t('common.settings'),
       component: null,
       width: 1000,
       height: 680,
@@ -714,38 +748,55 @@ const Desktop = () => {
     });
   };
 
+  const openAppearanceSettings = (section = 'device') => {
+    setDesktopMenu(null);
+    openWindow({
+      id: 'settings',
+      type: 'settings',
+      title: t('common.settings'),
+      component: null,
+      width: 1000,
+      height: 680,
+      navigation: {
+        tab: 'display',
+        section,
+        requestId: Date.now()
+      }
+    });
+  };
+
   const checkApplicationUpdate = async (application) => {
     setDesktopMenu(null);
     try {
       const { update: result, plan } = await checkAndPlanApplicationUpdate(application.id);
       if (plan) {
         showDialog({
-          title: 'Güncellemeyi Uygula',
-          message: updateConfirmationMessage(plan),
+          title: t('applications.applyUpdateTitle'),
+          message: updateConfirmationMessage(plan, t),
           type: 'confirm',
-          confirmText: 'Güncelle',
-          cancelText: 'Vazgeç',
-          pendingText: 'Güncelleniyor…',
+          confirmText: t('applications.update'),
+          cancelText: t('common.cancel'),
+          pendingText: t('applications.updating'),
           onConfirm: async () => {
             try {
               const operation = await applyApplicationUpdate(plan.planId);
               await refreshApplications();
-              showDialog({ title: 'Güncelleme Tamamlandı', message: operation.message, type: 'success' });
+              showDialog({ title: t('applications.updateCompleteTitle'), message: operation.message, type: 'success' });
             } catch (error) {
-              showDialog({ title: 'Güncelleme Tamamlanamadı', message: error.message, type: 'error' });
+              showDialog({ title: t('desktop.updateFailedTitle'), message: error.message, type: 'error' });
             }
           }
         });
         return;
       }
       showDialog({
-        title: result.status === 'update-available' ? 'Güncelleme Bulundu' : 'Güncelleme Denetimi',
+        title: result.status === 'update-available' ? t('desktop.updateFoundTitle') : t('desktop.updateCheckTitle'),
         message: result.message,
         type: 'info',
-        confirmText: 'Tamam'
+        confirmText: t('dialog.confirm')
       });
     } catch (error) {
-      showDialog({ title: 'Güncelleme Denetimi', message: error.message, type: 'error' });
+      showDialog({ title: t('desktop.updateCheckTitle'), message: error.message, type: 'error' });
     }
   };
 
@@ -755,7 +806,7 @@ const Desktop = () => {
       await setDesktopShortcut(application, false);
       setSelectedIds((current) => current.filter((id) => id !== `application:${application.id}`));
     } catch (error) {
-      showDialog({ title: 'Kısayol Kaldırılamadı', message: error.message, type: 'error' });
+      showDialog({ title: t('desktop.shortcutRemoveFailedTitle'), message: error.message, type: 'error' });
     }
   };
 
@@ -948,13 +999,14 @@ const Desktop = () => {
       case 'store': return <AppStoreApp />;
       case 'calendar': return <CalendarApp target={win.navigation} />;
       case 'weather': return <WeatherApp />;
-      default: return <div style={{ padding: 20, color: '#fff' }}>Bilinmeyen Uygulama: {win.title}</div>;
+      default: return <div style={{ padding: 20, color: '#fff' }}>{t('shell.unknownApplication', { title: win.title })}</div>;
     }
   };
 
   return (
     <div 
       className="desktop" 
+      style={desktopAppearance}
       onContextMenu={(e) => handleContextMenu(e, null)} 
       onClick={handleBackgroundClick}
       onDragOver={handleDragOver}
@@ -967,7 +1019,7 @@ const Desktop = () => {
         onRefreshDesktop={refreshDesktop}
       />
       
-      {/* Masaüstü İkon Izgarası (Grid) */}
+      {/* Desktop icon grid */}
       <div 
         className={`desktop-grid${isMobileViewport ? ' is-mobile' : ''}`}
         ref={gridRef}
@@ -976,10 +1028,10 @@ const Desktop = () => {
         onScroll={handleMobileDesktopScroll}
         style={{
           position: 'absolute',
-          top: '30px',
+          top: 'var(--foxos-topbar-height)',
           left: '0',
           right: '0',
-          bottom: '80px',
+          bottom: 'var(--foxos-dock-reserve)',
           padding: '10px',
           zIndex: 1,
           overflow: 'hidden'
@@ -996,7 +1048,7 @@ const Desktop = () => {
               key={`desktop-page-${pageIndex}`}
               className={`desktop-page${isMobileViewport ? '' : ' is-desktop'}`}
               data-mobile-desktop-page={isMobileViewport ? pageIndex : undefined}
-              aria-label={isMobileViewport ? `Masaüstü sayfası ${pageIndex + 1} / ${mobileLayout.pageCount}` : undefined}
+              aria-label={isMobileViewport ? t('desktop.pageLabel', { page: pageIndex + 1, count: mobileLayout.pageCount }) : undefined}
             >
         {pageItems.map((item) => {
           const isSelected = selectedIds.includes(item.desktopId);
@@ -1054,38 +1106,42 @@ const Desktop = () => {
                 const dotColor = (APPLICATION_STATUS[state] || APPLICATION_STATUS.stopped).color;
 
                 return (
-                  <div style={{ position: 'relative', width: '48px', height: '48px' }}>
-                    <div style={{ width: '100%', height: '100%', background: 'rgba(255,255,255,0.9)', borderRadius: '10px', padding: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }}>
-                      <ApplicationLogo app={item.application} size={32} />
+                  <div style={{ position: 'relative', width: `${desktopMetrics.iconSize}px`, height: `${desktopMetrics.iconSize}px` }}>
+                    <div style={{ width: '100%', height: '100%', background: 'rgba(255,255,255,0.9)', borderRadius: `${desktopMetrics.iconRadius}px`, padding: `${desktopMetrics.iconPadding}px`, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }}>
+                      <ApplicationLogo app={item.application} size={desktopMetrics.logoSize} />
                     </div>
                     <div
                       style={{
-                        position: 'absolute', right: '-4px', bottom: '-4px', width: '14px', height: '14px',
+                        position: 'absolute', right: '-4px', bottom: '-4px', width: `${desktopMetrics.statusSize}px`, height: `${desktopMetrics.statusSize}px`,
                         borderRadius: '50%', background: dotColor, border: '2px solid rgba(20, 20, 25, 0.9)',
                         boxShadow: '0 2px 4px rgba(0,0,0,0.3)', zIndex: 2
                       }}
-                      title={`Durum: ${state}`}
+                      title={t('desktop.applicationState', {
+                        state: t((APPLICATION_STATUS[state] || APPLICATION_STATUS.stopped).labelKey)
+                      })}
                     />
                   </div>
                 );
               })() : folderState ? (
-                <div style={{ position: 'relative', width: '48px', height: '48px' }}>
-                  {getFileIcon(item.file)}
+                <div style={{ position: 'relative', width: `${desktopMetrics.iconSize}px`, height: `${desktopMetrics.iconSize}px` }}>
+                  {getFileIcon(item.file, desktopMetrics.iconSize)}
                   <div
                     style={{
-                      position: 'absolute', right: '-4px', bottom: '-4px', width: '14px', height: '14px',
+                      position: 'absolute', right: '-4px', bottom: '-4px', width: `${desktopMetrics.statusSize}px`, height: `${desktopMetrics.statusSize}px`,
                       borderRadius: '50%',
                       background: (APPLICATION_STATUS[folderState] || APPLICATION_STATUS.stopped).color,
                       border: '2px solid rgba(20, 20, 25, 0.9)',
                       boxShadow: '0 2px 4px rgba(0,0,0,0.3)', zIndex: 2
                     }}
-                    title={`Klasör durumu: ${folderState}`}
+                    title={t('desktop.folderState', {
+                      state: t((APPLICATION_STATUS[folderState] || APPLICATION_STATUS.stopped).labelKey)
+                    })}
                   />
                 </div>
-              ) : getFileIcon(item.file)}
+              ) : getFileIcon(item.file, desktopMetrics.iconSize)}
               <span style={{
                 color: '#fff',
-                fontSize: '12px',
+                fontSize: `${desktopMetrics.labelSize}px`,
                 textAlign: 'center',
                 textShadow: '0 1px 3px rgba(0,0,0,0.8)',
                 width: '100%',
@@ -1122,13 +1178,13 @@ const Desktop = () => {
       </div>
 
       {isMobileViewport && mobileLayout.pageCount > 1 && (
-        <nav className="desktop-page-indicator" aria-label="Masaüstü sayfaları">
+        <nav className="desktop-page-indicator" aria-label={t('desktop.pagesLabel')}>
           {desktopPageGroups.map((_, pageIndex) => (
             <button
               key={`desktop-page-dot-${pageIndex}`}
               type="button"
               className={pageIndex === mobileDesktopPage ? 'is-active' : ''}
-              aria-label={`${pageIndex + 1}. masaüstü sayfasına git`}
+              aria-label={t('desktop.goToPage', { page: pageIndex + 1 })}
               aria-current={pageIndex === mobileDesktopPage ? 'page' : undefined}
               onClick={(event) => {
                 event.stopPropagation();
@@ -1139,8 +1195,8 @@ const Desktop = () => {
         </nav>
       )}
 
-      {/* Pencereler (Windows) alanı */}
-      <div className="window-layer" style={{ position: 'absolute', top: 30, left: 0, width: '100%', height: 'calc(100vh - 30px)', zIndex: 10, pointerEvents: 'none' }}>
+      {/* Window layer */}
+      <div className="window-layer" style={{ position: 'absolute', top: 'var(--foxos-topbar-height)', left: 0, width: '100%', height: 'calc(100dvh - var(--foxos-topbar-height) - var(--foxos-dock-reserve))', zIndex: 10, pointerEvents: 'none' }}>
         {windows.map(win => (
           <div key={win.id} style={{ pointerEvents: 'none', width: '100%', height: '100%', position: 'absolute', top: 0, left: 0 }}>
             <Window win={win}>
@@ -1154,7 +1210,7 @@ const Desktop = () => {
         <Dock />
       </div>
 
-      {/* Masaüstü Context Menu */}
+      {/* Desktop context menu */}
       {desktopMenu && (
         <div 
           style={{
@@ -1177,41 +1233,41 @@ const Desktop = () => {
         >
           {desktopMenu.type === 'application' ? (
             <>
-              <div className="context-item" onClick={() => handleOpenApplication(desktopMenu.item.application)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>Aç</div>
-              <div className="context-item" onClick={() => openApplicationSettings(desktopMenu.item.application)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><SettingsIcon size={14} /> Ayarlar'a Git</div>
+              <div className="context-item" onClick={() => handleOpenApplication(desktopMenu.item.application)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>{t('common.open')}</div>
+              <div className="context-item" onClick={() => openApplicationSettings(desktopMenu.item.application)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><SettingsIcon size={14} /> {t('desktop.goToSettings')}</div>
               {desktopMenu.item.application.capabilities.checkUpdates && (
-                <div className="context-item" onClick={() => checkApplicationUpdate(desktopMenu.item.application)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><RotateCw size={14} /> Güncellemeleri Denetle</div>
+                <div className="context-item" onClick={() => checkApplicationUpdate(desktopMenu.item.application)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><RotateCw size={14} /> {t('applications.checkUpdates')}</div>
               )}
               {(desktopMenu.item.application.capabilities.stop || desktopMenu.item.application.capabilities.start || desktopMenu.item.application.capabilities.restart) && (
                 <>
                   <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '4px 0' }} />
                   {desktopMenu.item.application.capabilities.stop ? (
-                    <div className="context-item" onClick={() => runApplicationAction(desktopMenu.item.application, 'stop')} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><Square size={14} /> Durdur</div>
+                    <div className="context-item" onClick={() => runApplicationAction(desktopMenu.item.application, 'stop')} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><Square size={14} /> {t('applications.stop')}</div>
                   ) : desktopMenu.item.application.capabilities.start ? (
-                    <div className="context-item" onClick={() => runApplicationAction(desktopMenu.item.application, 'start')} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><Play size={14} /> Başlat</div>
+                    <div className="context-item" onClick={() => runApplicationAction(desktopMenu.item.application, 'start')} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><Play size={14} /> {t('applications.start')}</div>
                   ) : null}
                   {desktopMenu.item.application.capabilities.restart && (
-                    <div className="context-item" onClick={() => runApplicationAction(desktopMenu.item.application, 'restart')} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><RotateCw size={14} /> Yeniden Başlat</div>
+                    <div className="context-item" onClick={() => runApplicationAction(desktopMenu.item.application, 'restart')} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><RotateCw size={14} /> {t('applications.restart')}</div>
                   )}
                 </>
               )}
               <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '4px 0' }} />
-              <div className="context-item" onClick={() => removeDesktopShortcut(desktopMenu.item.application)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><X size={14} /> Masaüstünden Kaldır</div>
-              <div className="context-item" onClick={() => openApplicationRemoval(desktopMenu.item.application)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', color: '#ff5f56', display: 'flex', alignItems: 'center', gap: '6px' }}><Trash2 size={14} /> Uygulamayı Kaldır</div>
+              <div className="context-item" onClick={() => removeDesktopShortcut(desktopMenu.item.application)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><X size={14} /> {t('desktop.removeShortcut')}</div>
+              <div className="context-item" onClick={() => openApplicationRemoval(desktopMenu.item.application)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', color: '#ff5f56', display: 'flex', alignItems: 'center', gap: '6px' }}><Trash2 size={14} /> {t('desktop.removeApplication')}</div>
             </>
           ) : desktopMenu.type === 'file' ? (
             <>
-              <div className="context-item" onClick={() => handleFileDoubleClick(desktopMenu.item.file)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>Aç</div>
-              <div className="context-item" onClick={() => handleRename(desktopMenu.item.file)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>Yeniden Adlandır</div>
-              <div className="context-item" onClick={() => handleDelete(desktopMenu.item.file)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', color: '#ff5f56' }}>Sil</div>
+              <div className="context-item" onClick={() => handleFileDoubleClick(desktopMenu.item.file)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>{t('common.open')}</div>
+              <div className="context-item" onClick={() => handleRename(desktopMenu.item.file)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>{t('desktop.renameTitle')}</div>
+              <div className="context-item" onClick={() => handleDelete(desktopMenu.item.file)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px', color: '#ff5f56' }}>{t('common.delete')}</div>
             </>
           ) : (
             <>
-              <div className="context-item" onClick={refreshDesktop} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>Masaüstünü Yenile</div>
-              <div className="context-item" onClick={handleNewFolder} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>Yeni Klasör</div>
+              <div className="context-item" onClick={refreshDesktop} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>{t('desktop.refresh')}</div>
+              <div className="context-item" onClick={handleNewFolder} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>{t('desktop.newFolderTitle')}</div>
               <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '4px 0' }}></div>
-              <div className="context-item" style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>Duvar Kağıdını Değiştir</div>
-              <div className="context-item" style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>Görüntü Ayarları</div>
+              <div className="context-item" onClick={() => openAppearanceSettings('wallpaper')} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>{t('desktop.changeWallpaper')}</div>
+              <div className="context-item" onClick={() => openAppearanceSettings('device')} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>{t('desktop.displaySettings')}</div>
             </>
           )}
         </div>
@@ -1225,6 +1281,7 @@ const Desktop = () => {
 };
 
 function App() {
+  const { t } = useI18n();
   const { authState } = useAuth();
 
   useEffect(() => {
@@ -1233,7 +1290,7 @@ function App() {
     return () => document.removeEventListener('contextmenu', preventBrowserContextMenu);
   }, []);
 
-  if (authState === 'loading') return <div style={{ background: '#000', width: '100vw', height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>Loading...</div>;
+  if (authState === 'loading') return <div style={{ background: '#000', width: '100vw', height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>{t('shell.loading')}</div>;
   if (authState === 'needs_setup') return <SetupScreen />;
   if (authState === 'needs_onboarding') return <ServerOnboarding />;
   if (authState === 'locked') return <LockScreen />;

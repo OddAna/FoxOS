@@ -1,43 +1,58 @@
 /* oxlint-disable react/only-export-components -- context hook and provider intentionally share a module */
-import React, { createContext, useState, useContext } from 'react';
+import React, { createContext, useEffect, useState, useContext } from 'react';
 import { activateExistingWindow, focusWindowById, topWindowZIndex } from '../utils/windowState';
+import { appearanceShellMetrics, useAppearance } from '../utils/appearance';
+import { clearWindowLayouts, readWindowLayout, writeWindowLayouts } from '../utils/windowLayout';
 
 const WindowContext = createContext();
 
 export const useWindowManager = () => useContext(WindowContext);
 
 import { useDialog } from './DialogContext';
+import { useI18n } from './LocaleContext';
 
 export const WindowProvider = ({ children }) => {
+  const { t } = useI18n();
+  const { appearance } = useAppearance();
   const [windows, setWindows] = useState([]);
   const [focusedWindowId, setFocusedWindowId] = useState(null);
   const dialog = useDialog();
+
+  useEffect(() => {
+    if (!appearance.rememberWindowLayout) {
+      clearWindowLayouts();
+      return;
+    }
+    writeWindowLayouts(windows);
+  }, [appearance.rememberWindowLayout, windows]);
 
   const openWindow = (appConfig) => {
     setFocusedWindowId(appConfig.id);
     setWindows(prev => {
       const activated = activateExistingWindow(prev, appConfig);
       if (activated) return activated;
-      
+
+      const shellMetrics = appearanceShellMetrics(appearance);
+      const isSmallViewport = window.innerWidth <= 720;
+      const topbarHeight = isSmallViewport ? 40 : shellMetrics.topbarHeight;
+      const dockReserve = isSmallViewport ? shellMetrics.mobileDockReserve : shellMetrics.dockReserve;
       const availableWidth = Math.max(280, window.innerWidth - 16);
-      const availableHeight = Math.max(240, window.innerHeight - 116);
-      const defaultWidth = Math.min(appConfig.width || 800, availableWidth);
-      const defaultHeight = Math.min(appConfig.height || 600, availableHeight);
-      
+      const availableHeight = Math.max(240, window.innerHeight - topbarHeight - dockReserve - 16);
+      const savedLayout = appearance.rememberWindowLayout ? readWindowLayout(appConfig.id) : null;
+      const defaultWidth = Math.min(savedLayout?.width || appConfig.width || 800, availableWidth);
+      const defaultHeight = Math.min(savedLayout?.height || appConfig.height || 600, availableHeight);
+      const minimumY = isSmallViewport ? 8 : 30;
+      const centeredX = Math.max(0, (window.innerWidth - defaultWidth) / 2) + (prev.length * 20);
+      const centeredY = Math.max(minimumY, (availableHeight - defaultHeight) / 2) + (prev.length * 20);
+
       const newWindow = {
         ...appConfig,
-        x: Math.min(
-          Math.max(0, (window.innerWidth - defaultWidth) / 2) + (prev.length * 20),
-          Math.max(0, window.innerWidth - defaultWidth)
-        ),
-        y: Math.min(
-          Math.max(30, (window.innerHeight - defaultHeight) / 2 - 60) + (prev.length * 20),
-          Math.max(30, window.innerHeight - defaultHeight - 85)
-        ),
+        x: Math.min(Math.max(0, savedLayout?.x ?? centeredX), Math.max(0, window.innerWidth - defaultWidth)),
+        y: Math.min(Math.max(minimumY, savedLayout?.y ?? centeredY), Math.max(minimumY, availableHeight - defaultHeight)),
         width: defaultWidth,
         height: defaultHeight,
         isMinimized: false,
-        isMaximized: false,
+        isMaximized: savedLayout?.isMaximized === true,
         zIndex: topWindowZIndex(prev) + 1
       };
       return [...prev, newWindow];
@@ -48,13 +63,13 @@ export const WindowProvider = ({ children }) => {
     const win = windows.find(w => w.id === id);
     if (win && ['terminal', 'codex'].includes(win.type) && dialog) {
       dialog.showDialog({
-        title: win.type === 'codex' ? 'Codex’i Kapat' : 'Terminali Kapat',
+        title: win.type === 'codex' ? t('contextErrors.closeCodexTitle') : t('contextErrors.closeTerminalTitle'),
         message: win.type === 'codex'
-          ? 'Codex çalışması arka planda devam ediyor olabilir. Pencereyi kapatmak istediğinize emin misiniz?'
-          : 'Arka planda çalışan bir işlem olabilir. Terminali kapatmak istediğinize emin misiniz?',
+          ? t('contextErrors.closeCodexMessage')
+          : t('contextErrors.closeTerminalMessage'),
         type: 'warning',
-        confirmText: 'Evet, Kapat',
-        cancelText: 'Vazgeç',
+        confirmText: t('contextErrors.confirmClose'),
+        cancelText: t('common.cancel'),
         onConfirm: () => {
           setWindows(prev => prev.filter(w => w.id !== id));
           setFocusedWindowId(current => current === id ? null : current);

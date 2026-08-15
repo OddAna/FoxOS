@@ -4,7 +4,7 @@
 
 **A desktop-style control panel for the Linux server you already own.**
 
-![FoxOS](https://img.shields.io/badge/FoxOS-v0.0.2_alpha-FF5F56?style=for-the-badge&logo=firefox-browser&logoColor=white)
+![FoxOS](https://img.shields.io/badge/FoxOS-v0.0.3_alpha-FF5F56?style=for-the-badge&logo=firefox-browser&logoColor=white)
 ![Linux](https://img.shields.io/badge/Host-Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black)
 ![Docker](https://img.shields.io/badge/Runtime-Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-22c55e?style=for-the-badge)
@@ -23,7 +23,7 @@ runtime, routing and recovery state.
 > management agent and web interface installed on a Linux server that already
 > has Docker Engine and Docker Compose v2.
 
-FoxOS `v0.0.2` is an **alpha release**. It is useful on real servers, but its
+FoxOS `v0.0.3` is an **alpha release**. It is useful on real servers, but its
 management session has root-equivalent power and migration support deliberately
 rejects workloads whose safety cannot yet be proven. Read
 [Security](#security-model) and [Current limitations](#current-limitations)
@@ -56,7 +56,7 @@ Linux host. The separate FoxOS-owned gateway/ingress services must remain
 running when applications depend on them for public domains, and the FoxOS
 agent is still required to perform management operations.
 
-## v0.0.2 capabilities
+## v0.0.3 capabilities
 
 ### Server and application control
 
@@ -91,6 +91,24 @@ agent is still required to perform management operations.
 - Create or remove a desktop shortcut from either the context menu or
   Application Manager.
 
+### First run, language, appearance and security
+
+- Guide a new server owner through interface language, hardened owner
+  credentials, region and display-time preferences, then the existing optional
+  read-only server scan. Existing configured owners are not forced through the
+  assistant again.
+- Switch the shell between Turkish and English, with independently validated
+  locale, time-zone, clock, week-start and measurement preferences. These
+  choices affect FoxOS presentation and do not silently change the Linux host.
+- Configure device-local **Appearance** settings for interface scale,
+  wallpaper and dimming, lock-screen wallpaper, desktop icon/grid/snap
+  behavior, Dock size/auto-hide, bounded remembered window geometry, text size,
+  reduced motion and high contrast. Physical display resolution remains
+  read-only and no appearance choice mutates server configuration.
+- Manage passkeys, hardened passwords, one-time recovery codes, active sessions
+  and bounded security activity from **Settings → Security**. Password changes
+  and recovery revoke prior sessions and active host terminals.
+
 ### Search, Calendar and Weather
 
 - Open FoxOS Spotlight from the menu bar, `Command/Ctrl+K` or `Ctrl+Space` and
@@ -109,6 +127,45 @@ agent is still required to perform management operations.
   [Open-Meteo](https://open-meteo.com/) adapter is called
   only when Weather is used, requires no API key for its open-access path and
   cannot block FoxOS startup or other server management features.
+
+### Notifications and Checklist
+
+- Keep an owner-only, server-persisted menu-bar center with separate
+  **Notifications** and **Tasks** views. Notifications retain unread and
+  critical counts, deduplication, read, snooze and resolve state.
+- Add durable checklist tasks with an optional date and time, mark them done or
+  reopen them on desktop and mobile, and keep completed history out of the
+  active list. A due task emits one deduplicated Notification Hub reminder;
+  postponing it moves the task's real due time. Selecting a task expands its
+  full notes plus source, reminder, creation time and status without triggering
+  completion. On phones the menu-bar center is bounded between the top bar and
+  the reserved Dock area, so its footer and scroll content remain reachable.
+- Optionally enable **Codex İş Kontrolü** from **Settings → Notifications**.
+  It starts at the activation instant and defaults to a two-hour, owner-adjustable
+  interval. Every pass runs a real authenticated Codex turn over bounded,
+  read-only mail and chat evidence plus the open Checklist. Codex—not a keyword
+  or regex classifier—decides `task`, `review`, or `ignore`; uncertain work is
+  retained as `Kontrol et:`. If Codex fails, no cursor advances and there is no
+  rule-based fallback. Raw transcripts are not persisted, sent, or marked read.
+- Configure priority thresholds, per-source delivery rules and quiet hours from
+  **Settings → Notifications**, then inspect bounded delivery receipts without
+  exposing push subscription secrets.
+- Optionally connect each phone or desktop browser through standards-based Web
+  Push. A clean install remains in-app only and makes no external notification
+  request until the owner connects a device.
+- Optionally connect a dedicated Telegram bot from the same screen. FoxOS
+  verifies that the bot has no competing webhook, encrypts its token with the
+  server master key, pairs exactly one private owner chat with a short-lived
+  code and receives commands through bounded long polling. An explicit
+  `/gorevler` request from that exact paired owner lists recognizable task
+  titles without exposing notes and adds one numbered completion button per
+  task. Unsolicited sensitive notifications remain redacted. Due-task messages
+  can complete or truly postpone the exact task. Telegram can be paused or
+  removed without changing canonical notifications or tasks.
+- Let local applications and AI agents emit normalized events or manage durable
+  tasks through the bundled `foxos-notifications` and `foxos-checklist` skills
+  plus an owner-only local ingest token. Delivery routing stays in FoxOS rather
+  than in an agent, Telegram bot or external assistant.
 
 ### App Store
 
@@ -175,6 +232,8 @@ on the server.
 - Reverting to read-only stops the active Codex runtime and blocks turns on old
   Full Server threads. Disconnecting also logs the ChatGPT account out while
   leaving the optional CLI installed.
+- Show cached Codex and Antigravity entitlement windows in the menu bar, with a
+  manual refresh that reads provider usage without starting a model turn.
 
 Codex authentication and session state are owned by Codex under
 `/var/lib/foxos/codex` by default. The app-server daemon and its Unix control
@@ -337,7 +396,7 @@ modify the host operating system.
 For an immutable checkout of this exact release:
 
 ```bash
-git clone --branch v0.0.2 --depth 1 https://github.com/OddAna/FoxOS.git
+git clone --branch v0.0.3 --depth 1 https://github.com/OddAna/FoxOS.git
 ```
 
 ### Connect safely
@@ -349,8 +408,12 @@ root-equivalent server access. From your own computer:
 ssh -L 8080:127.0.0.1:8080 your-user@your-server-ip
 ```
 
-Open [http://127.0.0.1:8080](http://127.0.0.1:8080) and create the first owner
-account. Passwords must be at least 10 characters.
+Open [http://127.0.0.1:8080](http://127.0.0.1:8080). The first-run assistant
+guides you through interface language, the first owner account, region and
+display-time preferences, then a read-only scan of the server's existing
+resources. Passwords must be at least 15 characters. Region and time-zone
+choices affect FoxOS formatting only; the installer does not change the host
+operating system's time zone.
 
 Do not bind FoxOS directly to a public interface without a trusted HTTPS and
 network-access boundary. If you already use a private VPN or an HTTPS reverse
@@ -429,7 +492,7 @@ destructive adoption or migration path that cannot prove a usable restore.
 ## Updating FoxOS
 
 FoxOS never silently updates itself. Stable installations follow `main`; the
-`v0.0.2` tag is immutable.
+`v0.0.3` tag is immutable.
 
 From an unmodified stable checkout:
 
@@ -491,7 +554,18 @@ authenticated FoxOS session should be treated as a server administrator.
 
 - Keep the default loopback bind or place FoxOS behind a trusted private VPN or
   properly configured HTTPS gateway.
-- Use a unique owner password and protect SSH access to the server.
+- Add at least one passkey from **Settings → Security** and keep a second
+  device or FIDO2 security key when practical. Passkey ceremonies require
+  user verification and are bound to the configured FoxOS HTTPS origin.
+- Generate the one-time recovery-code set, store it away from the server and
+  replace the set after using a code. FoxOS stores only code digests and shows
+  plaintext codes once at creation.
+- Use a unique owner password and protect SSH access to the server. New
+  passwords use a versioned, hardened scrypt credential; legacy credentials
+  are upgraded only after a successful password verification.
+- Review active devices and security activity from **Settings → Security**.
+  Server sessions have both idle and absolute expiry, persist only token
+  digests and can be revoked without exposing bearer tokens.
 - Do not expose the Docker socket or FoxOS data directory to unrelated
   containers.
 - Give optional provider tokens the smallest possible scope. For Cloudflare,
@@ -512,7 +586,7 @@ flow rather than opening a public issue with exploit details or secrets.
 
 ## Current limitations
 
-- `v0.0.2` is alpha software intended for an informed, hands-on server owner.
+- `v0.0.3` is alpha software intended for an informed, hands-on server owner.
 - FoxOS is a single-server control plane; clustering, high availability and
   multi-user roles are not implemented.
 - The agent is privileged by design. A browser or authentication compromise can
@@ -544,7 +618,7 @@ The detailed safety contracts and remaining work are tracked in
 
 ## Development and releases
 
-- `main` — current stable public alpha (`v0.0.2`)
+- `main` — current stable public alpha (`v0.0.3`)
 - `develop` — active integration branch used by the development server
 - `feature/*` — temporary isolated work based on `develop`
 - `vX.Y.Z` — immutable released snapshots

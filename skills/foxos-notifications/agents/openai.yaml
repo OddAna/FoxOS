@@ -1,0 +1,4 @@
+interface:
+  display_name: "FoxOS Notifications"
+  short_description: "FoxOS bildirimlerini güvenle oluştur ve yönet"
+  default_prompt: "Use $foxos-notifications to send an actionable FoxOS notification."

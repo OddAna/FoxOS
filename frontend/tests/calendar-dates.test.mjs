@@ -21,6 +21,17 @@ test('calendar month grid starts on Monday and always exposes six complete weeks
   });
 });
 
+test('calendar month grid follows a Sunday week start when the locale requests it', () => {
+  const days = calendarMonthGrid('2026-08-01', '2026-08-13', 0);
+  assert.equal(days.length, 42);
+  assert.equal(days[0].isoDate, '2026-07-26');
+  assert.equal(days[41].isoDate, '2026-09-05');
+  assert.deepEqual(calendarGridRange('2026-08-01', 0), {
+    from: '2026-07-26',
+    to: '2026-09-05'
+  });
+});
+
 test('calendar date helpers validate dates and cross year boundaries', () => {
   assert.equal(parseCalendarDate('2026-02-30'), null);
   assert.equal(localCalendarDate(parseCalendarDate('2026-12-31')), '2026-12-31');
@@ -50,7 +61,7 @@ test('calendar merges connected account sources and routes account setup through
   assert.match(app, /timeZone=/);
   assert.match(app, /navigation: \{ tab: 'connections' \}/);
   assert.match(connections, /calendar-accounts/);
-  assert.match(connections, /Google, Outlook ve Microsoft 365/);
-  assert.match(connections, /\{providerLabel\} Hesabı Ekle/);
+  assert.match(connections, /t\('connections\.calendar\.description'\)/);
+  assert.match(connections, /t\('connections\.calendar\.addAccount'/);
   assert.match(connections, /DISCONNECT CALENDAR ACCOUNT/);
 });

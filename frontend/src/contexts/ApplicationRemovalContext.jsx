@@ -5,6 +5,7 @@ import { AlertTriangle, Loader2 } from 'lucide-react';
 import { apiFetch } from '../api';
 import { useApplicationInventory } from './ApplicationContext';
 import { useDialog } from './DialogContext';
+import { useI18n } from './LocaleContext';
 
 const ApplicationRemovalContext = createContext(null);
 
@@ -15,6 +16,7 @@ export const useApplicationRemoval = () => {
 };
 
 export const ApplicationRemovalProvider = ({ children }) => {
+  const { t } = useI18n();
   const [state, setState] = useState(null);
   const [includeLinkedServices, setIncludeLinkedServices] = useState(false);
   const [removeData, setRemoveData] = useState(false);
@@ -82,8 +84,8 @@ export const ApplicationRemovalProvider = ({ children }) => {
       await refreshApplications({ quiet: true });
       if (typeof onRemoved === 'function') await onRemoved();
       showDialog({
-        title: 'Uygulama Kaldırıldı',
-        message: payload.operation?.message || `"${applicationName}" sunucudan kaldırıldı.`,
+        title: t('applicationRemoval.removedTitle'),
+        message: payload.operation?.message || t('applicationRemoval.removedMessage', { name: applicationName }),
         type: 'success'
       });
     } catch (error) {
@@ -124,21 +126,21 @@ export const ApplicationRemovalProvider = ({ children }) => {
             <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
               <AlertTriangle size={32} color="#ef4444" />
               <h3 id="application-removal-title" style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>
-                Uygulamayı Kaldır
+                {t('applicationRemoval.title')}
               </h3>
             </div>
 
             {state.loading ? (
               <div style={{ color: '#cbd5e1', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <Loader2 size={16} className="spin" /> Kaldırılacak parçalar doğrulanıyor…
+                <Loader2 size={16} className="spin" /> {t('applicationRemoval.validating')}
               </div>
             ) : state.plan ? (
               <>
                 <div style={{ fontSize: '14px', color: '#cbd5e1', lineHeight: '1.5' }}>
-                  <strong style={{ color: '#fff' }}>{state.application.name}</strong> sunucudan kalıcı olarak kaldırılacak.
+                  {t('applicationRemoval.permanent', { name: state.application.name })}
                   {state.plan.sameApplicationCopies.length > 0 && (
                     <div style={{ marginTop: '8px' }}>
-                      Aynı uygulamaya ait {state.plan.sameApplicationCopies.length} eski çalışma kopyası da temizlenecek.
+                      {t('applicationRemoval.oldCopies', { count: state.plan.sameApplicationCopies.length })}
                     </div>
                   )}
                 </div>
@@ -156,7 +158,7 @@ export const ApplicationRemovalProvider = ({ children }) => {
                       style={{ marginTop: '2px' }}
                     />
                     <span>
-                      Bağlı servisleri de kaldır
+                      {t('applicationRemoval.linkedServices')}
                       <span style={{ display: 'block', color: '#94a3b8', fontSize: '12px', marginTop: '3px' }}>
                         {state.plan.linkedServices.map((service) => service.name).join(', ')}
                       </span>
@@ -174,23 +176,23 @@ export const ApplicationRemovalProvider = ({ children }) => {
                       style={{ marginTop: '2px' }}
                     />
                     <span>
-                      Uygulama verilerini de sil
+                      {t('applicationRemoval.removeData')}
                       <span style={{ display: 'block', color: removeData ? '#fca5a5' : '#94a3b8', fontSize: '12px', marginTop: '3px' }}>
                         {safeVolumes.length > 0
-                          ? `${safeVolumes.map((volume) => volume.name).join(', ')} geri alınamaz biçimde silinir.`
-                          : 'Volume başka bir servis tarafından kullanıldığı için korunacak.'}
+                          ? t('applicationRemoval.volumesDeleted', { volumes: safeVolumes.map((volume) => volume.name).join(', ') })
+                          : t('applicationRemoval.volumeProtected')}
                       </span>
                     </span>
                   </label>
                 )}
 
                 <div style={{ fontSize: '12px', color: '#94a3b8', lineHeight: '1.5' }}>
-                  Erişim rotası ve boş uygulama ağı temizlenir. DNS kaydı, Compose kaynak dosyası, bind klasörleri ve imaj önbelleği korunur.
+                  {t('applicationRemoval.cleanupNote')}
                 </div>
 
                 <div>
                   <label htmlFor="application-removal-password" style={{ display: 'block', fontSize: '13px', color: '#cbd5e1', marginBottom: '6px' }}>
-                    FoxOS Şifresi
+                    {t('applicationRemoval.password')}
                   </label>
                   <input
                     id="application-removal-password"
@@ -229,7 +231,7 @@ export const ApplicationRemovalProvider = ({ children }) => {
                   background: 'transparent', color: '#fff', cursor: state.applying ? 'default' : 'pointer', fontSize: '14px'
                 }}
               >
-                {state.plan ? 'Vazgeç' : 'Kapat'}
+                {state.plan ? t('common.cancel') : t('common.close')}
               </button>
               {state.plan && (
                 <button
@@ -244,7 +246,7 @@ export const ApplicationRemovalProvider = ({ children }) => {
                   }}
                 >
                   {state.applying && <Loader2 size={14} className="spin" />}
-                  {state.applying ? 'Kaldırılıyor…' : 'Uygulamayı Kaldır'}
+                  {state.applying ? t('applicationRemoval.removing') : t('applicationRemoval.title')}
                 </button>
               )}
             </div>

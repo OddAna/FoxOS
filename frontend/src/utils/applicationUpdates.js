@@ -1,4 +1,5 @@
 import { apiFetch } from '../api';
+import { translateMessage } from './locale';
 
 export const APPLY_APPLICATION_UPDATE_CONFIRMATION = 'UYGULAMA GÜNCELLEMESİNİ UYGULA';
 export const ROLLBACK_APPLICATION_UPDATE_CONFIRMATION = 'UYGULAMA GÜNCELLEMESİNİ GERİ AL';
@@ -35,15 +36,15 @@ export const rollbackApplicationUpdate = async (operationId) => {
   return (await response.json()).operation;
 };
 
-export const updateConfirmationMessage = (plan) => {
-  const current = plan.current && plan.current.version || 'mevcut sürüm';
-  const latest = plan.latest && plan.latest.version || 'güncel sürüm';
+export const updateConfirmationMessage = (plan, translate = (key, values) => translateMessage('tr', key, values)) => {
+  const current = plan.current && plan.current.version || translate('applications.updateCurrent');
+  const latest = plan.latest && plan.latest.version || translate('applications.updateLatest');
   const services = (plan.services || []).map((service) => service.name).join(', ');
   const backup = plan.statefulVolumes && plan.statefulVolumes.length
-    ? ` ${plan.statefulVolumes.length} kalıcı veri alanı önce şifreli yedeklenecek.`
+    ? translate('applications.updateBackup', { count: plan.statefulVolumes.length })
     : '';
   const provider = plan.providerMayOverwrite
-    ? ' Geçiş tamamlanana kadar mevcut sağlayıcının sonraki dağıtımı bu sürümü yeniden değiştirebilir.'
+    ? translate('applications.updateProviderWarning')
     : '';
-  return `${current} → ${latest} güncellemesi uygulanacak. Birlikte güncellenecek servisler: ${services}.${backup} Sağlık kontrolü geçmezse önceki sürüm otomatik geri yüklenecek.${provider}`;
+  return translate('applications.updateConfirmation', { current, latest, services, backup, provider });
 };

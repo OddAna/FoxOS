@@ -34,8 +34,21 @@ test('mobile windows fill the usable desktop without drag or resize handles', ()
 
   assert.match(desktop, /className="window-layer"/);
   assert.match(desktop, /isMobileViewport/);
-  assert.match(windowComponent, /isMobileWindow \? '100%'/);
+  assert.match(windowComponent, /win\.isMaximized \|\| isMobileWindow \? '100%'/);
   assert.match(windowComponent, /!win\.isMaximized && !isMobileWindow/);
+});
+
+test('settings and files windows keep their dark tint while visibly blurring the wallpaper', () => {
+  const windowComponent = read('../src/components/Window.jsx');
+  const css = read('../src/index.css');
+
+  assert.match(windowComponent, /data-window-type=\{win\.type\}/);
+  assert.match(windowComponent, /const usesFrostedWindow = win\.type === 'settings' \|\| win\.type === 'files';/);
+  assert.match(windowComponent, /const frostedWindowBackdrop = appearance\.highContrast \? 'none' : 'blur\(42px\) saturate\(125%\)';/);
+  assert.match(windowComponent, /backdropFilter: usesFrostedWindow \? frostedWindowBackdrop : undefined/);
+  assert.match(windowComponent, /WebkitBackdropFilter: usesFrostedWindow \? frostedWindowBackdrop : undefined/);
+  assert.match(css, /\.window\.glass\[data-window-type="settings"\],[\s\S]*\.window\.glass\[data-window-type="files"\]\s*\{[\s\S]*background: rgba\(14, 15, 20, 0\.72\);[\s\S]*backdrop-filter: blur\(42px\) saturate\(125%\);[\s\S]*-webkit-backdrop-filter: blur\(42px\) saturate\(125%\);/);
+  assert.match(css, /\.window\[data-window-type="settings"\] > \.window-content,[\s\S]*\.window\[data-window-type="files"\] > \.window-content\s*\{[\s\S]*background: rgba\(0, 0, 0, 0\.24\) !important;/);
 });
 
 test('mobile desktop icons paginate into stable iPhone-style grid pages', () => {

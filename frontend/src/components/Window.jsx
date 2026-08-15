@@ -1,13 +1,19 @@
 import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useWindowManager } from '../contexts/WindowContext';
+import { useI18n } from '../contexts/LocaleContext';
+import { useAppearance } from '../utils/appearance';
 
 const Window = ({ win, children }) => {
+  const { t } = useI18n();
+  const { appearance } = useAppearance();
   const { closeWindow, minimizeWindow, maximizeWindow, focusWindow, updateWindowPosition, updateWindowDimensions, focusedWindowId } = useWindowManager();
   const isFocused = focusedWindowId === win.id;
   const [contextMenu, setContextMenu] = useState(null);
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
-  const isMobileWindow = viewportWidth <= 720;
+  const isMobileWindow = viewportWidth <= 720 && appearance.maximizeSmallWindows;
+  const usesFrostedWindow = win.type === 'settings' || win.type === 'files';
+  const frostedWindowBackdrop = appearance.highContrast ? 'none' : 'blur(42px) saturate(125%)';
 
   useEffect(() => {
     const closeContextMenu = () => setContextMenu(null);
@@ -131,7 +137,7 @@ const Window = ({ win, children }) => {
     left: win.isMaximized || isMobileWindow ? 0 : win.x,
     top: win.isMaximized || isMobileWindow ? 0 : win.y,
     width: win.isMaximized || isMobileWindow ? '100%' : win.width,
-    height: isMobileWindow ? '100%' : win.isMaximized ? 'calc(100vh - 30px - 85px)' : win.height, // 30px topbar, 85px for dock
+    height: win.isMaximized || isMobileWindow ? '100%' : win.height,
     zIndex: win.zIndex,
     display: win.isMinimized ? 'none' : 'flex',
     flexDirection: 'column',
@@ -139,6 +145,9 @@ const Window = ({ win, children }) => {
     overflow: 'hidden',
     boxShadow: isFocused ? '0 20px 50px rgba(0,0,0,0.5)' : '0 10px 30px rgba(0,0,0,0.3)',
     transition: win.isMaximized && !isMobileWindow ? 'width 0.3s, height 0.3s, left 0.3s, top 0.3s, border-radius 0.3s' : 'none',
+    background: usesFrostedWindow ? appearance.highContrast ? 'rgba(8, 9, 12, 0.98)' : 'rgba(14, 15, 20, 0.72)' : undefined,
+    backdropFilter: usesFrostedWindow ? frostedWindowBackdrop : undefined,
+    WebkitBackdropFilter: usesFrostedWindow ? frostedWindowBackdrop : undefined,
     pointerEvents: 'auto'
   };
 
@@ -146,6 +155,7 @@ const Window = ({ win, children }) => {
     <>
     <div
       className={`window glass ${isFocused ? 'focused' : ''}`}
+      data-window-type={win.type}
       style={style}
       onPointerDown={() => { if (!isFocused) focusWindow(win.id); }}
       onContextMenu={handleContextMenu}
@@ -154,7 +164,8 @@ const Window = ({ win, children }) => {
         className="window-header" 
         onPointerDown={handlePointerDown}
         style={{
-        height: '38px',
+        height: 'var(--foxos-window-header-height)',
+        minHeight: 'var(--foxos-window-header-height)',
         background: 'rgba(255,255,255,0.05)',
         borderBottom: '1px solid rgba(255,255,255,0.1)',
         display: 'flex',
@@ -164,11 +175,11 @@ const Window = ({ win, children }) => {
         position: 'relative'
       }}>
         <div className="window-controls" style={{ display: 'flex', gap: '8px', zIndex: 10 }}>
-          <button type="button" className="window-control" aria-label="Pencereyi kapat" title="Kapat" onClick={() => closeWindow(win.id)} style={{ width: '12px', height: '12px', borderRadius: '50%', background: '#ff5f56', cursor: 'pointer' }} />
-          <button type="button" className="window-control" aria-label="Pencereyi simge durumuna küçült" title="Simge Durumuna Küçült" onClick={() => minimizeWindow(win.id)} style={{ width: '12px', height: '12px', borderRadius: '50%', background: '#ffbd2e', cursor: 'pointer' }} />
-          <button type="button" className="window-control" aria-label={win.isMaximized ? 'Pencereyi önceki boyutuna döndür' : 'Pencereyi tam ekran yap'} title={win.isMaximized ? 'Önceki Boyut' : 'Tam Ekran'} onClick={() => maximizeWindow(win.id)} style={{ width: '12px', height: '12px', borderRadius: '50%', background: '#27c93f', cursor: 'pointer' }} />
+          <button type="button" className="window-control" aria-label={t('window.close')} title={t('window.closeShort')} onClick={() => closeWindow(win.id)} style={{ width: 'var(--foxos-window-control-size)', height: 'var(--foxos-window-control-size)', borderRadius: '50%', background: '#ff5f56', cursor: 'pointer' }} />
+          <button type="button" className="window-control" aria-label={t('window.minimize')} title={t('window.minimizeShort')} onClick={() => minimizeWindow(win.id)} style={{ width: 'var(--foxos-window-control-size)', height: 'var(--foxos-window-control-size)', borderRadius: '50%', background: '#ffbd2e', cursor: 'pointer' }} />
+          <button type="button" className="window-control" aria-label={win.isMaximized ? t('window.restore') : t('window.maximize')} title={win.isMaximized ? t('window.restoreShort') : t('window.maximizeShort')} onClick={() => maximizeWindow(win.id)} style={{ width: 'var(--foxos-window-control-size)', height: 'var(--foxos-window-control-size)', borderRadius: '50%', background: '#27c93f', cursor: 'pointer' }} />
         </div>
-        <div className="window-title" style={{ position: 'absolute', width: '100%', textAlign: 'center', fontWeight: '500', fontSize: '13px', color: isFocused ? '#fff' : '#aaa' }}>
+        <div className="window-title" style={{ position: 'absolute', width: '100%', textAlign: 'center', fontWeight: '500', fontSize: 'var(--foxos-window-title-size)', color: isFocused ? '#fff' : '#aaa' }}>
           {win.title}
         </div>
       </div>
@@ -212,10 +223,10 @@ const Window = ({ win, children }) => {
         onClick={(event) => event.stopPropagation()}
         onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); }}
       >
-        <div className="context-item" onClick={() => runContextAction(minimizeWindow)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>Simge Durumuna Küçült</div>
-        <div className="context-item" onClick={() => runContextAction(maximizeWindow)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>{win.isMaximized ? 'Önceki Boyut' : 'Tam Ekran'}</div>
+        <div className="context-item" onClick={() => runContextAction(minimizeWindow)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>{t('window.minimizeShort')}</div>
+        <div className="context-item" onClick={() => runContextAction(maximizeWindow)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>{win.isMaximized ? t('window.restoreShort') : t('window.maximizeShort')}</div>
         <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '4px 0' }} />
-        <div className="context-item" onClick={() => runContextAction(closeWindow)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>Kapat</div>
+        <div className="context-item" onClick={() => runContextAction(closeWindow)} style={{ padding: '6px 12px', cursor: 'pointer', borderRadius: '4px' }}>{t('window.closeShort')}</div>
       </div>,
       document.body
     )}

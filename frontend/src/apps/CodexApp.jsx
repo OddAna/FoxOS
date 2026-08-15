@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bot,
   Check,
+  ChevronRight,
   CircleStop,
   Code2,
   History,
@@ -25,6 +26,7 @@ import {
   localFilePreviewKind
 } from '../utils/fileDownloads';
 import CodexMarkdown from './CodexMarkdown';
+import { useI18n } from '../contexts/LocaleContext';
 import './CodexApp.css';
 
 const MODEL_STORAGE_KEY = 'foxos.codex.model';
@@ -35,15 +37,15 @@ const DEFAULT_APPROVAL_POLICY = 'untrusted';
 const NO_APPROVAL_POLICY = 'never';
 const mobileViewport = () => typeof window !== 'undefined'
   && window.matchMedia('(max-width: 720px)').matches;
-const REASONING_LABELS = {
-  none: 'None',
-  low: 'Low',
-  medium: 'Medium',
-  high: 'High',
-  xhigh: 'XHigh',
-  max: 'Max',
-  ultra: 'Ultra'
-};
+const REASONING_LABEL_KEYS = Object.freeze({
+  none: 'codexApp.reasoningLevels.none',
+  low: 'codexApp.reasoningLevels.low',
+  medium: 'codexApp.reasoningLevels.medium',
+  high: 'codexApp.reasoningLevels.high',
+  xhigh: 'codexApp.reasoningLevels.xhigh',
+  max: 'codexApp.reasoningLevels.max',
+  ultra: 'codexApp.reasoningLevels.ultra'
+});
 
 const storedPreference = (key) => {
   try { return window.localStorage.getItem(key); } catch { return null; }
@@ -64,6 +66,20 @@ const commandText = (value) => Array.isArray(value)
 const fileChangeKind = (value) => typeof value === 'string'
   ? value
   : value && typeof value.type === 'string' ? value.type : 'changed';
+
+const fileChangeLabel = (value, t) => {
+  const kind = fileChangeKind(value).toLowerCase();
+  if (kind.includes('add') || kind.includes('create')) return t('codexApp.fileCreated');
+  if (kind.includes('delete') || kind.includes('remove')) return t('codexApp.fileDeleted');
+  return t('codexApp.fileChanged');
+};
+
+const commandStatusLabel = (status, t) => {
+  if (status === 'inProgress') return t('codexApp.commandStatus.inProgress');
+  if (status === 'completed') return t('codexApp.commandStatus.completed');
+  if (status === 'failed') return t('codexApp.commandStatus.failed');
+  return status;
+};
 
 const upsertEntry = (entries, id, patch) => {
   const index = entries.findIndex((entry) => entry.id === id);
@@ -127,9 +143,8 @@ const applyEvents = (entries, events) => {
       const changes = Array.isArray(item.changes) ? item.changes : [];
       next = upsertEntry(next, `file:${item.id}`, {
         type: 'file',
-        text: changes.length
-          ? changes.map((change) => `${fileChangeKind(change.kind)}: ${change.path}`).join('\n')
-          : 'Dosya değişiklikleri tamamlandı.',
+        changes,
+        textKey: changes.length ? null : 'codexApp.fileChangesComplete',
         status: item.status || 'completed'
       });
     } else if (event.method === 'foxos/approvalRequested') {
@@ -146,12 +161,14 @@ const applyEvents = (entries, events) => {
     } else if (event.method === 'error') {
       next = upsertEntry(next, `error:${event.sequence}`, {
         type: 'error',
-        text: params.error && params.error.message || 'Codex çalışması başarısız oldu.'
+        text: params.error && params.error.message,
+        textKey: 'codexApp.runFailed'
       });
     } else if (event.method === 'warning') {
       next = upsertEntry(next, `warning:${event.sequence}`, {
         type: 'warning',
-        text: params.message || 'Codex bir uyarı bildirdi.'
+        text: params.message,
+        textKey: 'codexApp.warning'
       });
     }
   }
@@ -164,7 +181,7 @@ const entriesFromThread = (thread) => {
     entries.push({
       id: 'warning:history-truncated',
       type: 'warning',
-      text: 'Çok eski ayrıntıların bir bölümü görünüm sınırı nedeniyle gösterilmiyor; konuşma bağlamı Codex’te korunuyor.'
+      textKey: 'codexApp.historyTruncated'
     });
   }
   for (const turn of Array.isArray(thread && thread.turns) ? thread.turns : []) {
@@ -197,9 +214,8 @@ const entriesFromThread = (thread) => {
         entries.push({
           id: `file:${item.id}`,
           type: 'file',
-          text: changes.length
-            ? changes.map((change) => `${fileChangeKind(change.kind)}: ${change.path}`).join('\n')
-            : 'Dosya değişiklikleri tamamlandı.',
+          changes,
+          textKey: changes.length ? null : 'codexApp.fileChangesComplete',
           status: item.status || 'completed'
         });
       }
@@ -216,26 +232,27 @@ const activeTurnFromThread = (thread) => {
   return [...turns].reverse().find((turn) => turn.status === 'inProgress') || null;
 };
 
-const threadTitle = (thread) => thread.name || thread.preview || 'Yeni konuşma';
+const threadTitle = (thread, t) => thread.name || thread.preview || t('codexApp.newConversation');
 
 const eventThreadId = (event) => {
   const params = event && event.params || {};
   return params.threadId || params.thread?.id || params.turn?.threadId || null;
 };
 
-const threadTime = (thread) => {
+const threadTime = (thread, formatDate, formatTime) => {
   const timestamp = thread.recencyAt || thread.updatedAt || thread.createdAt;
   if (!timestamp) return '';
   const date = new Date(timestamp * 1000);
   const today = new Date();
   const sameDay = date.getFullYear() === today.getFullYear() &&
     date.getMonth() === today.getMonth() && date.getDate() === today.getDate();
-  return new Intl.DateTimeFormat('tr-TR', sameDay
-    ? { hour: '2-digit', minute: '2-digit' }
-    : { day: 'numeric', month: 'short' }).format(date);
+  return sameDay
+    ? formatTime(date)
+    : formatDate(date, { day: 'numeric', month: 'short' });
 };
 
 const CodexApp = () => {
+  const { formatDate, formatTime, t } = useI18n();
   const { openWindow } = useWindowManager();
   const [connection, setConnection] = useState(null);
   const [models, setModels] = useState([]);
@@ -281,7 +298,7 @@ const CodexApp = () => {
   const openConnections = () => openWindow({
     id: 'settings',
     type: 'settings',
-    title: 'Ayarlar',
+    title: t('common.settings'),
     navigation: { tab: 'connections' },
     width: 800,
     height: 550
@@ -467,7 +484,7 @@ const CodexApp = () => {
       .then((payload) => {
         if (cancelled) return;
         const availableModels = Array.isArray(payload.models) ? payload.models : [];
-        if (!availableModels.length) throw new Error('Codex model listesi boş.');
+        if (!availableModels.length) throw new Error(t('codexApp.modelListEmpty'));
         const savedModel = storedPreference(MODEL_STORAGE_KEY);
         const initialModel = availableModels.find((entry) => entry.model === savedModel) ||
           availableModels.find((entry) => entry.model === payload.defaultModel) ||
@@ -490,7 +507,7 @@ const CodexApp = () => {
         if (!cancelled) setModelsLoading(false);
       });
     return () => { cancelled = true; };
-  }, [connectionReady]);
+  }, [connectionReady, t]);
 
   useEffect(() => {
     if (!usable) {
@@ -742,7 +759,7 @@ const CodexApp = () => {
     }]);
     try {
       if (!currentThread) {
-        if (!selectionReady) throw new Error('Önce model ve reasoning seviyesini seçin.');
+        if (!selectionReady) throw new Error(t('codexApp.selectModelReasoning'));
         const threadResponse = await apiFetch('/api/codex/threads', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -826,11 +843,11 @@ const CodexApp = () => {
   const effectiveApprovalPolicy = activeApprovalPolicy || approvalPolicy;
   const statusLabel = useMemo(() => {
     if (!connection) return '';
-    if (!connection.installed) return 'Kurulu değil';
-    if (!connection.connected) return 'Hesap bağlı değil';
-    if (!connection.fullServer) return 'Salt okunur';
-    return 'Sunucuya bağlı';
-  }, [connection]);
+    if (!connection.installed) return t('codexApp.notInstalled');
+    if (!connection.connected) return t('codexApp.notConnected');
+    if (!connection.fullServer) return t('codexApp.readOnly');
+    return t('codexApp.serverConnected');
+  }, [connection, t]);
   const canSubmit = Boolean(prompt.trim()) && !resumingThreadId && !startingTurn && !steering && (
     busy
       ? Boolean(threadId && activeTurnId)
@@ -854,8 +871,8 @@ const CodexApp = () => {
             type="button"
             onClick={() => setSidebarOpen((current) => !current)}
             disabled={!usable}
-            title={sidebarOpen ? 'Konuşma geçmişini gizle' : 'Konuşma geçmişini göster'}
-            aria-label={sidebarOpen ? 'Konuşma geçmişini gizle' : 'Konuşma geçmişini göster'}
+            title={t(sidebarOpen ? 'codexApp.hideHistory' : 'codexApp.showHistory')}
+            aria-label={t(sidebarOpen ? 'codexApp.hideHistory' : 'codexApp.showHistory')}
             className="codex-icon-button"
           >
             {sidebarOpen ? <PanelLeftClose size={15} /> : <PanelLeftOpen size={15} />}
@@ -866,32 +883,18 @@ const CodexApp = () => {
             <div className="codex-brand-status">{statusLabel}</div>
           </div>
         </div>
-        <div className="codex-top-actions">
-          <button
-            type="button"
-            onClick={startConversation}
-            disabled={!usable || Boolean(resumingThreadId) || startingTurn}
-            className="codex-secondary-button"
-            title="Yeni konuşma"
-          >
-            <Plus size={14} /> <span>Yeni konuşma</span>
-          </button>
-          <button type="button" onClick={openConnections} className="codex-secondary-button">
-            <Settings size={14} /> <span>Bağlantı</span>
-          </button>
-        </div>
       </header>
 
       {!usable ? (
         <div className="codex-gate">
           <div className="codex-gate-card">
             <ShieldAlert size={28} color="#f6c453" />
-            <h3>Full Server bağlantısı gerekli</h3>
+            <h3>{t('codexApp.fullServerRequired')}</h3>
             <p>
-              Codex CLI’ı kurun, kendi ChatGPT hesabınızı bağlayın ve Full Server erişimini açıkça etkinleştirin.
+              {t('codexApp.fullServerDescription')}
             </p>
             <button type="button" onClick={openConnections} className="codex-secondary-button">
-              <Settings size={14} /> Bağlantılar’a Git
+              <Settings size={14} /> {t('codexApp.goToConnections')}
             </button>
           </div>
         </div>
@@ -902,7 +905,7 @@ const CodexApp = () => {
               <button
                 type="button"
                 className="codex-sidebar-backdrop"
-                aria-label="Konuşma geçmişini kapat"
+                aria-label={t('codexApp.closeHistory')}
                 onClick={() => setSidebarOpen(false)}
               />
               <aside className="codex-sidebar">
@@ -913,27 +916,27 @@ const CodexApp = () => {
                   disabled={Boolean(resumingThreadId) || startingTurn}
                   className="codex-new-chat"
                 >
-                  <Plus size={14} /> Yeni konuşma
+                  <Plus size={14} /> {t('codexApp.newConversation')}
                 </button>
               </div>
               <div className="codex-sidebar-heading">
                 <History size={14} />
-                <span>Konuşmalar</span>
+                <span>{t('codexApp.conversations')}</span>
                 <button
                   type="button"
                   onClick={refreshThreads}
                   disabled={threadsLoading}
-                  title="Geçmişi yenile"
-                  aria-label="Konuşma geçmişini yenile"
+                  title={t('codexApp.refreshHistory')}
+                  aria-label={t('codexApp.refreshHistory')}
                 >
                   <RefreshCw size={13} className={threadsLoading ? 'spin' : ''} />
                 </button>
               </div>
               <div className="codex-thread-list">
                 {threadsLoading && !threads.length ? (
-                  <div className="codex-sidebar-message"><Loader2 size={13} className="spin" /> Geçmiş yükleniyor</div>
+                  <div className="codex-sidebar-message"><Loader2 size={13} className="spin" /> {t('codexApp.historyLoading')}</div>
                 ) : !threads.length ? (
-                  <div className="codex-sidebar-message">Henüz kayıtlı konuşma yok.</div>
+                  <div className="codex-sidebar-message">{t('codexApp.noHistory')}</div>
                 ) : threads.map((thread) => {
                   const active = thread.id === threadId;
                   const resuming = thread.id === resumingThreadId;
@@ -945,21 +948,21 @@ const CodexApp = () => {
                       onClick={() => resumeConversation(thread.id)}
                       disabled={Boolean(resumingThreadId) || startingTurn}
                       aria-current={active ? 'page' : undefined}
-                      title={threadTitle(thread)}
+                      title={threadTitle(thread, t)}
                       className={`codex-thread-row${active ? ' is-selected' : ''}`}
                     >
                       <span className={`codex-thread-dot${running ? ' is-running' : ''}`} aria-hidden="true" />
                       <div className="codex-thread-copy">
-                        <div className="codex-thread-title">{threadTitle(thread)}</div>
-                        {(running || resuming) && <div className="codex-thread-state">{resuming ? 'Açılıyor…' : 'Çalışıyor'}</div>}
+                        <div className="codex-thread-title">{threadTitle(thread, t)}</div>
+                        {(running || resuming) && <div className="codex-thread-state">{t(resuming ? 'codexApp.opening' : 'codexApp.running')}</div>}
                       </div>
-                      {resuming ? <Loader2 size={12} className="spin" /> : <span className="codex-thread-time">{threadTime(thread)}</span>}
+                      {resuming ? <Loader2 size={12} className="spin" /> : <span className="codex-thread-time">{threadTime(thread, formatDate, formatTime)}</span>}
                     </button>
                   );
                 })}
                 {nextThreadCursor && (
                   <button type="button" onClick={loadMoreThreads} disabled={loadingMoreThreads} className="codex-load-more">
-                    {loadingMoreThreads && <Loader2 size={12} className="spin" />} Daha fazla
+                    {loadingMoreThreads && <Loader2 size={12} className="spin" />} {t('codexApp.loadMore')}
                   </button>
                 )}
                 {historyError && <div className="codex-sidebar-message is-error">{historyError}</div>}
@@ -969,53 +972,22 @@ const CodexApp = () => {
           )}
 
           <section className="codex-main">
-            <div className="codex-config-row">
-              {threadId ? (
-                <div className="codex-thread-meta">
-                  <Bot size={12} />
-                  <span>{activeModelLabel || 'Codex'} · {REASONING_LABELS[activeReasoningEffort] || activeReasoningEffort || '—'}</span>
-                </div>
-              ) : (
-                <>
-                  <label className="codex-config-field">
-                    <span>Model</span>
-                    <select aria-label="Codex modeli" value={selectedModel} onChange={(event) => chooseModel(event.target.value)} disabled={modelsLoading || !models.length}>
-                      {models.map((model) => <option key={model.model} value={model.model}>{model.displayName}</option>)}
-                    </select>
-                  </label>
-                  <label className="codex-config-field">
-                    <span>Reasoning</span>
-                    <select aria-label="Codex reasoning seviyesi" value={reasoningEffort} onChange={(event) => chooseReasoningEffort(event.target.value)} disabled={modelsLoading || !selectedModelDetails}>
-                      {(selectedModelDetails?.supportedReasoningEfforts || []).map((effort) => <option key={effort} value={effort}>{REASONING_LABELS[effort] || effort}</option>)}
-                    </select>
-                  </label>
-                </>
-              )}
-              <label className={`codex-config-field is-permission${approvalPolicy === NO_APPROVAL_POLICY ? ' is-unrestricted' : ''}`}>
-                <ShieldCheck size={12} /> <span>İzinler</span>
-                <select aria-label="Codex izin politikası" value={approvalPolicy} onChange={(event) => chooseApprovalPolicy(event.target.value)} disabled={busy || savingApprovalPolicy || Boolean(resumingThreadId)}>
-                  <option value={DEFAULT_APPROVAL_POLICY}>Gerektiğinde sor</option>
-                  <option value={NO_APPROVAL_POLICY}>Tam Erişim — sorma</option>
-                </select>
-              </label>
-            </div>
-
             <div className="codex-conversation">
               {resumingThreadId && !entries.length ? (
-                <div className="codex-empty-state"><div className="codex-agent-loading"><Loader2 size={15} className="spin" /> Konuşma açılıyor…</div></div>
+                <div className="codex-empty-state"><div className="codex-agent-loading"><Loader2 size={15} className="spin" /> {t('codexApp.conversationOpening')}</div></div>
               ) : !entries.length ? (
                 <div className="codex-empty-state">
                   <div>
                     <div className="codex-empty-mark"><Bot size={19} /></div>
-                    <div className="codex-empty-title">{threadId ? 'Bu konuşmaya devam edebilirsin' : 'Sunucuda ne yapmak istersin?'}</div>
+                    <div className="codex-empty-title">{t(threadId ? 'codexApp.continueConversation' : 'codexApp.whatNext')}</div>
                     <div className="codex-empty-copy">
                       {threadId
                         ? connection.memoryEnabled
-                          ? 'Geçmiş ve kişisel hafıza bu konuşma için hazır.'
-                          : 'Geçmiş konuşma sunucudaki Codex kaydından açıldı.'
+                          ? t('codexApp.historyMemoryReady')
+                          : t('codexApp.historyReady')
                         : connection.memoryEnabled
-                          ? 'Dosyalar, servisler ve hafızan bu konuşmada kullanılabilir.'
-                          : 'Dosyalar, Docker, systemd, servisler ve paketler dahil.'}
+                          ? t('codexApp.newMemoryReady')
+                          : t('codexApp.newReady')}
                     </div>
                   </div>
                 </div>
@@ -1030,7 +1002,11 @@ const CodexApp = () => {
                         {entry.text}
                         {entry.delivery && (
                           <div className={`codex-user-delivery${entry.delivery === 'failed' ? ' is-failed' : ''}`}>
-                            {entry.delivery === 'pending' ? 'Çalışan isteğe ekleniyor…' : entry.delivery === 'accepted' ? 'Çalışan isteğe eklendi' : 'Eklenemedi'}
+                            {t(entry.delivery === 'pending'
+                              ? 'codexApp.deliveryPending'
+                              : entry.delivery === 'accepted'
+                                ? 'codexApp.deliveryAccepted'
+                                : 'codexApp.deliveryFailed')}
                           </div>
                         )}
                       </div>
@@ -1041,49 +1017,54 @@ const CodexApp = () => {
                       <div key={entry.id} className="codex-agent-message">
                         {entry.text
                           ? <CodexMarkdown onOpenLocalFile={openLocalFile}>{entry.text}</CodexMarkdown>
-                          : <div className="codex-agent-loading"><Loader2 size={14} className="spin" /> Yanıt hazırlanıyor…</div>}
+                          : <div className="codex-agent-loading"><Loader2 size={14} className="spin" /> {t('codexApp.preparingResponse')}</div>}
                       </div>
                     );
                   }
                   if (entry.type === 'command') {
                     return (
-                      <div key={entry.id} className="codex-command-card">
-                        <div className="codex-command-title">
-                          <TerminalSquare size={13} /> <code>{entry.command || 'Komut çalışıyor'}</code>
-                          <span>{entry.status}</span>
-                        </div>
+                      <details key={entry.id} className="codex-command-card">
+                        <summary className="codex-command-title">
+                          <ChevronRight size={13} className="codex-command-chevron" aria-hidden="true" />
+                          <TerminalSquare size={13} aria-hidden="true" />
+                          <code>{entry.command || t('codexApp.commandRunning')}</code>
+                          <span>{commandStatusLabel(entry.status, t)}</span>
+                        </summary>
                         {entry.output && <pre className="codex-command-output">{entry.output}</pre>}
-                      </div>
+                      </details>
                     );
                   }
                   if (entry.type === 'file') {
-                    return <div key={entry.id} className="codex-file-change"><Code2 size={14} />{entry.text}</div>;
+                    const fileChangeText = entry.changes?.length
+                      ? entry.changes.map((change) => `${fileChangeLabel(change.kind, t)}: ${change.path}`).join('\n')
+                      : entry.text || t(entry.textKey || 'codexApp.fileChangesComplete');
+                    return <div key={entry.id} className="codex-file-change"><Code2 size={14} />{fileChangeText}</div>;
                   }
                   if (entry.type === 'approval') {
                     const canAcceptSession = !entry.availableDecisions || entry.availableDecisions.includes('acceptForSession');
                     return (
                       <div key={entry.id} className="codex-approval-card">
-                        <div className="codex-approval-title"><ShieldAlert size={15} /> Codex onay istiyor</div>
+                        <div className="codex-approval-title"><ShieldAlert size={15} /> {t('codexApp.approvalTitle')}</div>
                         {entry.reason && <div className="codex-approval-reason">{entry.reason}</div>}
                         {entry.command && <pre className="codex-approval-command">{entry.command}</pre>}
                         {entry.resolved ? (
-                          <div className="codex-approval-reason">{entry.decision.startsWith('accept') ? 'Onaylandı' : 'Reddedildi'}</div>
+                          <div className="codex-approval-reason">{t(entry.decision.startsWith('accept') ? 'codexApp.approved' : 'codexApp.rejected')}</div>
                         ) : (
                           <div className="codex-approval-actions">
-                            <button type="button" onClick={() => resolveApproval(entry, 'accept')} className="is-accept"><Check size={13} /> Bir kez onayla</button>
-                            {canAcceptSession && <button type="button" onClick={() => resolveApproval(entry, 'acceptForSession')}>Bu oturumda onayla</button>}
-                            <button type="button" onClick={() => resolveApproval(entry, 'decline')}><X size={13} /> Reddet</button>
+                            <button type="button" onClick={() => resolveApproval(entry, 'accept')} className="is-accept"><Check size={13} /> {t('codexApp.acceptOnce')}</button>
+                            {canAcceptSession && <button type="button" onClick={() => resolveApproval(entry, 'acceptForSession')}>{t('codexApp.acceptSession')}</button>}
+                            <button type="button" onClick={() => resolveApproval(entry, 'decline')}><X size={13} /> {t('codexApp.decline')}</button>
                           </div>
                         )}
                       </div>
                     );
                   }
-                  return <div key={entry.id} className={`codex-inline-notice${entry.type === 'error' ? ' is-error' : ''}`}>{entry.text}</div>;
+                  return <div key={entry.id} className={`codex-inline-notice${entry.type === 'error' ? ' is-error' : ''}`}>{entry.text || (entry.textKey ? t(entry.textKey) : '')}</div>;
                 })}
                 {busy && (
                   <div className="codex-working">
                     <span className="codex-working-dots" aria-hidden="true"><i /><i /><i /></span>
-                    Codex çalışıyor
+                    {t('codexApp.working')}
                   </div>
                 )}
                 <div ref={bottomRef} />
@@ -1105,27 +1086,60 @@ const CodexApp = () => {
                     }
                   }}
                   disabled={Boolean(resumingThreadId)}
-                  placeholder={busy ? 'Çalışan isteğe bir şey ekle…' : 'Sunucuda ne yapmamı istersin?'}
-                  aria-label={busy ? 'Çalışan Codex isteğine mesaj ekle' : 'Codex’e mesaj gönder'}
+                  placeholder={t(busy ? 'codexApp.promptBusy' : 'codexApp.prompt')}
+                  aria-label={t(busy ? 'codexApp.promptBusyLabel' : 'codexApp.promptLabel')}
                   rows={2}
                 />
                 <div className="codex-composer-footer">
-                  <div className="codex-composer-status">
-                    <span className={`codex-status-dot${busy ? ' is-running' : ''}`} aria-hidden="true" />
-                    <span>{busy
-                      ? steering ? 'Mesaj ekleniyor…' : 'Codex çalışıyor · Yeni mesaj bu işe eklenir'
-                      : threadId ? 'Bu konuşmaya devam et' : `${selectedModelDetails?.displayName || 'Codex'} · ${REASONING_LABELS[reasoningEffort] || reasoningEffort}`}</span>
+                  <div className="codex-composer-controls">
+                    {threadId ? (
+                      <>
+                        <span className="codex-composer-control is-static is-model" title={t('codexApp.conversationModel')}>
+                          <Bot size={12} aria-hidden="true" />
+                          <span>{activeModelLabel || 'Codex'}</span>
+                        </span>
+                        <span className="codex-composer-control is-static is-reasoning" title={t('codexApp.conversationReasoning')}>
+                          {REASONING_LABEL_KEYS[activeReasoningEffort] ? t(REASONING_LABEL_KEYS[activeReasoningEffort]) : activeReasoningEffort || '—'}
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <label className="codex-composer-control is-model" title={t('codexApp.model')}>
+                          <select aria-label={t('codexApp.modelLabel')} value={selectedModel} onChange={(event) => chooseModel(event.target.value)} disabled={modelsLoading || !models.length}>
+                            {models.map((model) => <option key={model.model} value={model.model}>{model.displayName}</option>)}
+                          </select>
+                        </label>
+                        <label className="codex-composer-control is-reasoning" title={t('codexApp.reasoning')}>
+                          <select aria-label={t('codexApp.reasoningLabel')} value={reasoningEffort} onChange={(event) => chooseReasoningEffort(event.target.value)} disabled={modelsLoading || !selectedModelDetails}>
+                            {(selectedModelDetails?.supportedReasoningEfforts || []).map((effort) => <option key={effort} value={effort}>{REASONING_LABEL_KEYS[effort] ? t(REASONING_LABEL_KEYS[effort]) : effort}</option>)}
+                          </select>
+                        </label>
+                      </>
+                    )}
+                    <label className={`codex-composer-control is-permission${approvalPolicy === NO_APPROVAL_POLICY ? ' is-unrestricted' : ''}`} title={t('codexApp.permissions')}>
+                      <ShieldCheck size={12} aria-hidden="true" />
+                      <select aria-label={t('codexApp.permissionLabel')} value={approvalPolicy} onChange={(event) => chooseApprovalPolicy(event.target.value)} disabled={busy || savingApprovalPolicy || Boolean(resumingThreadId)}>
+                        <option value={DEFAULT_APPROVAL_POLICY}>{t('codexApp.askWhenNeeded')}</option>
+                        <option value={NO_APPROVAL_POLICY}>{t('codexApp.fullAccess')}</option>
+                      </select>
+                    </label>
+                    {busy && (
+                      <div className="codex-composer-status">
+                        <span className="codex-status-dot is-running" aria-hidden="true" />
+                        <span>{t(steering ? 'codexApp.steering' : 'codexApp.working')}</span>
+                      </div>
+                    )}
                   </div>
                   <div className="codex-composer-actions">
                     {busy && activeTurnId && (
-                      <button type="button" onClick={interrupt} title="Çalışmayı durdur" aria-label="Çalışmayı durdur" className="codex-stop-button"><CircleStop size={15} /></button>
+                      <button type="button" onClick={interrupt} title={t('codexApp.stop')} aria-label={t('codexApp.stop')} className="codex-stop-button"><CircleStop size={15} /></button>
                     )}
                     <button
                       type="button"
                       onClick={submitPrompt}
                       disabled={!canSubmit}
-                      title={busy ? 'Çalışan isteğe ekle' : 'Gönder'}
-                      aria-label={busy ? 'Çalışan isteğe ekle' : 'Gönder'}
+                      title={t(busy ? 'codexApp.addToRequest' : 'codexApp.send')}
+                      aria-label={t(busy ? 'codexApp.addToRequest' : 'codexApp.send')}
                       className={`codex-send-button${busy ? ' is-steer' : ''}`}
                     >
                       {startingTurn || steering ? <Loader2 size={15} className="spin" /> : <Send size={15} />}

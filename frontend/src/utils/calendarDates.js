@@ -25,12 +25,13 @@ export function shiftCalendarMonth(anchor, amount) {
   return localCalendarDate(new Date(date.getFullYear(), date.getMonth() + amount, 1, 12));
 }
 
-export function calendarMonthGrid(anchor, today = new Date()) {
+export function calendarMonthGrid(anchor, today = new Date(), weekStartsOn = 1) {
   const monthDate = parseCalendarDate(anchor) || new Date();
   const firstDay = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1, 12);
-  const mondayOffset = (firstDay.getDay() + 6) % 7;
+  const normalizedWeekStart = weekStartsOn === 0 ? 0 : 1;
+  const weekOffset = (firstDay.getDay() - normalizedWeekStart + 7) % 7;
   const gridStart = new Date(firstDay);
-  gridStart.setDate(firstDay.getDate() - mondayOffset);
+  gridStart.setDate(firstDay.getDate() - weekOffset);
   const todayKey = localCalendarDate(today);
 
   return Array.from({ length: 42 }, (_, index) => {
@@ -46,7 +47,7 @@ export function calendarMonthGrid(anchor, today = new Date()) {
   });
 }
 
-export function calendarGridRange(anchor) {
-  const days = calendarMonthGrid(anchor);
+export function calendarGridRange(anchor, weekStartsOn = 1) {
+  const days = calendarMonthGrid(anchor, new Date(), weekStartsOn);
   return { from: days[0].isoDate, to: days[days.length - 1].isoDate };
 }

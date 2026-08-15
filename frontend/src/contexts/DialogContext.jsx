@@ -2,17 +2,19 @@
 import React, { createContext, useContext, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AlertTriangle, Info, CheckCircle, XCircle, Edit3 } from 'lucide-react';
+import { useI18n } from './LocaleContext';
 
 const DialogContext = createContext();
 
 export const useDialog = () => useContext(DialogContext);
 
 export const DialogProvider = ({ children }) => {
+  const { t } = useI18n();
   const [dialogs, setDialogs] = useState([]);
   const [inputValues, setInputValues] = useState({});
 
   // type: 'warning' | 'info' | 'error' | 'success' | 'confirm' | 'prompt'
-  const showDialog = ({ title, message, type = 'info', defaultValue = '', confirmText = 'Tamam', cancelText = 'İptal', pendingText = 'İşleniyor…', onConfirm = null }) => {
+  const showDialog = ({ title, message, type = 'info', defaultValue = '', confirmText = t('dialog.confirm'), cancelText = t('dialog.cancel'), pendingText = t('dialog.processing'), onConfirm = null }) => {
     const id = Date.now().toString() + Math.random().toString();
     if (type === 'prompt') {
       setInputValues(prev => ({ ...prev, [id]: defaultValue }));

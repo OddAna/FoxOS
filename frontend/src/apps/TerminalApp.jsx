@@ -3,6 +3,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 import { useWindowManager } from '../contexts/WindowContext';
+import { useI18n } from '../contexts/LocaleContext';
 
 const TERMINAL_SOCKET_PATH = '/api/terminal/socket';
 
@@ -12,6 +13,7 @@ function terminalSocketUrl() {
 }
 
 const TerminalApp = () => {
+  const { t } = useI18n();
   const containerRef = useRef(null);
   const terminalRef = useRef(null);
   const { focusedWindowId } = useWindowManager();
@@ -58,8 +60,8 @@ const TerminalApp = () => {
     terminal.loadAddon(fitAddon);
     terminal.open(container);
     terminalRef.current = terminal;
-    terminal.writeln('\x1b[94mFoxOS Host Terminal\x1b[0m');
-    terminal.writeln('\x1b[94mDoğrudan bağlı Linux sunucusunda root yetkili, kalıcı PTY oturumu.\x1b[0m');
+    terminal.writeln(`\x1b[94m${t('terminalApp.title')}\x1b[0m`);
+    terminal.writeln(`\x1b[94m${t('terminalApp.description')}\x1b[0m`);
     terminal.writeln('');
 
     const send = (message) => {
@@ -96,28 +98,28 @@ const TerminalApp = () => {
           if (message.type === 'output' && typeof message.data === 'string') {
             terminal.write(message.data);
           } else if (message.type === 'error') {
-            terminal.writeln(`\r\n\x1b[91m${message.message || 'Terminal başlatılamadı.'}\x1b[0m`);
+            terminal.writeln(`\r\n\x1b[91m${message.message || t('terminalApp.startError')}\x1b[0m`);
           } else if (message.type === 'exit') {
-            terminal.writeln(`\r\n\x1b[90m[PTY oturumu sona erdi: ${message.exitCode ?? 0}]\x1b[0m`);
+            terminal.writeln(`\r\n\x1b[90m${t('terminalApp.exited', { code: message.exitCode ?? 0 })}\x1b[0m`);
           }
         } catch {
-          terminal.writeln('\r\n\x1b[91mGeçersiz terminal yanıtı alındı.\x1b[0m');
+          terminal.writeln(`\r\n\x1b[91m${t('terminalApp.invalidResponse')}\x1b[0m`);
         }
       });
       socket.addEventListener('close', () => {
         if (!disposed && connected) {
-          terminal.writeln('\r\n\x1b[90m[Terminal bağlantısı kapandı. Yeniden açmak için pencereyi kapatıp Terminal’e tıklayın.]\x1b[0m');
+          terminal.writeln(`\r\n\x1b[90m${t('terminalApp.disconnected')}\x1b[0m`);
         } else if (!disposed) {
-          terminal.writeln('\r\n\x1b[91mFoxOS terminal oturumu açılamadı. Oturumunuzu yenileyip tekrar deneyin.\x1b[0m');
+          terminal.writeln(`\r\n\x1b[91m${t('terminalApp.sessionError')}\x1b[0m`);
         }
       });
       socket.addEventListener('error', () => {
         if (!disposed && !connected) {
-          terminal.writeln('\r\n\x1b[91mTerminal WebSocket bağlantısı kurulamadı.\x1b[0m');
+          terminal.writeln(`\r\n\x1b[91m${t('terminalApp.socketError')}\x1b[0m`);
         }
       });
     } catch {
-      terminal.writeln('\r\n\x1b[91mTerminal bağlantısı başlatılamadı.\x1b[0m');
+      terminal.writeln(`\r\n\x1b[91m${t('terminalApp.connectionError')}\x1b[0m`);
     }
 
     const resizeObserver = new ResizeObserver(() => {
@@ -138,7 +140,7 @@ const TerminalApp = () => {
       terminal.dispose();
       if (terminalRef.current === terminal) terminalRef.current = null;
     };
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     if (focusedWindowId === 'terminal') terminalRef.current?.focus();
@@ -147,7 +149,7 @@ const TerminalApp = () => {
   return (
     <div
       ref={containerRef}
-      aria-label="FoxOS Host Terminal"
+      aria-label={t('terminalApp.title')}
       style={{
         width: '100%',
         height: '100%',

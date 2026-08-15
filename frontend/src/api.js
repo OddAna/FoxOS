@@ -7,10 +7,14 @@ export const apiFetch = async (resource, options) => {
   }
 
   let message = 'FoxOS API request failed';
+  let code = null;
   try {
     const payload = await response.clone().json();
     if (payload.error) {
       message = payload.error;
+    }
+    if (typeof payload.code === 'string') {
+      code = payload.code;
     }
   } catch {
     // Keep the generic message when the response is not JSON.
@@ -25,5 +29,6 @@ export const apiFetch = async (resource, options) => {
 
   const error = new Error(message);
   error.status = response.status;
+  error.code = code;
   throw error;
 };

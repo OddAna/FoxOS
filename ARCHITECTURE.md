@@ -51,6 +51,31 @@ FoxOS keeps the desired records, keys, mappings, policy and recovery metadata on
 the server, then applies them through a replaceable adapter. A future
 self-hosted authoritative DNS adapter can use the same local records.
 
+## Owner security boundary
+
+The FoxOS owner is a single root-equivalent administrator identity. New
+passwords require a long passphrase and are stored as versioned, hardened
+scrypt credentials with bounded parameters. A successful verification may
+upgrade a legacy credential in place; failed authentication and passive status
+reads never rewrite the authentication record.
+
+Passkeys use WebAuthn with required user verification. Registration ceremonies
+are bound to the authenticated session, relying-party ID, exact origin and a
+short-lived one-use challenge; authentication ceremonies use only registered
+public credentials and update their replay counter. The password remains a
+fallback and confirms sensitive credential changes. One-time recovery codes
+carry independent random entropy, are persisted only as salted digests and
+force both a password reset and recovery-code rotation after use.
+
+Owner sessions persist only SHA-256 token digests. Each has a public opaque
+session ID, authentication method, bounded client summary, 30-minute idle
+expiry and 12-hour absolute expiry. Live HTTPS uses a Secure, HttpOnly,
+SameSite=Strict host-prefixed cookie. Password recovery and password changes
+revoke all prior sessions and close their root terminals before creating one
+fresh session. A bounded owner-only JSONL history records security event types
+and redacted client metadata, never passwords, recovery codes, private keys or
+bearer tokens.
+
 ## Host terminal boundary
 
 The desktop Terminal is a real host-root pseudo-terminal. The browser uses
@@ -129,7 +154,7 @@ be atomic, schema-versioned, permission-restricted and included in backup and
 restore procedures. Redacted exports must be sufficient to inspect the resource
 graph without exposing secret values.
 
-### Implemented boundary: desktop search, calendar and weather utilities
+### Implemented boundary: desktop search, calendar, weather and notifications
 
 The Spotlight file source indexes only filename and path metadata inside the
 FoxOS workspace. Its bounded, short-lived cache is built without reading file
@@ -184,15 +209,119 @@ isolated to the Weather window, which retains explicit attribution, and the
 adapter can be replaced without changing Calendar, Files, authentication or the
 control plane.
 
+The Notification Hub is likewise server-owned durable state under the FoxOS
+data root. It stores bounded normalized events, source/category identity,
+severity, deduplication keys, thread and target metadata, lifecycle state and
+bounded delivery receipts in a schema-versioned owner-only file written
+atomically. Repeating the same source and deduplication key updates one open
+condition rather than creating unbounded noise. The authenticated menu-bar
+center receives live change hints over same-origin SSE and remains the canonical
+inbox even when every external channel is disabled or unavailable.
+
+Checklist tasks are a separate server-owned authority under the same durable
+data root; a notification is never treated as the task record. The bounded,
+schema-versioned task file stores title, notes, source identity, optional stable
+external key, due instant, display timezone, sensitivity and open/completed
+lifecycle with atomic owner-only writes. The menu-bar center exposes tasks in a
+separate tab on desktop and mobile. Selecting the task summary toggles an
+in-place detail region containing the full task notes and bounded source, due,
+creation and status facts; only the separate completion control changes task
+state. The mobile center is fixed between the safe-area-aware top bar and the
+reserved Dock boundary, and only its notification/task list scrolls. An optional due instant creates one
+deduplicated `checklist` notification; completing the task resolves that
+reminder, reopening it preserves the same task identity, and snoozing moves the
+task's actual due instant before a later reminder is eligible. No due time means
+the task remains visible without inventing a scheduled reminder.
+
+Codex İş Kontrolü is an optional FoxOS scheduler layered above that task
+authority. A clean installation leaves it disabled. Enabling it establishes a
+fresh per-source baseline instead of backfilling history. The default cadence
+is two hours and the owner may set any bounded interval from 15 minutes through
+seven days. Direct Gmail, Google Chat, Telegram and Evolution/WhatsApp adapters
+only collect bounded read-only evidence; they have no send, reaction, mark-read,
+archive, delete or customer-system write path. Any source failure aborts the
+whole pass without advancing a cursor.
+
+Every non-empty or empty evidence batch is submitted to an authenticated,
+ephemeral Codex App Server thread with approvals disabled, a read-only sandbox,
+network disabled for the turn and a strict JSON output schema. Source text is
+untrusted data, never an instruction. Codex is the sole semantic authority for
+`task`, `review`, and `ignore`; there is no keyword, regex, or deterministic
+classification fallback. Uncertainty becomes a `Kontrol et:` task. If Codex or
+Checklist persistence fails, cursors remain unchanged and the same evidence is
+retried through stable one-way message digests.
+
+Raw message bodies and Codex output exist only in bounded process memory.
+Persistent review state contains cursors, timestamps, counters, the last model
+identity, an opaque Codex thread identifier and bounded error codes. The only
+durable content copy is the resulting sensitive Checklist item. The review
+system cannot import archives, cursors, classifications, or tasks from a legacy
+assistant or ClickUp intake.
+
+Web Push is an explicit per-device adapter. FoxOS creates and retains its VAPID
+private key and browser subscription material only in owner-only local state,
+returns only the public VAPID key and redacted device summaries, removes expired
+subscriptions, and records bounded success/failure state without provider
+response bodies. Quiet hours, critical override, global priority and per-source
+thresholds are evaluated centrally. Sensitive events receive generic external
+text while their local detail remains in the authenticated inbox. A clean
+installation has no subscription and performs no push delivery.
+
+Telegram is a separate explicit adapter and never shares the legacy Sofia bot
+or its n8n webhook. The owner creates a dedicated bot, submits its token only
+through the authenticated Notifications screen, and FoxOS verifies the bot plus
+the absence of an existing webhook before storing the token in an AES-256-GCM
+envelope bound to the server master key. No token or private chat ID is returned
+by status APIs or written to ordinary logs. A short-lived random deep-link code
+pairs exactly one non-bot private chat whose sender and chat identities match;
+groups and every other sender are ignored.
+
+After explicit configuration, a software-only long-polling loop reads only
+message and callback updates, persists the last accepted update identifier and
+never launches an AI agent. Its bounded commands list unread notifications,
+open checklist tasks, pause or resume Telegram delivery and mark the local
+inbox read. The explicit `/gorevler` pull from the exact paired owner includes
+each task's bounded title but not its notes, plus a numbered button that
+completes that exact canonical task and refreshes the same summary. Generic
+notification buttons can mark one exact event read, snoozed or resolved. A
+checklist reminder instead completes the exact canonical task or moves its due
+instant by one hour before clearing the old keyboard. Outbound text uses no
+provider parse mode; unsolicited sensitive content is replaced with a generic summary,
+deduplicated events edit their prior Telegram message when possible, and a
+delivery is recorded only after Telegram returns the expected private chat and
+message identities. Provider errors collapse to bounded codes. A clean install
+has no bot, token, polling loop or Telegram request, and disconnect removes only
+the local encrypted adapter state; it neither alters Sofia nor deletes the bot.
+
+Host-local applications and AI agents use a separate random bearer token stored
+with owner-only permissions. That token can only create/update normalized
+events, resolve a condition, or create/list/update/complete/reopen/snooze
+checklist tasks through bounded endpoints; it is never returned by the web API.
+The bundled `foxos-notifications` and `foxos-checklist` skills use this path and
+are copied into an installed Codex home only when absent. Agents never select
+Telegram, email or push directly, so future webhook, SMTP, ntfy, Gotify or chat
+adapters remain replaceable delivery boundaries rather than notification or
+task authority.
+
 ## First-run server review
 
-A new owner account stores a versioned `pending` initial-setup marker in the
-owner-only authentication record. The authenticated desktop remains behind that
-gate while FoxOS performs a fresh Resource Registry scan and compiles the
-current whole-server migration plan. Observation and planning are read-only:
-they do not stop applications, switch routes, configure or mutate an optional
-provider, or grant migration execution authority. A previously configured
-migration reader may contribute only its bounded GET-only observation.
+An unconfigured FoxOS opens a four-step setup assistant instead of the desktop:
+welcome and interface language, owner account, language and region preferences,
+then server review. Owner creation requires a name, a confirmed password of at
+least 15 characters and the existing server-side password policy. The selected
+language, region, display time zone, clock, week-start and measurement choices
+are validated against bounded allowlists and stored as a schema-versioned part
+of the owner-only authentication record. Browser storage is only a local cache.
+The display time zone changes FoxOS formatting; setup never silently changes the
+host operating system's time zone.
+
+Creating the owner stores a versioned `pending` initial-setup marker in the same
+record. The authenticated desktop remains behind that gate while FoxOS performs
+a fresh Resource Registry scan and compiles the current whole-server migration
+plan. Observation and planning are read-only: they do not stop applications,
+switch routes, configure or mutate an optional provider, or grant migration
+execution authority. A previously configured migration reader may contribute
+only its bounded GET-only observation.
 
 The owner may select eligible resources and use the existing migration-run
 coordinator, finish the review without selecting a resource, or explicitly
@@ -202,8 +331,10 @@ authority. Deferred work remains available under **Ayarlar → Sunucu Geçişi**
 with the same preflight, one-use approval, health and rollback gates.
 
 Authentication records created before this gate have no `pending` marker and
-are treated as already complete. An upgrade therefore never interrupts an
-existing owner's session with a first-install workflow.
+are treated as already complete. Records created before server-owned locale
+preferences also keep their current browser preference until the owner saves a
+choice in Settings. An upgrade therefore never interrupts an existing owner's
+session with a first-install workflow or silently replaces their locale.
 
 ## Migration safety gates
 
