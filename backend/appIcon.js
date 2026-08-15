@@ -1,3 +1,5 @@
+const { version: FOXOS_VERSION } = require('./package.json');
+
 const ICON_CACHE = new Map();
 const ICON_CACHE_TTL_MS = 60 * 60 * 1000;
 const ICON_FETCH_TIMEOUT_MS = 5000;
@@ -91,7 +93,7 @@ async function fetchRemote(url, maximumBytes) {
   const response = await fetch(url, {
     redirect: 'follow',
     signal: AbortSignal.timeout(ICON_FETCH_TIMEOUT_MS),
-    headers: { 'User-Agent': 'FoxOS/0.0.2 app-icon-discovery' }
+    headers: { 'User-Agent': `FoxOS/${FOXOS_VERSION} app-icon-discovery` }
   });
   if (!safeHttpUrl(response.url)) {
     await response.body?.cancel();

@@ -9,10 +9,10 @@
   needs isolation.
 - Merge `develop` into `main` only when Burak explicitly requests a release and
   the complete validation suite passes.
-- Published version tags are immutable. `v0.0.1` and `v0.0.2` are frozen at
-  their released commits and must never be force-moved.
-- Do not change the package/README version from `0.0.2` until Burak explicitly
-  chooses the next release version.
+- Published version tags are immutable. `v0.0.1`, `v0.0.2` and `v0.0.3` are
+  frozen at their released commits and must never be force-moved.
+- The current package/README version is `0.0.3`. Do not advance it until Burak
+  explicitly chooses another release version.
 - Public users update deliberately from a stable release. Never introduce a
   forced or silent updater.
 
@@ -68,6 +68,67 @@
   keep access-link planning read-only, require the separate confirmed apply,
   recheck DNS drift and preserve exact rollback. It must not become a clean-
   install, startup, paid-plan, proxy or application-authority dependency.
+- Codex is a second optional **Bağlantılar** adapter, not a clean-install
+  dependency. Preserve the separate exact confirmations for host installation
+  and **Full Server**, the default read-only profile, per-owner device-code
+  authentication, real host-root `/` execution, `danger-full-access` plus
+  default `untrusted` approvals, the explicit owner-selected server-persisted
+  `never` preference, persisted app-server thread history, a host-owned managed app-server
+  daemon, its owner-only Unix WebSocket control socket, a count-based in-memory
+  event ring without byte-size omission, and owner-authenticated endpoints. The
+  optional Drive-memory folder reference
+  is server-local private configuration: keep it out of Git and ordinary logs,
+  store it with owner-only permissions, never return its location through the
+  API, and inject its `AGENTS.md` then `index.md` bootstrap only into new or
+  resumed Codex threads when the owner has enabled memory. Never spawn the
+  app-server as a FoxOS container child, expose its control socket publicly, or
+  return or log Codex auth state. Recreating the FoxOS agent must close only its
+  local socket client while the host daemon and active turn continue. The FoxOS
+  owner session must survive the same recreation in owner-only persistent state;
+  never persist its raw bearer token, only a one-way digest, and remove it on
+  logout. Resume large durable threads through the negotiated `excludeTurns`
+  plus bounded `thread/turns/list` summary pagination path for efficiency, but
+  do not impose a FoxOS byte-size ceiling on the Unix WebSocket or replace a
+  large live event with a size-warning placeholder.
+  The approval preference is owner control-plane state, not browser storage:
+  keep it in the owner-only Codex connection config, return only the normalized
+  policy through authenticated status, and apply it to new, resumed and
+  subsequent turns across devices. Browser `localStorage` may be read only for
+  a one-time migration of the former explicit `never` choice.
+  Revoking Full Server must stop the runtime and block earlier threads;
+  disconnect must revoke access and log out while leaving the CLI optional.
+- Gemini CLI is a third optional **Bağlantılar** adapter, not a clean-install
+  dependency or a grant of host execution authority. Install only Google's
+  official stable `@google/gemini-cli` package after exact owner confirmation
+  into the dedicated host state root. For headless server authentication,
+  accept only a Gemini API key in the first implementation: verify it through
+  the installed CLI in read-only plan mode, encrypt it with the server-local
+  master key, never persist it in `.env` or Gemini settings, never return it
+  through an API, and inject it only into the bounded verification process.
+  Disconnect removes only the encrypted credential/config and leaves the CLI
+  installed. Do not represent retired individual Google-account OAuth as a
+  working server login, and do not let connection alone execute prompts or
+  grant filesystem, shell, Docker or host access.
+- Antigravity CLI is a fourth optional **Bağlantılar** adapter and remains
+  separate from Gemini CLI. Install only through Google's official
+  `antigravity.google/cli/install.sh` after exact owner confirmation, into the
+  dedicated owner-only host state root. Remote authentication must use the
+  CLI's interactive TUI in a real pseudo-terminal: `--print /usage` is a
+  post-login verification command and must never be used to bootstrap login.
+  Select the TUI's Google OAuth method, then use its URL plus browser-returned code; keep that URL and code
+  process-local, never persist or log them, and verify the resulting session in
+  a fresh quota-free `/usage` process before marking it connected. Credentials
+  remain Antigravity-owned and must never be copied into FoxOS state or API
+  responses. Access defaults to protected `plan` + `strict` with terminal
+  sandboxing. The separate exact **Full Server** confirmation persistently sets
+  `accept-edits`, `always-proceed`, artifact `always-proceed`, workspace-external
+  access, sandbox off and explicit allow-all file/URL/command/unsandboxed/MCP
+  permissions with empty ask/deny lists. Treat that profile as root-equivalent
+  and prompt-free; revoking it must remain possible even if account inspection
+  or the CLI is unavailable. Disconnect must downgrade first, prove CLI logout,
+  and leave the optional binary installed. Ordinary status reads must be local
+  and spend no model quota. Do not claim this connection card is an embedded
+  Antigravity chat or background agent; execution UI remains a separate slice.
 - A clean public installation must require no external provider account, domain,
   API token, object store, payment method or existing panel. Base startup and
   ordinary host management must work with recovery explicitly unconfigured.

@@ -1,0 +1,4 @@
+interface:
+  display_name: "FoxOS Checklist"
+  short_description: "Görevleri kaydet, hatırlat ve tamamla"
+  default_prompt: "Use $foxos-checklist to add a task and schedule its reminder in FoxOS."

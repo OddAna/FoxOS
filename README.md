@@ -4,7 +4,7 @@
 
 **A desktop-style control panel for the Linux server you already own.**
 
-![FoxOS](https://img.shields.io/badge/FoxOS-v0.0.2_alpha-FF5F56?style=for-the-badge&logo=firefox-browser&logoColor=white)
+![FoxOS](https://img.shields.io/badge/FoxOS-v0.0.3_alpha-FF5F56?style=for-the-badge&logo=firefox-browser&logoColor=white)
 ![Linux](https://img.shields.io/badge/Host-Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black)
 ![Docker](https://img.shields.io/badge/Runtime-Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-22c55e?style=for-the-badge)
@@ -23,7 +23,7 @@ runtime, routing and recovery state.
 > management agent and web interface installed on a Linux server that already
 > has Docker Engine and Docker Compose v2.
 
-FoxOS `v0.0.2` is an **alpha release**. It is useful on real servers, but its
+FoxOS `v0.0.3` is an **alpha release**. It is useful on real servers, but its
 management session has root-equivalent power and migration support deliberately
 rejects workloads whose safety cannot yet be proven. Read
 [Security](#security-model) and [Current limitations](#current-limitations)
@@ -41,6 +41,10 @@ backup evidence and rollback history live on the server.
   discovering legacy and inactive definitions.
 - Cloudflare is an optional DNS adapter. FoxOS does not require Cloudflare, a
   paid plan, a domain or an API token to install or run.
+- Gemini CLI is an optional AI adapter. FoxOS does not install it or require a
+  Google API key during base setup.
+- Antigravity CLI is a separate optional AI adapter. FoxOS does not install it,
+  start Google login or grant host access during base setup.
 - S3-compatible storage is an optional, provider-neutral recovery adapter. Base
   installation and ordinary server management work without it.
 - The installer never signs up for, provisions or enables a remote or billable
@@ -52,7 +56,7 @@ Linux host. The separate FoxOS-owned gateway/ingress services must remain
 running when applications depend on them for public domains, and the FoxOS
 agent is still required to perform management operations.
 
-## v0.0.2 capabilities
+## v0.0.3 capabilities
 
 ### Server and application control
 
@@ -68,7 +72,9 @@ agent is still required to perform management operations.
   interfaces without reading unit contents, WireGuard configuration or keys.
 - Start, stop, restart and change boot enablement for verified host services
   through fixed, Registry-bound operations.
-- Use a host terminal and browse the host filesystem from the web interface.
+- Use a real interactive host PTY from the web interface, including ANSI/TUI
+  programs, Ctrl/key input, live resize and long-running shell state while the
+  Terminal window is open or minimized; browse the host filesystem separately.
 
 ### Desktop and Application Manager
 
@@ -84,6 +90,82 @@ agent is still required to perform management operations.
   capabilities are available.
 - Create or remove a desktop shortcut from either the context menu or
   Application Manager.
+
+### First run, language, appearance and security
+
+- Guide a new server owner through interface language, hardened owner
+  credentials, region and display-time preferences, then the existing optional
+  read-only server scan. Existing configured owners are not forced through the
+  assistant again.
+- Switch the shell between Turkish and English, with independently validated
+  locale, time-zone, clock, week-start and measurement preferences. These
+  choices affect FoxOS presentation and do not silently change the Linux host.
+- Configure device-local **Appearance** settings for interface scale,
+  wallpaper and dimming, lock-screen wallpaper, desktop icon/grid/snap
+  behavior, Dock size/auto-hide, bounded remembered window geometry, text size,
+  reduced motion and high contrast. Physical display resolution remains
+  read-only and no appearance choice mutates server configuration.
+- Manage passkeys, hardened passwords, one-time recovery codes, active sessions
+  and bounded security activity from **Settings → Security**. Password changes
+  and recovery revoke prior sessions and active host terminals.
+
+### Search, Calendar and Weather
+
+- Open FoxOS Spotlight from the menu bar, `Command/Ctrl+K` or `Ctrl+Space` and
+  launch built-in tools, live applications, settings and actions.
+- Search nested FoxOS workspace filenames and paths without reading file
+  contents or recursively following the host-filesystem shortcut, then open a
+  result in Files or its matching viewer.
+- Keep Calendar events as schema-versioned, owner-only server data rather than
+  browser-local state. The Calendar supports month navigation and creating,
+  editing or deleting timed and all-day events; clicking the top-right date and
+  time opens it on today.
+- Open Weather from the compact menu-bar control or Spotlight, select a city
+  and view current conditions plus a seven-day forecast. After setup, the
+  menu-bar control shows the current rounded temperature. Calendar and Weather
+  are intentionally kept out of the Dock. The optional
+  [Open-Meteo](https://open-meteo.com/) adapter is called
+  only when Weather is used, requires no API key for its open-access path and
+  cannot block FoxOS startup or other server management features.
+
+### Notifications and Checklist
+
+- Keep an owner-only, server-persisted menu-bar center with separate
+  **Notifications** and **Tasks** views. Notifications retain unread and
+  critical counts, deduplication, read, snooze and resolve state.
+- Add durable checklist tasks with an optional date and time, mark them done or
+  reopen them on desktop and mobile, and keep completed history out of the
+  active list. A due task emits one deduplicated Notification Hub reminder;
+  postponing it moves the task's real due time. Selecting a task expands its
+  full notes plus source, reminder, creation time and status without triggering
+  completion. On phones the menu-bar center is bounded between the top bar and
+  the reserved Dock area, so its footer and scroll content remain reachable.
+- Optionally enable **Codex İş Kontrolü** from **Settings → Notifications**.
+  It starts at the activation instant and defaults to a two-hour, owner-adjustable
+  interval. Every pass runs a real authenticated Codex turn over bounded,
+  read-only mail and chat evidence plus the open Checklist. Codex—not a keyword
+  or regex classifier—decides `task`, `review`, or `ignore`; uncertain work is
+  retained as `Kontrol et:`. If Codex fails, no cursor advances and there is no
+  rule-based fallback. Raw transcripts are not persisted, sent, or marked read.
+- Configure priority thresholds, per-source delivery rules and quiet hours from
+  **Settings → Notifications**, then inspect bounded delivery receipts without
+  exposing push subscription secrets.
+- Optionally connect each phone or desktop browser through standards-based Web
+  Push. A clean install remains in-app only and makes no external notification
+  request until the owner connects a device.
+- Optionally connect a dedicated Telegram bot from the same screen. FoxOS
+  verifies that the bot has no competing webhook, encrypts its token with the
+  server master key, pairs exactly one private owner chat with a short-lived
+  code and receives commands through bounded long polling. An explicit
+  `/gorevler` request from that exact paired owner lists recognizable task
+  titles without exposing notes and adds one numbered completion button per
+  task. Unsolicited sensitive notifications remain redacted. Due-task messages
+  can complete or truly postpone the exact task. Telegram can be paused or
+  removed without changing canonical notifications or tasks.
+- Let local applications and AI agents emit normalized events or manage durable
+  tasks through the bundled `foxos-notifications` and `foxos-checklist` skills
+  plus an owner-only local ingest token. Delivery routing stays in FoxOS rather
+  than in an agent, Telegram bot or external assistant.
 
 ### App Store
 
@@ -119,6 +201,91 @@ storage where persistence is required.
 Cloudflare is not part of the normal request path. If it is connected, it is
 used to manage DNS records; the applications, routes and desired state remain
 on the server.
+
+### Codex Full Server
+
+- Optionally install Codex CLI on the Linux host from **Settings → Connections**
+  using OpenAI's official installer.
+- Connect each server owner's own eligible ChatGPT account with the Codex
+  device-code flow. FoxOS does not ask for or return an OpenAI API key.
+- Keep access read-only after installation and login. The owner must separately
+  confirm **Full Server** before the Codex application can run.
+- Run Full Server threads from the real host root (`/`) with root-equivalent
+  filesystem, Docker, systemd, package and network access. The default mode
+  requests untrusted command and file-change approvals through the authenticated
+  FoxOS interface; the owner can explicitly choose **Tam Erişim — sorma** to
+  persist Codex's `never` approval policy in owner-only server state. The same
+  choice then applies on every authenticated device and to new, resumed and
+  subsequent turns until the owner changes it.
+- Keep new threads non-ephemeral, list FoxOS app-server conversations in the
+  left history panel and resume the selected stored thread after a window or
+  browser restart.
+- Keep the approval preference out of browser storage. A legacy browser-side
+  `never` choice is migrated to the server once and then removed locally.
+- Optionally connect a private Google Drive memory folder. Its address stays in
+  ignored owner-only server data and is never returned by the API; enabled new
+  and resumed conversations load `AGENTS.md` and `index.md` before answering.
+- Keep the Codex app-server as a managed host daemon independent of the FoxOS
+  agent container. FoxOS talks to it directly through its owner-only Unix
+  WebSocket control socket, so an agent rebuild/recreate does not kill the
+  active server-side turn.
+- Reverting to read-only stops the active Codex runtime and blocks turns on old
+  Full Server threads. Disconnecting also logs the ChatGPT account out while
+  leaving the optional CLI installed.
+- Show cached Codex and Antigravity entitlement windows in the menu bar, with a
+  manual refresh that reads provider usage without starting a model turn.
+
+Codex authentication and session state are owned by Codex under
+`/var/lib/foxos/codex` by default. The app-server daemon and its Unix control
+socket live in that owner-only host state; the FoxOS container holds only a
+disposable socket client. No app-server TCP listener is exposed. Account
+eligibility and usage limits remain those of the connected ChatGPT account;
+FoxOS does not create a subscription or make Codex a base-install dependency.
+
+### Antigravity CLI connection
+
+- Optionally install Google's native `agy` CLI from **Settings → Connections**
+  with the official Linux installer and a separate exact confirmation.
+- Connect the server owner's Google account through the documented remote OAuth
+  link and browser-returned code. The short-lived link and code are never
+  persisted or logged by FoxOS; credentials remain managed by Antigravity. The
+  connector drives the real `agy` TUI through a private pseudo-terminal because
+  non-interactive `/usage` can verify a login but cannot start one.
+- Start in a protected `plan` + `strict` profile with workspace confinement and
+  terminal sandboxing. Explicit account checks use `/usage` and make no model
+  request, while ordinary status reads stay fully local.
+- Separately confirm **Full Server** to enable root-equivalent host work from
+  `/` with workspace-external access and terminal sandboxing disabled. This
+  profile uses `always-proceed` for tools and artifacts plus explicit wildcard
+  permissions, so it does not ask again for individual commands, file changes
+  or artifact review.
+- Return to salt-okunur at any time. Disconnect first applies the protected
+  profile, then logs the Google account out and verifies the result while
+  leaving the optional CLI installed.
+
+This connector prepares Antigravity's native CLI and persistent permission
+profile. It does not yet add an Antigravity chat window, daemon or autonomous
+background agent inside FoxOS. Full Server should therefore be treated exactly
+like granting an authenticated root shell to later `agy` executions.
+
+### Gemini CLI connection
+
+- Optionally install Google's stable `@google/gemini-cli` package from
+  **Settings → Connections** after exact confirmation.
+- Connect a Gemini API key for the documented headless-server path. FoxOS
+  verifies it through the installed CLI in read-only plan mode, then stores it
+  only as server-keyed encrypted data; the key is never written to a `.env`
+  file or returned through the API.
+- Recheck the real CLI/API path on demand without turning ordinary status reads
+  into billable requests. Disconnecting removes the encrypted credential while
+  leaving the optional CLI installed.
+- Keep connection separate from execution authority. This slice does not add a
+  Gemini prompt window, background agent, filesystem access or shell access.
+
+Google ended Gemini CLI service for individual Google AI Pro, Ultra and free
+Code Assist accounts on June 18, 2026. This connector therefore exposes the
+supported API-key path instead of a non-working consumer Google-login flow.
+Vertex AI and enterprise authentication are not part of this first slice.
 
 ### Updates and Compose
 
@@ -229,7 +396,7 @@ modify the host operating system.
 For an immutable checkout of this exact release:
 
 ```bash
-git clone --branch v0.0.2 --depth 1 https://github.com/OddAna/FoxOS.git
+git clone --branch v0.0.3 --depth 1 https://github.com/OddAna/FoxOS.git
 ```
 
 ### Connect safely
@@ -241,8 +408,12 @@ root-equivalent server access. From your own computer:
 ssh -L 8080:127.0.0.1:8080 your-user@your-server-ip
 ```
 
-Open [http://127.0.0.1:8080](http://127.0.0.1:8080) and create the first owner
-account. Passwords must be at least 10 characters.
+Open [http://127.0.0.1:8080](http://127.0.0.1:8080). The first-run assistant
+guides you through interface language, the first owner account, region and
+display-time preferences, then a read-only scan of the server's existing
+resources. Passwords must be at least 15 characters. Region and time-zone
+choices affect FoxOS formatting only; the installer does not change the host
+operating system's time zone.
 
 Do not bind FoxOS directly to a public interface without a trusted HTTPS and
 network-access boundary. If you already use a private VPN or an HTTPS reverse
@@ -300,7 +471,9 @@ records enough evidence to report or roll back the result.
 FoxOS control data is stored under `.foxos-data/` on the host and mounted as
 `/data` inside the agent. It contains authentication state, desktop layout,
 application identities, encrypted secrets, route state, migration evidence,
-operation receipts and gateway state.
+operation receipts and gateway state. Active owner sessions persist there as
+SHA-256 token digests rather than raw cookie values, so an agent rebuild does
+not sign the owner out while server-side work continues.
 
 Application data remains in the application's own Docker volumes or explicit
 host paths. Do not delete `.foxos-data/`, application volumes or gateway data
@@ -319,7 +492,7 @@ destructive adoption or migration path that cannot prove a usable restore.
 ## Updating FoxOS
 
 FoxOS never silently updates itself. Stable installations follow `main`; the
-`v0.0.2` tag is immutable.
+`v0.0.3` tag is immutable.
 
 From an unmodified stable checkout:
 
@@ -381,11 +554,29 @@ authenticated FoxOS session should be treated as a server administrator.
 
 - Keep the default loopback bind or place FoxOS behind a trusted private VPN or
   properly configured HTTPS gateway.
-- Use a unique owner password and protect SSH access to the server.
+- Add at least one passkey from **Settings → Security** and keep a second
+  device or FIDO2 security key when practical. Passkey ceremonies require
+  user verification and are bound to the configured FoxOS HTTPS origin.
+- Generate the one-time recovery-code set, store it away from the server and
+  replace the set after using a code. FoxOS stores only code digests and shows
+  plaintext codes once at creation.
+- Use a unique owner password and protect SSH access to the server. New
+  passwords use a versioned, hardened scrypt credential; legacy credentials
+  are upgraded only after a successful password verification.
+- Review active devices and security activity from **Settings → Security**.
+  Server sessions have both idle and absolute expiry, persist only token
+  digests and can be revoked without exposing bearer tokens.
 - Do not expose the Docker socket or FoxOS data directory to unrelated
   containers.
 - Give optional provider tokens the smallest possible scope. For Cloudflare,
   use only zone read and DNS edit access for the required zones.
+- Treat Full Server Codex as an authenticated root shell: review approval
+  details, use **Tam Erişim — sorma** only when you intend to delegate every
+  command and file change without another prompt, protect the FoxOS owner
+  session and return Codex to read-only when the task is finished.
+- Treat Antigravity Full Server as an authenticated root shell with no
+  per-command prompt. Enable it only when that is intentional, protect the
+  FoxOS owner session and return Antigravity to salt-okunur when finished.
 - Back up encryption and recovery material separately from the server.
 - Read [SECURITY.md](SECURITY.md) before internet exposure or production
   migration.
@@ -395,7 +586,7 @@ flow rather than opening a public issue with exploit details or secrets.
 
 ## Current limitations
 
-- `v0.0.2` is alpha software intended for an informed, hands-on server owner.
+- `v0.0.3` is alpha software intended for an informed, hands-on server owner.
 - FoxOS is a single-server control plane; clustering, high availability and
   multi-user roles are not implemented.
 - The agent is privileged by design. A browser or authentication compromise can
@@ -427,7 +618,7 @@ The detailed safety contracts and remaining work are tracked in
 
 ## Development and releases
 
-- `main` — current stable public alpha (`v0.0.2`)
+- `main` — current stable public alpha (`v0.0.3`)
 - `develop` — active integration branch used by the development server
 - `feature/*` — temporary isolated work based on `develop`
 - `vX.Y.Z` — immutable released snapshots

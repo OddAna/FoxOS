@@ -51,6 +51,50 @@ FoxOS keeps the desired records, keys, mappings, policy and recovery metadata on
 the server, then applies them through a replaceable adapter. A future
 self-hosted authoritative DNS adapter can use the same local records.
 
+## Owner security boundary
+
+The FoxOS owner is a single root-equivalent administrator identity. New
+passwords require a long passphrase and are stored as versioned, hardened
+scrypt credentials with bounded parameters. A successful verification may
+upgrade a legacy credential in place; failed authentication and passive status
+reads never rewrite the authentication record.
+
+Passkeys use WebAuthn with required user verification. Registration ceremonies
+are bound to the authenticated session, relying-party ID, exact origin and a
+short-lived one-use challenge; authentication ceremonies use only registered
+public credentials and update their replay counter. The password remains a
+fallback and confirms sensitive credential changes. One-time recovery codes
+carry independent random entropy, are persisted only as salted digests and
+force both a password reset and recovery-code rotation after use.
+
+Owner sessions persist only SHA-256 token digests. Each has a public opaque
+session ID, authentication method, bounded client summary, 30-minute idle
+expiry and 12-hour absolute expiry. Live HTTPS uses a Secure, HttpOnly,
+SameSite=Strict host-prefixed cookie. Password recovery and password changes
+revoke all prior sessions and close their root terminals before creating one
+fresh session. A bounded owner-only JSONL history records security event types
+and redacted client metadata, never passwords, recovery codes, private keys or
+bearer tokens.
+
+## Host terminal boundary
+
+The desktop Terminal is a real host-root pseudo-terminal. The browser uses
+xterm.js for ANSI, curses/TUI, keyboard and resize behavior, and carries only a
+small typed JSON input/output protocol over a same-origin WebSocket. The agent
+uses `node-pty` to allocate the PTY and enters PID 1's mount, UTS, IPC, network
+and PID namespaces through `nsenter`, with the host root and verified root login
+shell. The shell receives a minimal fixed environment rather than the FoxOS
+agent environment.
+
+The WebSocket upgrade requires the existing owner session cookie and an exact
+Origin/Host match. Session IDs are represented internally only by SHA-256
+digests. Payload, dimension, output-backpressure, concurrent-session and
+session-lifetime bounds fail closed. FoxOS does not log or persist terminal
+bytes. Logout, owner-session expiry, window close, agent shutdown and socket
+failure hang up the PTY. A minimized window stays mounted so its shell process
+and frontend terminal state continue; activating its existing Dock icon restores
+and raises that same window instead of constructing a second Terminal.
+
 ## Provider-neutral resource manifest
 
 Every manageable instance receives a stable FoxOS resource ID. A versioned
@@ -109,6 +153,188 @@ data root (`/data` in the container and `.foxos-data/` on the host). Writes must
 be atomic, schema-versioned, permission-restricted and included in backup and
 restore procedures. Redacted exports must be sufficient to inspect the resource
 graph without exposing secret values.
+
+### Implemented boundary: desktop search, calendar, weather and notifications
+
+The Spotlight file source indexes only filename and path metadata inside the
+FoxOS workspace. Its bounded, short-lived cache is built without reading file
+contents, following symbolic links or descending into the `Sunucu` host
+shortcut or `Çöp Kutusu`. The authenticated API applies entry, depth, time and
+result ceilings; workspace writes invalidate the cache. A result still opens
+through the existing Files or viewer boundary and does not create a second file
+access path.
+
+The local Calendar is server-owned durable state under the FoxOS data root. Its
+schema-versioned event file is written atomically with owner-only permissions.
+Authenticated create, update, delete and bounded-range list operations validate
+dates, times, text lengths, identifiers and color values on the server; browser
+storage is not authority. The menu-bar date and time and Spotlight both
+activate the same Calendar window and current-date navigation state. Calendar
+is intentionally absent from the Dock.
+
+Calendar also has an optional multi-account provider boundary configured only
+through authenticated **Bağlantılar**. Google Calendar and personal or
+organizational Microsoft calendars use separate web-server OAuth applications;
+an Antigravity, Gemini, Codex, Gmail or browser login is never copied or treated
+as Calendar authority. Authorization uses an exact server callback, a bounded
+one-use state value and PKCE. FoxOS requests only identity, offline renewal and
+calendar-event/list permissions, receives no mailbox password, encrypts OAuth
+client secrets and per-account refresh tokens with the server-local
+AES-256-GCM key, and never returns those values through an API response.
+
+Each connected account retains its own provider and calendar sources. Bounded
+on-demand reads expand recurring instances for the visible date range and merge
+them with the local server-owned calendar; one provider failure becomes a
+source warning and cannot hide local events or another healthy account.
+Authenticated writes are routed only to an explicitly selected writable
+calendar, while provider identifiers remain opaque event references. Account
+disconnect removes only local encrypted credentials and preserves remote
+calendars and events. A clean install has no OAuth application, account,
+provider request or background synchronization dependency; external network
+requests begin only after the owner explicitly configures and opens or refreshes
+Calendar.
+
+Weather is an optional, on-demand adapter. A clean install has no configured
+location and makes no weather network request during startup or ordinary FoxOS
+operation. Location search and seven-day forecast requests are proxied only to
+fixed Open-Meteo geocoding and forecast HTTPS endpoints with bounded queries,
+timeouts, response size, allowlisted output fields and short in-memory caches.
+Weather opens from its compact menu-bar control or Spotlight and is
+intentionally absent from the Dock. The control shows an icon before location
+setup, then the rounded current temperature; successful location changes and
+forecast refreshes update it immediately, with a ten-minute cached refresh.
+The selected coordinates and timezone are stored atomically in owner-only local
+state; no external credential is required or persisted. Provider failure is
+isolated to the Weather window, which retains explicit attribution, and the
+adapter can be replaced without changing Calendar, Files, authentication or the
+control plane.
+
+The Notification Hub is likewise server-owned durable state under the FoxOS
+data root. It stores bounded normalized events, source/category identity,
+severity, deduplication keys, thread and target metadata, lifecycle state and
+bounded delivery receipts in a schema-versioned owner-only file written
+atomically. Repeating the same source and deduplication key updates one open
+condition rather than creating unbounded noise. The authenticated menu-bar
+center receives live change hints over same-origin SSE and remains the canonical
+inbox even when every external channel is disabled or unavailable.
+
+Checklist tasks are a separate server-owned authority under the same durable
+data root; a notification is never treated as the task record. The bounded,
+schema-versioned task file stores title, notes, source identity, optional stable
+external key, due instant, display timezone, sensitivity and open/completed
+lifecycle with atomic owner-only writes. The menu-bar center exposes tasks in a
+separate tab on desktop and mobile. Selecting the task summary toggles an
+in-place detail region containing the full task notes and bounded source, due,
+creation and status facts; only the separate completion control changes task
+state. The mobile center is fixed between the safe-area-aware top bar and the
+reserved Dock boundary, and only its notification/task list scrolls. An optional due instant creates one
+deduplicated `checklist` notification; completing the task resolves that
+reminder, reopening it preserves the same task identity, and snoozing moves the
+task's actual due instant before a later reminder is eligible. No due time means
+the task remains visible without inventing a scheduled reminder.
+
+Codex İş Kontrolü is an optional FoxOS scheduler layered above that task
+authority. A clean installation leaves it disabled. Enabling it establishes a
+fresh per-source baseline instead of backfilling history. The default cadence
+is two hours and the owner may set any bounded interval from 15 minutes through
+seven days. Direct Gmail, Google Chat, Telegram and Evolution/WhatsApp adapters
+only collect bounded read-only evidence; they have no send, reaction, mark-read,
+archive, delete or customer-system write path. Any source failure aborts the
+whole pass without advancing a cursor.
+
+Every non-empty or empty evidence batch is submitted to an authenticated,
+ephemeral Codex App Server thread with approvals disabled, a read-only sandbox,
+network disabled for the turn and a strict JSON output schema. Source text is
+untrusted data, never an instruction. Codex is the sole semantic authority for
+`task`, `review`, and `ignore`; there is no keyword, regex, or deterministic
+classification fallback. Uncertainty becomes a `Kontrol et:` task. If Codex or
+Checklist persistence fails, cursors remain unchanged and the same evidence is
+retried through stable one-way message digests.
+
+Raw message bodies and Codex output exist only in bounded process memory.
+Persistent review state contains cursors, timestamps, counters, the last model
+identity, an opaque Codex thread identifier and bounded error codes. The only
+durable content copy is the resulting sensitive Checklist item. The review
+system cannot import archives, cursors, classifications, or tasks from a legacy
+assistant or ClickUp intake.
+
+Web Push is an explicit per-device adapter. FoxOS creates and retains its VAPID
+private key and browser subscription material only in owner-only local state,
+returns only the public VAPID key and redacted device summaries, removes expired
+subscriptions, and records bounded success/failure state without provider
+response bodies. Quiet hours, critical override, global priority and per-source
+thresholds are evaluated centrally. Sensitive events receive generic external
+text while their local detail remains in the authenticated inbox. A clean
+installation has no subscription and performs no push delivery.
+
+Telegram is a separate explicit adapter and never shares the legacy Sofia bot
+or its n8n webhook. The owner creates a dedicated bot, submits its token only
+through the authenticated Notifications screen, and FoxOS verifies the bot plus
+the absence of an existing webhook before storing the token in an AES-256-GCM
+envelope bound to the server master key. No token or private chat ID is returned
+by status APIs or written to ordinary logs. A short-lived random deep-link code
+pairs exactly one non-bot private chat whose sender and chat identities match;
+groups and every other sender are ignored.
+
+After explicit configuration, a software-only long-polling loop reads only
+message and callback updates, persists the last accepted update identifier and
+never launches an AI agent. Its bounded commands list unread notifications,
+open checklist tasks, pause or resume Telegram delivery and mark the local
+inbox read. The explicit `/gorevler` pull from the exact paired owner includes
+each task's bounded title but not its notes, plus a numbered button that
+completes that exact canonical task and refreshes the same summary. Generic
+notification buttons can mark one exact event read, snoozed or resolved. A
+checklist reminder instead completes the exact canonical task or moves its due
+instant by one hour before clearing the old keyboard. Outbound text uses no
+provider parse mode; unsolicited sensitive content is replaced with a generic summary,
+deduplicated events edit their prior Telegram message when possible, and a
+delivery is recorded only after Telegram returns the expected private chat and
+message identities. Provider errors collapse to bounded codes. A clean install
+has no bot, token, polling loop or Telegram request, and disconnect removes only
+the local encrypted adapter state; it neither alters Sofia nor deletes the bot.
+
+Host-local applications and AI agents use a separate random bearer token stored
+with owner-only permissions. That token can only create/update normalized
+events, resolve a condition, or create/list/update/complete/reopen/snooze
+checklist tasks through bounded endpoints; it is never returned by the web API.
+The bundled `foxos-notifications` and `foxos-checklist` skills use this path and
+are copied into an installed Codex home only when absent. Agents never select
+Telegram, email or push directly, so future webhook, SMTP, ntfy, Gotify or chat
+adapters remain replaceable delivery boundaries rather than notification or
+task authority.
+
+## First-run server review
+
+An unconfigured FoxOS opens a four-step setup assistant instead of the desktop:
+welcome and interface language, owner account, language and region preferences,
+then server review. Owner creation requires a name, a confirmed password of at
+least 15 characters and the existing server-side password policy. The selected
+language, region, display time zone, clock, week-start and measurement choices
+are validated against bounded allowlists and stored as a schema-versioned part
+of the owner-only authentication record. Browser storage is only a local cache.
+The display time zone changes FoxOS formatting; setup never silently changes the
+host operating system's time zone.
+
+Creating the owner stores a versioned `pending` initial-setup marker in the same
+record. The authenticated desktop remains behind that gate while FoxOS performs
+a fresh Resource Registry scan and compiles the current whole-server migration
+plan. Observation and planning are read-only: they do not stop applications,
+switch routes, configure or mutate an optional provider, or grant migration
+execution authority. A previously configured migration reader may contribute
+only its bounded GET-only observation.
+
+The owner may select eligible resources and use the existing migration-run
+coordinator, finish the review without selecting a resource, or explicitly
+defer migration and continue to the desktop. Both `reviewed` and `deferred`
+outcomes are persisted atomically on the server; browser storage is never the
+authority. Deferred work remains available under **Ayarlar → Sunucu Geçişi**
+with the same preflight, one-use approval, health and rollback gates.
+
+Authentication records created before this gate have no `pending` marker and
+are treated as already complete. Records created before server-owned locale
+preferences also keep their current browser preference until the owner saves a
+choice in Settings. An upgrade therefore never interrupts an existing owner's
+session with a first-install workflow or silently replaces their locale.
 
 ## Migration safety gates
 
@@ -217,6 +443,178 @@ same drift-checked DNS receipt. Disconnecting the adapter deletes only the local
 encrypted token/configuration and preserves published DNS records. Clean install,
 startup and ordinary host management still require no Cloudflare account, API
 token, network call or paid service.
+
+### Implemented boundary: Optional Codex Full Server connection
+
+Codex is an optional server-administration adapter configured only through the
+authenticated **Bağlantılar** page. A clean FoxOS installation neither installs
+Codex nor starts a login flow. After a separate installation confirmation,
+FoxOS uses OpenAI's official non-interactive installer to place the host CLI and
+its private state under `/var/lib/foxos/codex` by default, then bootstraps the
+CLI's managed host app-server daemon. Each server owner then authenticates their
+own eligible ChatGPT account through Codex's device-code flow; FoxOS never
+receives an API key and never includes Codex credentials in an API response,
+operation record or log.
+
+The saved access profile begins as `read-only`. The embedded Codex application
+remains sealed until the owner separately confirms **Full Server**. The
+app-server is a managed process in the real host, parented outside the FoxOS
+agent container and listening only on its `600 root:root` Unix control socket.
+FoxOS opens a disposable WebSocket client directly over that Unix socket. Full
+Server threads use working directory `/`, sandbox policy `danger-full-access` and default
+approval policy `untrusted`. An authenticated owner can explicitly select
+**Tam Erişim — sorma**, which persists approval policy `never` in the owner-only
+Codex connection record. Browser storage is not authoritative; the normalized
+server value is returned through authenticated status and used for new, resumed
+and subsequent turns across devices. A former browser-local `never` selection
+is migrated once and removed locally. This removes command and file-change
+prompts but does not widen the already root-equivalent sandbox. The daemon and
+its command children run in the real host root and
+namespaces, not the FoxOS container filesystem, so this profile is intentionally
+root-equivalent and can change files, Docker, systemd, packages and networking.
+Command and file-change approval requests are represented by short-lived opaque
+FoxOS IDs; only fixed Codex decisions can be returned.
+
+All connection, thread, turn-steering, event, interrupt and approval endpoints
+remain behind the existing FoxOS owner session. That owner session is durable control-plane
+state: FoxOS persists only a SHA-256 token digest in owner-only server data,
+renews the 12-hour expiry during active use and removes it on logout. Agent
+recreation therefore cannot invalidate the browser while its Codex turn keeps
+running. New threads are explicitly non-ephemeral and
+Codex remains the durable conversation store. FoxOS history requests explicitly
+select `appServer` source threads at host root `/`, return bounded redacted thread
+metadata, and resume a selected thread through `thread/resume`. Runtime events
+are kept in a count-based in-memory ring without a byte-size omission rule;
+Codex authentication and session state stay in its owner-only host directory.
+Recreating or stopping the FoxOS agent disconnects
+only the socket client: the host daemon and an already-running turn continue.
+The next agent reconnects to the same control socket and reloads durable thread
+history.
+
+The Codex window does not treat one active turn as an application-wide lock.
+An owner can create or resume another thread while earlier work continues in
+the host daemon, and each conversation exposes its own active state. Additional
+input submitted on the selected in-flight turn is bound to both the thread and
+the expected turn ID and forwarded through `turn/steer`; it cannot be mistaken
+for a new turn or redirected to a different conversation. The UI keeps the stop
+control separate from message submission so steering does not interrupt work.
+Agent messages are rendered as escaped CommonMark plus GFM, with safe URL
+transforms, explicit external-link handling and FoxOS-local file-link opening;
+raw model HTML is never executed.
+
+Thread resume is also bounded independently from rollout size. FoxOS opts into
+the App Server's negotiated experimental pagination capability, rejoins a
+thread with `excludeTurns`, then loads at most 200 recent turns in 50-turn
+pages using summary item view. A very large command or Drive transfer can
+therefore grow Codex's durable rollout without forcing one oversized WebSocket
+frame through the FoxOS client. The daemon WebSocket has no FoxOS-imposed
+payload-size ceiling, and individual live events are forwarded without a
+FoxOS byte-size replacement warning. Pagination remains an efficiency choice,
+not a response-size rejection boundary.
+
+An owner may also configure an optional private Google Drive memory folder in
+**Bağlantılar**. FoxOS stores the canonical folder reference only in its ignored
+server data under `connections/codex/config.json` with mode `600`; status APIs
+expose only configured/enabled state and a display label, never the folder
+location. When enabled, FoxOS adds private developer instructions to both
+`thread/start` and `thread/resume`. If the owner-only hybrid snapshot exists
+under the Codex host state root, Codex reads its local `AGENTS.md` and compact
+`index.md`, then uses local `tools/memory-search` before opening additional
+pages. The helper combines SQLite FTS5/BM25, local multilingual embeddings,
+reciprocal-rank fusion and identifier-aware path matching.
+
+Google Drive remains the writable source of truth and the targeted fallback
+for fresh, newly created or missing material. The local Markdown snapshot,
+model cache and disposable SQLite index remain outside Git and are never
+returned by connection-status APIs. A clean installation has no memory folder
+or Drive dependency, and disabling the feature preserves the private local
+reference without injecting it into later threads.
+
+Changing the profile back to read-only stops the current app-server runtime and
+blocks turns on earlier Full Server threads. Disconnect first revokes Full Server,
+logs the account out through Codex and keeps the CLI installed for a later user.
+The app-server has no TCP listener; its Unix socket and daemon state are
+owner-only, and Codex remains removable without changing FoxOS startup, host
+management or application authority.
+
+### Implemented boundary: Optional Gemini CLI connection
+
+Gemini CLI is a third optional adapter configured only through the authenticated
+**Bağlantılar** page. FoxOS neither installs it during clean setup nor assumes a
+Google account, API key, quota or paid service. Exact installation confirmation
+resolves Google's current stable `@google/gemini-cli` package version, pins that
+version for the operation and installs it under the dedicated owner-only host
+state root (`/var/lib/foxos/gemini` by default). It does not modify the system
+npm prefix or create an account.
+
+The first authentication slice supports the documented headless-server Gemini
+API-key path. FoxOS validates the submitted key, passes it only in the bounded
+verification process environment and runs the installed CLI from its isolated
+home with extensions disabled, JSON output and read-only `plan` approval mode.
+Successful verification stores the key only as an AES-256-GCM envelope under
+the FoxOS data root. The owner-only local config stores only a server-keyed
+fingerprint beside timestamps; status, operation, log and API responses contain
+neither the key nor that fingerprint. Gemini's own `.env` and settings files
+never receive the secret.
+
+Connection status is local and does not spend quota. Explicit configure and
+verify actions make one small model request to prove the real CLI/auth path.
+Disconnect deletes only the encrypted key and local connection record while
+leaving the optional CLI installed. Because Google ended Gemini CLI service for
+individual Google AI Pro, Ultra and free Code Assist accounts on 2026-06-18,
+FoxOS does not expose a non-working consumer OAuth flow; Vertex AI and enterprise
+authentication remain future adapters.
+
+This connection is credential plumbing only. It starts no daemon, performs no
+background synchronization and grants no filesystem, shell, Docker or host
+execution capability. A future Gemini execution surface requires a separate,
+explicitly designed approval and isolation contract.
+
+### Implemented boundary: Optional Antigravity CLI Full Server profile
+
+Antigravity CLI is a fourth optional adapter in the authenticated
+**Bağlantılar** page and is deliberately separate from the legacy Gemini CLI
+API-key connector. Clean setup does not install `agy`, contact Google, create a
+login, require a Google subscription or alter FoxOS startup. An exact owner
+confirmation downloads Google's official Linux installer over TLS and places
+the native CLI plus its private state under `/var/lib/foxos/antigravity` by
+default. Later update actions use the installed CLI's own updater.
+
+Headless login runs Antigravity's documented remote Google OAuth flow inside a
+host pseudo-terminal. FoxOS launches the real interactive `agy` TUI, selects
+its Google OAuth method and gives it a wide terminal so the long authorization
+URL cannot be line-wrapped. Non-interactive `agy --print /usage` is deliberately
+not used to initiate authentication: on a normally installed host it exits with
+`authentication required` and no URL. FoxOS accepts only an HTTPS PKCE
+authorization URL at the exact
+`accounts.google.com/o/oauth2/auth` endpoint and returns it to the authenticated
+owner for the active, short-lived login session. The browser-returned code goes
+directly to that waiting CLI process. Neither value enters FoxOS connection
+state, logs or normal status responses. After the login process finishes,
+FoxOS starts a new `agy --print /usage` process and marks the account connected
+only if the independently persisted CLI session works. `/usage` is also the
+explicit reconnect check; it reads account usage without a model request.
+Ordinary connection status remains entirely local and spends no quota.
+
+The saved access profile begins as `read-only`, represented by Antigravity
+`agentMode: plan`, strict tool permission, artifact review requests, workspace
+confinement and terminal sandboxing. The owner may separately confirm
+**Full Server**. FoxOS then atomically writes `agentMode: accept-edits`,
+`toolPermission: always-proceed`, `artifactReviewPolicy: always-proceed`,
+workspace-external access and terminal sandbox off. Explicit wildcard allows
+cover files, URLs, commands, unsandboxed execution and MCP, while both ask and
+deny lists are empty. This profile intentionally does not request per-command,
+per-file or artifact approval and is therefore root-equivalent when `agy` is
+run from host root `/`.
+
+Only the profile and timestamps live in owner-only FoxOS connection state.
+Google credentials remain in Antigravity-owned private state and are never
+copied or returned. Downgrading always rewrites the protected profile even if
+the CLI or account check is unavailable. Disconnect downgrades first, invokes
+the CLI logout command, proves the account is no longer usable in a fresh
+process and preserves the installed binary. This slice prepares the native CLI
+and its persistent permissions; it does not add an Antigravity chat window,
+daemon or autonomous background loop to FoxOS.
 
 ### Implemented boundary: Disposable adoption, route and recovery cutover
 

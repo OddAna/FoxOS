@@ -1,7 +1,9 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { Play, Pause, SkipForward, SkipBack, Music } from 'lucide-react';
+import { useI18n } from '../contexts/LocaleContext';
 
 const MediaPlayerApp = ({ filePath, ext }) => {
+  const { t } = useI18n();
   const mediaPath = filePath || '';
   const mediaUrl = `/api/static${mediaPath.split('/').map(encodeURIComponent).join('/')}`;
   const fileName = mediaPath.split('/').pop().replace(ext || '', '');
@@ -85,7 +87,7 @@ const MediaPlayerApp = ({ filePath, ext }) => {
             {fileName}
           </div>
           <div style={{ fontSize: '13px', color: 'rgba(255,255,255,0.6)', marginTop: '4px' }}>
-            Bilinmeyen Sanatçı
+            {t('mediaPlayer.unknownArtist')}
           </div>
         </div>
 
@@ -107,9 +109,10 @@ const MediaPlayerApp = ({ filePath, ext }) => {
 
         {/* Controls */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
-          <SkipBack size={24} color="#fff" style={{ cursor: 'pointer', opacity: 0.8 }} />
+          <SkipBack size={24} color="#fff" style={{ cursor: 'pointer', opacity: 0.8 }} aria-label={t('mediaPlayer.previous')} />
           <div 
             onClick={togglePlay}
+            title={t(isPlaying ? 'mediaPlayer.pause' : 'mediaPlayer.play')}
             style={{ 
               width: '56px', height: '56px', borderRadius: '50%', background: '#fff', 
               display: 'flex', justifyContent: 'center', alignItems: 'center', cursor: 'pointer',
@@ -118,7 +121,7 @@ const MediaPlayerApp = ({ filePath, ext }) => {
           >
             {isPlaying ? <Pause size={24} color="#000" fill="#000" /> : <Play size={24} color="#000" fill="#000" style={{ marginLeft: '4px' }} />}
           </div>
-          <SkipForward size={24} color="#fff" style={{ cursor: 'pointer', opacity: 0.8 }} />
+          <SkipForward size={24} color="#fff" style={{ cursor: 'pointer', opacity: 0.8 }} aria-label={t('mediaPlayer.next')} />
         </div>
 
         <audio 

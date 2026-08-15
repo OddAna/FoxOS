@@ -10,7 +10,8 @@ write to the host filesystem, and control the Docker daemon.
 - Reach FoxOS through an SSH tunnel, a private VPN, or an authenticated HTTPS
   reverse proxy.
 - Do not publish port `8080` directly to the public internet.
-- Use a unique password of at least 10 characters.
+- Use a unique password of at least 15 characters, add a passkey and store the
+  one-time recovery codes away from the server.
 - Keep the server, Docker Engine, and FoxOS image up to date.
 - Back up files before using terminal or file-management write actions.
 - Base `install.sh` must never create a provider account, bucket, subscription,
@@ -18,6 +19,21 @@ write to the host filesystem, and control the Docker daemon.
   separate explicit operator action.
 
 When an HTTPS reverse proxy is in place, set `FOXOS_SECURE_COOKIE=true`.
+FoxOS stores only SHA-256 digests of active owner-session bearer tokens in
+owner-only `.foxos-data/sessions.json`; raw cookie values are never persisted.
+Sessions expire after 12 hours, renew only during active use, survive agent
+recreation, and are removed from the persistent store on logout.
+
+The Host Terminal is an authenticated root PTY, not a command-output preview.
+Its WebSocket upgrade requires both a current FoxOS owner session and an exact
+same-origin browser request. Terminal input and output remain process-local and
+are never written to FoxOS logs or persistent state. Each connection receives a
+minimal host-shell environment instead of inheriting agent secrets; input size,
+output backpressure, concurrent sessions and terminal dimensions are bounded.
+Logging out, session expiry, closing the Terminal window or stopping the agent
+closes the socket and sends a hangup to its PTY. Minimizing the window keeps the
+same owner session and PTY attached. Use HTTPS so the browser uses `wss://`, and
+treat everything typed or displayed there as root-equivalent private data.
 
 FoxOS also ships an optional, independently managed Caddy gateway. It keeps the
 direct agent port on loopback, stores certificate state under
@@ -33,6 +49,43 @@ never returns it through an API response. Never place the token in Git, `.env`,
 the Caddyfile, command output or issue reports. Disconnecting removes the local
 token but deliberately preserves published records so running applications do
 not lose DNS unexpectedly.
+
+Codex is a separate optional connection and must be treated as a root shell.
+FoxOS installs it only after an explicit warning, leaves the initial access
+profile read-only and requires another confirmation before **Full Server** can
+start. In Full Server mode the Codex app-server runs in the real host root with
+`danger-full-access`; `untrusted` asks for approval on untrusted command and
+file changes, but it is not a sandbox. It remains the default. The authenticated
+owner may explicitly choose **Tam Erişim — sorma**, which applies Codex's `never`
+approval policy to new, resumed and subsequent turns. The normalized preference
+is stored in the owner-only server connection record rather than browser
+storage, so another authenticated device cannot silently fall back to a
+different policy. In that mode Codex can run commands and change files without
+another FoxOS prompt. Read the displayed command, working directory and reason
+in the default mode, and select the no-prompt mode only when that delegation is
+intentional.
+
+Codex device authentication and session data stay in an owner-only host path
+under `/var/lib/foxos/codex` by default. FoxOS does not accept an OpenAI API key,
+does not return Codex credentials, keeps runtime events only in bounded memory
+and communicates directly with Codex's owner-only Unix WebSocket control socket.
+The managed app-server daemon is a host process, not a child of
+the FoxOS container, and has no public TCP listener. Recreating the agent kills
+only the local socket client; the daemon and active server-side turn continue.
+Conversation history itself is persisted by Codex in that owner-only directory; FoxOS lists
+only root-working-directory app-server threads and bounds the history material
+returned to the UI. All related APIs still require the FoxOS owner session.
+An optional Drive memory folder reference is stored separately in the ignored
+FoxOS server-data tree with mode `600`. The API returns only whether memory is
+configured/enabled and its display label, never the folder location. When
+enabled, the private location is passed only to new and resumed Codex threads as
+developer instructions to load `AGENTS.md` followed by `index.md`; it must not
+appear in Git, normal logs or ordinary assistant responses. This reference is
+not a Google credential and does not make Drive a clean-install dependency.
+Returning the profile to read-only explicitly stops the host daemon and
+invalidates active Full Server work; disconnecting also logs the account out.
+Protect both the FoxOS account and the host Codex state directory as
+root-equivalent administration material.
 
 ## App Store deployments
 

@@ -9,6 +9,7 @@ import {
   ShieldCheck
 } from 'lucide-react';
 import { apiFetch } from '../api';
+import { useI18n } from '../contexts/LocaleContext';
 
 const RESOURCE_CARD_STYLE = {
   background: 'rgba(255,255,255,0.055)',
@@ -69,118 +70,95 @@ const SELECT_STYLE = {
 };
 
 const REVIEW_STATES = {
-  ready: 'Geçiş hazırlığına uygun',
-  blocked: 'Eksik bilgi',
-  unsupported: 'Geçiş desteği hazırlanıyor',
-  managed: 'Sunucu yönetiminde',
-  grouped: 'Bağlı uygulamayla birlikte geçirilecek',
-  retirement: 'Sağlayıcı kaldırılırken sona bırakılacak',
-  protected: 'Korunan sistem kaynağı'
+  ready: 'migration.reviewStates.ready',
+  blocked: 'migration.reviewStates.blocked',
+  unsupported: 'migration.reviewStates.unsupported',
+  managed: 'migration.reviewStates.managed',
+  grouped: 'migration.reviewStates.grouped',
+  retirement: 'migration.reviewStates.retirement',
+  protected: 'migration.reviewStates.protected'
 };
 
 const STRATEGY_LABELS = {
-  'blue-green-atomic-route': 'Kesintisiz blue/green geçiş',
-  'shadow-refresh-bounded-quiesce': 'Durumlu gölge kopya ve kontrollü geçiş',
-  'database-aware-replication-handoff': 'Veritabanına özel aktarım',
-  'drain-and-replace': 'İşi boşalt ve değiştir',
-  'provider-proxy-retirement-last': 'Sağlayıcı proxy’sini en son kaldır',
-  'provider-definition-recovery': 'Deaktif tanımı kurtar ve yeniden oluştur',
-  'host-network-service-adoption': 'Host ağ servisini güvenli biçimde devral',
-  'host-service-adoption': 'Host servisini güvenli biçimde devral',
-  'already-server-owned': 'Doğrudan sunucu yönetiminde',
-  'migrate-with-parent': 'Ana uygulamayla tek grup olarak geçir',
-  'provider-control-plane-retirement-last': 'Sağlayıcı kontrol düzlemini en son kaldır',
-  'already-foxos-managed': 'Sunucu yönetiminde',
-  'protected-skip': 'Korunan kaynak — atla',
-  'dedicated-lifecycle-required': 'Kaynağa özel yaşam döngüsü gerekli',
-  'manual-review-required': 'Elle inceleme gerekli'
+  'blue-green-atomic-route': 'migration.strategies.blue-green-atomic-route',
+  'shadow-refresh-bounded-quiesce': 'migration.strategies.shadow-refresh-bounded-quiesce',
+  'database-aware-replication-handoff': 'migration.strategies.database-aware-replication-handoff',
+  'drain-and-replace': 'migration.strategies.drain-and-replace',
+  'provider-proxy-retirement-last': 'migration.strategies.provider-proxy-retirement-last',
+  'provider-definition-recovery': 'migration.strategies.provider-definition-recovery',
+  'host-network-service-adoption': 'migration.strategies.host-network-service-adoption',
+  'host-service-adoption': 'migration.strategies.host-service-adoption',
+  'already-server-owned': 'migration.strategies.already-server-owned',
+  'migrate-with-parent': 'migration.strategies.migrate-with-parent',
+  'provider-control-plane-retirement-last': 'migration.strategies.provider-control-plane-retirement-last',
+  'already-foxos-managed': 'migration.strategies.already-foxos-managed',
+  'protected-skip': 'migration.strategies.protected-skip',
+  'dedicated-lifecycle-required': 'migration.strategies.dedicated-lifecycle-required',
+  'manual-review-required': 'migration.strategies.manual-review-required'
 };
 
 const CLASS_LABELS = {
-  application: 'Uygulama',
-  'internal-service': 'İç servis',
-  database: 'Veritabanı',
-  worker: 'Worker',
-  agent: 'Ajan',
-  proxy: 'Proxy',
-  core: 'Sistem',
-  'network-service': 'Ağ servisi',
-  stateless: 'Durumsuz',
-  stateful: 'Durumlu',
-  'host-configured': 'Host yapılandırmalı',
-  unknown: 'Belirsiz',
-  'provider-owned': 'Harici sağlayıcı yönetiminde',
-  'foxos-owned': 'Sunucu yönetiminde',
-  'server-owned': 'Doğrudan sunucu yönetiminde'
+  application: 'migration.classes.application',
+  'internal-service': 'migration.classes.internal-service',
+  database: 'migration.classes.database',
+  worker: 'migration.classes.worker',
+  agent: 'migration.classes.agent',
+  proxy: 'migration.classes.proxy',
+  core: 'migration.classes.core',
+  'network-service': 'migration.classes.network-service',
+  stateless: 'migration.classes.stateless',
+  stateful: 'migration.classes.stateful',
+  'host-configured': 'migration.classes.host-configured',
+  unknown: 'migration.classes.unknown',
+  'provider-owned': 'migration.classes.provider-owned',
+  'foxos-owned': 'migration.classes.foxos-owned',
+  'server-owned': 'migration.classes.server-owned'
 };
 
 const AVAILABILITY_LABELS = {
-  'zero-downtime-required': 'Kesintisiz geçiş gerekli',
-  'bounded-quiesce-budget-required': 'Onaylı kısa duraklama bütçesi gerekli',
-  'stateful-presync-required': 'Çalışırken ön eşitleme gerekli',
-  'stateful-storage-capacity-insufficient': 'Yeterli boş depolama yok',
-  'stateful-storage-layout-unsupported': 'Depolama düzeni desteklenmiyor',
-  'stateful-capacity-inspection-failed': 'Depolama doğrulaması tamamlanamadı',
-  'bounded-quiesce-ready': 'Kontrollü kısa duraklama ve otomatik geri alma',
-  'database-aware-handoff-required': 'Veritabanı tutarlılığı korunmalı',
-  'already-managed': 'Mevcut çalışma korunacak',
-  'not-applicable': 'Uygulanmaz',
-  'unknown-blocked': 'Belirsiz — engelli',
-  'host-service-continuity-required': 'Host servisi kesintisiz korunmalı',
-  'included-with-parent': 'Ana uygulamanın geçiş sözleşmesine dahil',
-  'provider-retirement-pending': 'Tüm uygulamalar bağımsız olduktan sonra kaldırılacak',
-  'in-place-runtime-transfer-ready': 'Çalışan örnek durdurulmadan sunucu yönetimine devredilecek'
+  'zero-downtime-required': 'migration.availability.zero-downtime-required',
+  'bounded-quiesce-budget-required': 'migration.availability.bounded-quiesce-budget-required',
+  'stateful-presync-required': 'migration.availability.stateful-presync-required',
+  'stateful-storage-capacity-insufficient': 'migration.availability.stateful-storage-capacity-insufficient',
+  'stateful-storage-layout-unsupported': 'migration.availability.stateful-storage-layout-unsupported',
+  'stateful-capacity-inspection-failed': 'migration.availability.stateful-capacity-inspection-failed',
+  'bounded-quiesce-ready': 'migration.availability.bounded-quiesce-ready',
+  'database-aware-handoff-required': 'migration.availability.database-aware-handoff-required',
+  'already-managed': 'migration.availability.already-managed',
+  'not-applicable': 'migration.availability.not-applicable',
+  'unknown-blocked': 'migration.availability.unknown-blocked',
+  'host-service-continuity-required': 'migration.availability.host-service-continuity-required',
+  'included-with-parent': 'migration.availability.included-with-parent',
+  'provider-retirement-pending': 'migration.availability.provider-retirement-pending',
+  'in-place-runtime-transfer-ready': 'migration.availability.in-place-runtime-transfer-ready'
 };
 
 const ACTIVE_RUN_STATUSES = new Set(['queued', 'preparing', 'executing']);
 
 const RUN_STATUS_LABELS = {
-  queued: 'Sıraya alındı',
-  preparing: 'Ön kontroller yapılıyor',
-  executing: 'Geçiş yürütülüyor',
-  completed: 'Tamamlandı',
-  blocked: 'Güvenlik kapısında durdu',
-  failed: 'Başarısız — sıra durduruldu',
-  'interrupted-before-execution': 'Çalıştırılmadan kesildi',
-  'interrupted-recovery-required': 'Kurtarma incelemesi gerekli'
+  queued: 'migration.runStatus.queued',
+  preparing: 'migration.runStatus.preparing',
+  executing: 'migration.runStatus.executing',
+  completed: 'migration.runStatus.completed',
+  blocked: 'migration.runStatus.blocked',
+  failed: 'migration.runStatus.failed',
+  'interrupted-before-execution': 'migration.runStatus.interrupted-before-execution',
+  'interrupted-recovery-required': 'migration.runStatus.interrupted-recovery-required'
 };
 
 const CERTIFICATE_ADAPTER_LABELS = {
-  'acme-http-01': 'ACME HTTP-01',
-  'acme-dns-01': 'ACME DNS-01',
-  'imported-certificate': 'Sunucudaki özel sertifika'
+  'acme-http-01': 'migration.certificates.acme-http-01',
+  'acme-dns-01': 'migration.certificates.acme-dns-01',
+  'imported-certificate': 'migration.certificates.imported-certificate'
 };
 
-const BLOCKER_LABELS = {
-  'external-provider-authority': 'Yönetim otoritesi hâlâ harici sağlayıcıda.',
-  'source-runtime-binding-missing': 'Çalışan imajı yeniden üretecek doğrulanmış kaynak bağı eksik.',
-  'immutable-source-evidence-missing': 'Değişmez kaynak sürümü kanıtı eksik.',
-  'environment-evidence-missing': 'Ortam değişkenleri için güvenli kanıt eksik.',
-  'immutable-image-missing': 'Bu imajı değişmez biçimde yeniden kuracak repository digest kanıtı eksik.',
-  'foxos-health-proof-missing': 'Sunucu tarafından üretilmiş güncel sağlık kanıtı eksik.',
-  'foxos-route-missing': 'Gözlenen sağlayıcı rotasının sunucu yönetiminde etkin bir karşılığı yok.',
-  'runtime-resource-limits-missing': 'CPU, bellek ve işlem sınırları açıkça belirlenmemiş.',
-  'update-rollback-proof-missing': 'Sunucuya ait başarılı güncelleme ve birebir geri alma kanıtı eksik.',
-  'recovery-target-unavailable': 'Sunucu dışı kurtarma hedefi hazır değil.',
-  'migration-apply-transaction-not-implemented': 'Gerçek geçiş işlemi bu sürümde henüz açılmadı.',
-  'general-domain-route-cutover-not-implemented': 'Genel alan adı ve TLS yönlendirme geçişi henüz açılmadı.',
-  'zero-downtime-blue-green-apply-not-implemented': 'Kesintisiz blue/green çalıştırma henüz açılmadı.',
-  'stateful-cutover-pause-budget-unset': 'Durumlu geçiş için izin verilen azami duraklama süresi belirlenmedi.',
-  'database-aware-handoff-not-implemented': 'Veritabanına özel çoğaltma ve ana sunucu devri henüz açılmadı.',
-  'worker-drain-policy-not-implemented': 'Kuyruk boşaltma ve devam eden iş kurtarma politikası eksik.',
-  'provider-proxy-retirement-gate-open': 'Bağımlı tüm rotalar doğrulanmadan sağlayıcı proxy’si kaldırılamaz.',
-  'resource-class-migration-policy-missing': 'Bu kaynak sınıfı için incelenmiş geçiş politikası yok.',
-  'provider-definition-runtime-evidence-missing': 'Deaktif tanımın çalışan runtime kanıtı henüz yok.',
-  'provider-definition-runtime-recovery-required': 'Deaktif tanım sunucuya ait bir çalışma manifestine dönüştürülmeli.',
-  'provider-resource-group-transaction-required': 'Uygulama ve aynı kurulum grubundaki veritabanı/runner tek doğrulanmış işlemde geçirilmelidir.',
-  'host-service-manifest-missing': 'Host servisi için sunucuya ait manifest ve geri alma sürümü eksik.',
-  'host-network-service-adoption-not-implemented': 'Host ağ servisi için anahtar koruması ve birebir geri alma işlemi hazırlanıyor.',
-  'host-service-adoption-not-implemented': 'systemd servisi için yapılandırma yakalama ve geri alma işlemi hazırlanıyor.',
-  'stateful-presync-required': 'Veri, kısa duraklamalı doğrudan kopyalama için fazla büyük. Kaynak çalışırken ön eşitleme yapılmadan geçiş başlatılamaz.',
-  'stateful-storage-capacity-insufficient': 'Şifreli anlık görüntü ve yeni çalışma kopyası için sunucuda yeterli boş alan yok.',
-  'stateful-storage-layout-unsupported': 'Veri birimleri bu otomatik geçiş yönteminin güvenle doğrulayamadığı depolama düzeninde.',
-  'stateful-capacity-inspection-failed': 'Veri boyutu ve kullanılabilir depolama güvenle doğrulanamadığı için geçiş başlatılmadı.',
-  'legacy-bridge-conflict': 'Mevcut sunucu yönlendirme köprüsü doğrulanamadığı için kaynak değiştirilmeden işlem durduruldu.'
+const translatedMapValue = (map, key, t) => map[key] ? t(map[key]) : key;
+
+const blockerLabel = (blocker, t) => {
+  if (!blocker) return '';
+  const key = `migration.blockers.${blocker.code}`;
+  const translated = t(key);
+  return translated === key ? blocker.message || blocker.code : translated;
 };
 
 function runBlocker(run) {
@@ -188,9 +166,9 @@ function runBlocker(run) {
     run?.resources?.flatMap((resource) => resource.blockers || [])[0] || null;
 }
 
-function runBlockerText(run) {
+function runBlockerText(run, t) {
   const blocker = runBlocker(run);
-  return blocker && (BLOCKER_LABELS[blocker.code] || blocker.message || blocker.code);
+  return blocker && blockerLabel(blocker, t);
 }
 
 function reviewState(resource) {
@@ -218,18 +196,6 @@ function allBlockers(resource) {
     (entries || []).map((blocker) => ({ ...blocker, group }))
   ));
   return Array.from(new Map(blockers.map((blocker) => [blocker.code, blocker])).values());
-}
-
-function formatDate(value) {
-  if (!value) return '—';
-  try {
-    return new Intl.DateTimeFormat('tr-TR', {
-      dateStyle: 'short',
-      timeStyle: 'medium'
-    }).format(new Date(value));
-  } catch {
-    return value;
-  }
 }
 
 function shortId(value) {
@@ -282,8 +248,10 @@ function DetailSection({ title, description, children, last = false }) {
   );
 }
 
-const MigrationSettings = () => {
+const MigrationSettings = ({ autoScan = false, onScanComplete = null }) => {
+  const { formatDate, formatNumber, locale, t } = useI18n();
   const rootRef = useRef(null);
+  const autoScanStartedRef = useRef(false);
   const [snapshot, setSnapshot] = useState(null);
   const [plan, setPlan] = useState(null);
   const [selectionStatus, setSelectionStatus] = useState(null);
@@ -368,20 +336,20 @@ const MigrationSettings = () => {
             if (!active) return;
             setMessage({
               type: 'success',
-              text: `${payload.run.summary.completed} kaynak doğrulanmış olarak sunucu yönetimine geçirildi.`
+              text: t('migration.runCompleted', { count: formatNumber(payload.run.summary.completed) })
             });
           } else if (payload.run.status === 'blocked') {
             setMessage({
               type: 'error',
-              text: `Geçiş güvenlik kapısında durdu. ${payload.run.summary.blocked} kaynakta tamamlanması gereken önkoşul var; hiçbir kaynak çalıştırılmadı.`
+              text: t('migration.runBlocked', { count: formatNumber(payload.run.summary.blocked) })
             });
           } else {
-            const detail = runBlockerText(payload.run);
+            const detail = runBlockerText(payload.run, t);
             setMessage({
               type: 'error',
               text: detail
-                ? `Geçiş sırası durduruldu. ${detail}`
-                : 'Geçiş sırası durduruldu. Ayrıntılı işlem kaydı sunucuda korundu.'
+                ? t('migration.runStoppedDetail', { detail })
+                : t('migration.runStopped')
             });
           }
         }
@@ -395,7 +363,7 @@ const MigrationSettings = () => {
       active = false;
       window.clearInterval(timer);
     };
-  }, [latestRunId, latestRunStatus, load]);
+  }, [formatNumber, latestRunId, latestRunStatus, load, t]);
 
   useEffect(() => {
     const scrollContainer = rootRef.current?.closest('[data-settings-content]');
@@ -460,7 +428,7 @@ const MigrationSettings = () => {
     return result;
   }, { ready: 0, blocked: 0, unsupported: 0, managed: 0, grouped: 0, retirement: 0, protected: 0 }), [resources]);
 
-  const scanServer = async () => {
+  const scanServer = useCallback(async () => {
     setScanning(true);
     setMessage(null);
     try {
@@ -484,14 +452,26 @@ const MigrationSettings = () => {
       );
       setMessage({
         type: 'success',
-        text: `${planPayload.plan.summary.resources} kaynak salt okunur olarak tarandı. Hiçbir çalışma durumu değiştirilmedi.`
+        text: t('migration.scanSuccess', { count: formatNumber(planPayload.plan.summary.resources) })
+      });
+      onScanComplete?.({
+        success: true,
+        snapshot: scanPayload.snapshot,
+        plan: planPayload.plan
       });
     } catch (error) {
       setMessage({ type: 'error', text: error.message });
+      onScanComplete?.({ success: false, error: error.message });
     } finally {
       setScanning(false);
     }
-  };
+  }, [applyLoadedState, formatNumber, onScanComplete, t]);
+
+  useEffect(() => {
+    if (!autoScan || loading || autoScanStartedRef.current) return;
+    autoScanStartedRef.current = true;
+    scanServer();
+  }, [autoScan, loading, scanServer]);
 
   const toggleResource = (resourceId) => {
     setSelectedIds((current) => current.includes(resourceId)
@@ -526,7 +506,7 @@ const MigrationSettings = () => {
       setSelectionStatus(await selectionResponse.json());
       setMessage({
         type: 'success',
-        text: `${selectedIds.length} kaynak için geçiş işlemi başlatıldı. Değişmez ön kontroller tamamlanmadan hiçbir trafik değiştirilmeyecek.`
+        text: t('migration.migrationStarted', { count: formatNumber(selectedIds.length) })
       });
     } catch (error) {
       setMessage({ type: 'error', text: error.message });
@@ -569,8 +549,8 @@ const MigrationSettings = () => {
       setReviewMessage({
         type: payload.review.reviewComplete ? 'success' : 'error',
         text: payload.review.reviewComplete
-          ? 'İnceleme yapılandırması tamamlandı. Geçiş başlatılmadı; çalıştırma kapısı kapalı.'
-          : `${payload.review.reviewBlockers.length} inceleme gereksinimi eksik. Geçiş başlatılmadı.`
+          ? t('migration.reviewComplete')
+          : t('migration.reviewIncomplete', { count: formatNumber(payload.review.reviewBlockers.length) })
       });
     } catch (error) {
       setReviewMessage({ type: 'error', text: error.message });
@@ -582,7 +562,7 @@ const MigrationSettings = () => {
   if (loading) {
     return (
       <div ref={rootRef} style={{ color: '#888', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-        <Loader2 size={15} className="spin" /> Sunucu envanteri okunuyor…
+        <Loader2 size={15} className="spin" /> {t('migration.loadingInventory')}
       </div>
     );
   }
@@ -609,7 +589,7 @@ const MigrationSettings = () => {
           onClick={() => setDetailResourceId(null)}
           style={{ background: 'transparent', color: '#aaa', border: 'none', padding: '0', marginBottom: '24px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}
         >
-          <ArrowLeft size={16} /> Tarama Sonuçlarına Dön
+          <ArrowLeft size={16} /> {t('migration.backToScan')}
         </button>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '18px', paddingBottom: '24px', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
@@ -622,103 +602,103 @@ const MigrationSettings = () => {
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: isReady ? '#27c93f' : '#8b93a1', fontSize: '13px' }}>
             <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'currentColor' }} />
-            {REVIEW_STATES[state]}
+            {translatedMapValue(REVIEW_STATES, state, t)}
           </div>
         </div>
 
-        <DetailSection title="Kaynak Bilgileri">
+        <DetailSection title={t('migration.detail.resourceInfo')}>
           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 160px) minmax(0, 1fr)', rowGap: '10px', columnGap: '16px', fontSize: '13px', wordBreak: 'break-word' }}>
-            <DetailLine label="Sağlık">{observed.runtime?.health?.status || observed.runtime?.state}</DetailLine>
-            <DetailLine label="Mevcut yönetim">{detailResource.currentProvider || detailResource.observedProvider || 'docker'}</DetailLine>
+            <DetailLine label={t('migration.detail.health')}>{observed.runtime?.health?.status || observed.runtime?.state}</DetailLine>
+            <DetailLine label={t('migration.detail.currentManagement')}>{detailResource.currentProvider || detailResource.observedProvider || 'docker'}</DetailLine>
             {detailResource.management?.sourcePreserved && (
-              <DetailLine label="Korunan eski kaynak">{detailResource.observedProvider || 'docker'} · soğuk geri alma için korunuyor</DetailLine>
+              <DetailLine label={t('migration.detail.preservedSource')}>{t('migration.detail.preservedForRollback', { provider: detailResource.observedProvider || 'docker' })}</DetailLine>
             )}
-            <DetailLine label="Yönetim">{CLASS_LABELS[detailResource.currentAuthorityClass || classification.authorityClass] || detailResource.currentAuthorityClass || classification.authorityClass}</DetailLine>
-            <DetailLine label="Kaynak sınıfı">{CLASS_LABELS[classification.workloadRole] || classification.workloadRole} · {CLASS_LABELS[classification.stateClass] || classification.stateClass}</DetailLine>
-            <DetailLine label="İnceleme stratejisi">{STRATEGY_LABELS[detailResource.strategy] || detailResource.strategy}</DetailLine>
-            <DetailLine label="Hazırlık durumu">
+            <DetailLine label={t('migration.detail.management')}>{translatedMapValue(CLASS_LABELS, detailResource.currentAuthorityClass || classification.authorityClass, t)}</DetailLine>
+            <DetailLine label={t('migration.detail.resourceClass')}>{translatedMapValue(CLASS_LABELS, classification.workloadRole, t)} · {translatedMapValue(CLASS_LABELS, classification.stateClass, t)}</DetailLine>
+            <DetailLine label={t('migration.detail.reviewStrategy')}>{translatedMapValue(STRATEGY_LABELS, detailResource.strategy, t)}</DetailLine>
+            <DetailLine label={t('migration.detail.readiness')}>
               {state === 'managed'
-                ? detailResource.management?.state === 'active' ? 'Geçiş tamamlandı' : 'Sunucu yönetiminde · inceleme gerekli'
-                : detailResource.readiness?.evidenceComplete ? 'Önkoşullar tamam' : 'Eksikler ayrıntılarda çözülecek'}
+                ? detailResource.management?.state === 'active' ? t('migration.detail.migrationComplete') : t('migration.detail.managedReviewRequired')
+                : detailResource.readiness?.evidenceComplete ? t('migration.detail.prerequisitesComplete') : t('migration.detail.missingInDetails')}
             </DetailLine>
-            <DetailLine label="Erişilebilirlik">{AVAILABILITY_LABELS[detailResource.availability?.currentMode] || detailResource.availability?.currentMode}</DetailLine>
-            <DetailLine label="İmaj" mono>{observed.runtime?.image}</DetailLine>
+            <DetailLine label={t('migration.detail.availability')}>{translatedMapValue(AVAILABILITY_LABELS, detailResource.availability?.currentMode, t)}</DetailLine>
+            <DetailLine label={t('migration.detail.image')} mono>{observed.runtime?.image}</DetailLine>
             <DetailLine label="Container" mono>{shortId(observed.runtime?.containerId)}</DetailLine>
-            <DetailLine label="Ortam değişkeni">{detailResource.evidence?.environmentVariableCount ?? '—'}</DetailLine>
-            <DetailLine label="Manifest sürümü" mono>{shortId(detailResource.evidence?.manifestRevisionId)}</DetailLine>
+            <DetailLine label={t('migration.detail.environmentVariables')}>{detailResource.evidence?.environmentVariableCount ?? '—'}</DetailLine>
+            <DetailLine label={t('migration.detail.manifestRevision')} mono>{shortId(detailResource.evidence?.manifestRevisionId)}</DetailLine>
           </div>
         </DetailSection>
 
-        <DetailSection title="Alan Adları ve Rotalar" description="Kaynak üzerinde gözlenen yayın adresleri.">
+        <DetailSection title={t('migration.detail.domainsRoutes')} description={t('migration.detail.domainsDescription')}>
           {routes.length ? routes.map((route, index) => (
             <div key={`${route.domain}-${route.path}-${index}`} style={{ fontSize: '13px', marginTop: index ? '8px' : 0, overflowWrap: 'anywhere' }}>
               {route.tls ? 'https' : 'http'}://{route.domain}{route.path || '/'}
             </div>
-          )) : <div style={{ color: '#888', fontSize: '13px' }}>Yayınlanmış rota bulunamadı.</div>}
+          )) : <div style={{ color: '#888', fontSize: '13px' }}>{t('migration.detail.noRoutes')}</div>}
         </DetailSection>
 
-        <DetailSection title="Depolama" description="Container ile bağlı kalıcı veya geçici depolama yolları.">
+        <DetailSection title={t('migration.detail.storage')} description={t('migration.detail.storageDescription')}>
           {mounts.length ? mounts.map((mount, index) => (
             <div key={`${mount.destination}-${index}`} style={{ fontSize: '13px', marginTop: index ? '10px' : 0, overflowWrap: 'anywhere' }}>
               <div>{mount.name || mount.source || mount.type} → {mount.destination}</div>
-              <div style={{ color: '#888', fontSize: '12px', marginTop: '2px' }}>{mount.readOnly ? 'Salt okunur' : 'Yazılabilir'} · {mount.type}</div>
+              <div style={{ color: '#888', fontSize: '12px', marginTop: '2px' }}>{mount.readOnly ? t('migration.detail.readOnly') : t('migration.detail.writable')} · {mount.type}</div>
             </div>
-          )) : <div style={{ color: '#888', fontSize: '13px' }}>Kalıcı depolama bağı gözlenmedi.</div>}
+          )) : <div style={{ color: '#888', fontSize: '13px' }}>{t('migration.detail.noStorage')}</div>}
         </DetailSection>
 
-        <DetailSection title="İlişkiler ve Doğrulanmış Bağımlılıklar">
+        <DetailSection title={t('migration.detail.relationships')}>
           {dependencies.length ? dependencies.map((dependency, index) => (
             <div key={dependency.relationshipId || index} style={{ fontSize: '13px', marginTop: index ? '10px' : 0 }}>
-              <div>{dependency.type || 'İlişki'} · {dependency.required ? 'gerekli bağımlılık' : 'gözlenen ilişki'}</div>
+              <div>{dependency.type || t('migration.detail.relationship')} · {dependency.required ? t('migration.detail.requiredDependency') : t('migration.detail.observedRelationship')}</div>
               <div style={{ color: '#888', fontSize: '12px', marginTop: '2px', overflowWrap: 'anywhere' }}>
                 {(dependency.resourceIds || []).join(', ')}
               </div>
             </div>
-          )) : <div style={{ color: '#888', fontSize: '13px' }}>Doğrulanmış bir kaynak bağımlılığı bulunamadı.</div>}
+          )) : <div style={{ color: '#888', fontSize: '13px' }}>{t('migration.detail.noDependencies')}</div>}
         </DetailSection>
 
         {isReady && detailResource.executionAdapter === 'runtime-transfer' && (
-          <DetailSection title="Geçiş İncelemesi" description="Mevcut çalışan örnek ve bağlı kaynakları yeniden oluşturulmadan sunucu yönetimine alınır; uygulama durdurulmaz ve veri kopyalanmaz.">
+          <DetailSection title={t('migration.detail.migrationReview')} description={t('migration.detail.transferDescription')}>
             <div style={{ fontSize: '13px', lineHeight: 1.5 }}>
               {detailResource.migrationGroup?.memberResourceIds?.length > 1
-                ? `${detailResource.migrationGroup.memberResourceIds.length} bağlı kaynak tek işlem kaydıyla devralınacak.`
-                : 'Kaynağın mevcut Docker çalışma kimliği korunacak.'}
+                ? t('migration.detail.groupedTransfer', { count: formatNumber(detailResource.migrationGroup.memberResourceIds.length) })
+                : t('migration.detail.preserveRuntime')}
             </div>
           </DetailSection>
         )}
 
         {isReady && detailResource.executionAdapter !== 'runtime-transfer' && (
           <>
-            <DetailSection title="Geçiş İncelemesi" description="Bu ayarlar yalnızca mevcut plan ve manifest için sunucuda saklanır. Kaydetmek çalışma durumunu, rotaları veya sağlayıcıyı değiştirmez.">
+            <DetailSection title={t('migration.detail.migrationReview')} description={t('migration.detail.reviewDescription')}>
               {reviewLoading ? (
                 <div style={{ color: '#888', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <Loader2 size={15} className="spin" /> İnceleme sözleşmesi hazırlanıyor…
+                  <Loader2 size={15} className="spin" /> {t('migration.detail.preparingContract')}
                 </div>
               ) : reviewMessage?.type === 'error' && !reviewPlan ? (
                 <div style={{ color: '#ff8a84', fontSize: '13px' }}>{reviewMessage.text}</div>
               ) : reviewStatus?.stale ? (
-                <div style={{ color: '#ccc', fontSize: '13px' }}>Sunucu envanteri değişti. Bu incelemeyi kaydetmeden önce yeniden tarama yapmalısın.</div>
+                <div style={{ color: '#ccc', fontSize: '13px' }}>{t('migration.detail.inventoryChanged')}</div>
               ) : contractBlockers.length ? (
                 <div>
                   {contractBlockers.map((blocker, index) => (
                     <div key={`${blocker.code}-${index}`} style={{ fontSize: '13px', marginTop: index ? '10px' : 0 }}>
-                      {BLOCKER_LABELS[blocker.code] || blocker.message || blocker.code}
+                      {blockerLabel(blocker, t)}
                     </div>
                   ))}
                 </div>
               ) : (
                 <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 160px) minmax(0, 1fr)', rowGap: '10px', columnGap: '16px', fontSize: '13px' }}>
-                  <DetailLine label="Plan" mono>{shortId(reviewPlan?.planId)}</DetailLine>
-                  <DetailLine label="Sözleşme" mono>{shortId(executionContract?.contractId)}</DetailLine>
-                  <DetailLine label="Kayıt durumu">{reviewStatus?.state === 'complete' ? 'İnceleme tamamlandı' : 'İnceleme eksik'}</DetailLine>
-                  <DetailLine label="Çalıştırma">Kapalı</DetailLine>
+                  <DetailLine label={t('migration.detail.plan')} mono>{shortId(reviewPlan?.planId)}</DetailLine>
+                  <DetailLine label={t('migration.detail.contract')} mono>{shortId(executionContract?.contractId)}</DetailLine>
+                  <DetailLine label={t('migration.detail.recordStatus')}>{reviewStatus?.state === 'complete' ? t('migration.detail.reviewCompleted') : t('migration.detail.reviewMissing')}</DetailLine>
+                  <DetailLine label={t('migration.detail.execution')}>{t('migration.detail.off')}</DetailLine>
                 </div>
               )}
             </DetailSection>
 
             {executionContract && !contractBlockers.length && reviewDraft && !reviewStatus?.stale && (
               <>
-                <DetailSection title="Sağlık Hedefi" description="FoxOS aday uygulamayı bu gözlenen iç port ve yol üzerinden doğrulayacak.">
+                <DetailSection title={t('migration.detail.healthTarget')} description={t('migration.detail.healthTargetDescription')}>
                   <select
                     value={reviewDraft.healthRouteId || ''}
                     onChange={(event) => {
@@ -727,28 +707,28 @@ const MigrationSettings = () => {
                     }}
                     style={SELECT_STYLE}
                   >
-                    <option value="">Sağlık hedefi seç</option>
+                    <option value="">{t('migration.detail.selectHealthTarget')}</option>
                     {(executionContract.routes || []).map((route) => (
                       <option key={route.routeId} value={route.routeId}>
                         {route.domain}{route.path} → :{route.upstreamPrivatePort}
                       </option>
                     ))}
                   </select>
-                  <div style={{ color: '#888', fontSize: '12px', marginTop: '9px' }}>Kabul edilen HTTP durumları: 200–399</div>
+                  <div style={{ color: '#888', fontSize: '12px', marginTop: '9px' }}>{t('migration.detail.acceptedHttp')}</div>
                 </DetailSection>
 
-                <DetailSection title="Çalışma Sınırları" description="Manifest derleyicisinin sabitlediği aday container ayarları.">
+                <DetailSection title={t('migration.detail.runtimeLimits')} description={t('migration.detail.runtimeLimitsDescription')}>
                   <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 160px) minmax(0, 1fr)', rowGap: '10px', columnGap: '16px', fontSize: '13px', marginBottom: '16px' }}>
-                    <DetailLine label={`Bellek${runtimeDefaults.has('memoryBytes') ? ' · varsayılan' : ''}`}>{formatMemory(executionContract.candidate.runtime.memoryBytes)}</DetailLine>
-                    <DetailLine label={`CPU${runtimeDefaults.has('nanoCpus') ? ' · varsayılan' : ''}`}>{formatCpu(executionContract.candidate.runtime.nanoCpus)}</DetailLine>
-                    <DetailLine label={`PID sınırı${runtimeDefaults.has('pidsLimit') ? ' · varsayılan' : ''}`}>{executionContract.candidate.runtime.pidsLimit}</DetailLine>
-                    <DetailLine label="Yeniden başlatma">{executionContract.candidate.runtime.restartPolicy}</DetailLine>
-                    <DetailLine label="Çalışma kullanıcısı">{executionContract.candidate.runtime.user || 'İmaj varsayılanı'}</DetailLine>
-                    <DetailLine label="Kök dosya sistemi">{executionContract.candidate.runtime.readOnlyRootFilesystem ? 'Salt okunur' : 'Yazılabilir'}</DetailLine>
-                    <DetailLine label="Host portu">Yayınlanmayacak</DetailLine>
-                    <DetailLine label="Yazılabilir mount">Yok</DetailLine>
-                    <DetailLine label="Yetkili çalışma">Kapalı</DetailLine>
-                    <DetailLine label="Ek yetkiler">Kapalı · tüm capabilities düşürülecek</DetailLine>
+                    <DetailLine label={`${t('migration.detail.memory')}${runtimeDefaults.has('memoryBytes') ? t('migration.detail.defaultSuffix') : ''}`}>{formatMemory(executionContract.candidate.runtime.memoryBytes)}</DetailLine>
+                    <DetailLine label={`CPU${runtimeDefaults.has('nanoCpus') ? t('migration.detail.defaultSuffix') : ''}`}>{formatCpu(executionContract.candidate.runtime.nanoCpus)}</DetailLine>
+                    <DetailLine label={`${t('migration.detail.pidLimit')}${runtimeDefaults.has('pidsLimit') ? t('migration.detail.defaultSuffix') : ''}`}>{executionContract.candidate.runtime.pidsLimit}</DetailLine>
+                    <DetailLine label={t('migration.detail.restart')}>{executionContract.candidate.runtime.restartPolicy}</DetailLine>
+                    <DetailLine label={t('migration.detail.runtimeUser')}>{executionContract.candidate.runtime.user || t('migration.detail.imageDefault')}</DetailLine>
+                    <DetailLine label={t('migration.detail.rootFilesystem')}>{executionContract.candidate.runtime.readOnlyRootFilesystem ? t('migration.detail.readOnly') : t('migration.detail.writable')}</DetailLine>
+                    <DetailLine label={t('migration.detail.hostPort')}>{t('migration.detail.notPublished')}</DetailLine>
+                    <DetailLine label={t('migration.detail.writableMount')}>{t('migration.detail.none')}</DetailLine>
+                    <DetailLine label={t('migration.detail.privileged')}>{t('migration.detail.off')}</DetailLine>
+                    <DetailLine label={t('migration.detail.additionalCapabilities')}>{t('migration.detail.capabilitiesOff')}</DetailLine>
                   </div>
                   <label style={{ display: 'inline-flex', alignItems: 'center', gap: '9px', fontSize: '13px', cursor: 'pointer' }}>
                     <input
@@ -759,28 +739,28 @@ const MigrationSettings = () => {
                         setReviewMessage(null);
                       }}
                     />
-                    Bu çalışma sınırlarını inceledim
+                    {t('migration.detail.reviewedRuntime')}
                   </label>
                 </DetailSection>
 
-                <DetailSection title="Rotalar ve Sertifikalar" description="Her rota kendi alan adı, yolu, iç portu ve değiştirilebilir sertifika adaptörüyle ayrı ayrı incelenir.">
+                <DetailSection title={t('migration.detail.routesCertificates')} description={t('migration.detail.routesDescription')}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '9px' }}>
                     {(executionContract.routes || []).map((route) => {
                       const reviewed = reviewedRoutes.get(route.routeId) || {};
                       return (
                         <div key={route.routeId} style={RESOURCE_CARD_STYLE}>
                           <div style={{ fontSize: '13px', overflowWrap: 'anywhere' }}>https://{route.domain}{route.path}</div>
-                          <div style={{ color: '#888', fontSize: '12px', marginTop: '3px' }}>İç port: {route.upstreamPrivatePort} · HTTP → HTTPS</div>
+                          <div style={{ color: '#888', fontSize: '12px', marginTop: '3px' }}>{t('migration.detail.internalPort', { port: route.upstreamPrivatePort })}</div>
                           <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px', marginTop: '14px' }}>
                             <select
-                              aria-label={`${route.domain}${route.path} sertifika adaptörü`}
+                              aria-label={t('migration.detail.certificateLabel', { route: `${route.domain}${route.path}` })}
                               value={reviewed.certificateAdapter || ''}
                               onChange={(event) => updateReviewRoute(route.routeId, { certificateAdapter: event.target.value || null })}
                               style={SELECT_STYLE}
                             >
-                              <option value="">Sertifika adaptörü seç</option>
+                              <option value="">{t('migration.detail.selectCertificate')}</option>
                               {(reviewStatus?.certificateAdapters || []).map((adapter) => (
-                                <option key={adapter} value={adapter}>{CERTIFICATE_ADAPTER_LABELS[adapter] || adapter}</option>
+                                <option key={adapter} value={adapter}>{translatedMapValue(CERTIFICATE_ADAPTER_LABELS, adapter, t)}</option>
                               ))}
                             </select>
                             <label style={{ display: 'inline-flex', alignItems: 'center', gap: '9px', fontSize: '13px', cursor: 'pointer' }}>
@@ -789,7 +769,7 @@ const MigrationSettings = () => {
                                 checked={reviewed.confirmed === true}
                                 onChange={(event) => updateReviewRoute(route.routeId, { confirmed: event.target.checked })}
                               />
-                              Rotayı inceledim
+                              {t('migration.detail.reviewedRoute')}
                             </label>
                           </div>
                         </div>
@@ -797,11 +777,11 @@ const MigrationSettings = () => {
                     })}
                   </div>
                   <div style={{ color: '#888', fontSize: '12px', marginTop: '10px', lineHeight: 1.45 }}>
-                    ACME seçimleri belirli bir DNS firması veya ücretli hizmet zorunluluğu oluşturmaz. Erişim bilgileri bu ekranda saklanmaz.
+                    {t('migration.detail.acmeNote')}
                   </div>
                 </DetailSection>
 
-                <DetailSection title="İnceleme Kaydı">
+                <DetailSection title={t('migration.detail.reviewRecord')}>
                   {reviewMessage && (
                     <div style={{ marginBottom: '14px', color: reviewMessage.type === 'error' ? '#ff8a84' : '#75da85', fontSize: '13px' }}>
                       {reviewMessage.text}
@@ -814,7 +794,7 @@ const MigrationSettings = () => {
                     style={{ ...PRIMARY_BUTTON_STYLE, cursor: reviewSaving ? 'wait' : 'pointer', opacity: reviewSaving ? 0.6 : 1 }}
                   >
                     {reviewSaving ? <Loader2 size={15} className="spin" /> : <CheckCircle2 size={15} />}
-                    Kaydet ve Yeniden Değerlendir
+                    {t('migration.detail.saveReview')}
                   </button>
                 </DetailSection>
               </>
@@ -822,13 +802,13 @@ const MigrationSettings = () => {
           </>
         )}
 
-        <DetailSection title="Engeller ve Sonraki Gereksinimler" last>
+        <DetailSection title={t('migration.detail.blockers')} last>
           {blockers.length ? blockers.map((blocker, index) => (
             <div key={`${blocker.group}-${blocker.code}-${index}`} style={{ padding: index ? '12px 0 0' : 0, marginTop: index ? '12px' : 0, borderTop: index ? '1px solid rgba(255,255,255,0.08)' : 'none' }}>
-              <div style={{ fontSize: '13px', lineHeight: 1.45 }}>{BLOCKER_LABELS[blocker.code] || blocker.message || blocker.code}</div>
+              <div style={{ fontSize: '13px', lineHeight: 1.45 }}>{blockerLabel(blocker, t)}</div>
               <div style={{ color: '#888', fontSize: '11px', marginTop: '3px', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', overflowWrap: 'anywhere' }}>{blocker.code}</div>
             </div>
-          )) : <div style={{ color: '#888', fontSize: '13px' }}>İnceleme planını engelleyen eksik kanıt bulunmadı.</div>}
+          )) : <div style={{ color: '#888', fontSize: '13px' }}>{t('migration.detail.noBlockers')}</div>}
         </DetailSection>
       </div>
     );
@@ -836,7 +816,7 @@ const MigrationSettings = () => {
 
   const countSummary = Object.entries(REVIEW_STATES)
     .filter(([state]) => counts[state] > 0)
-    .map(([state, label]) => `${counts[state]} ${label.toLocaleLowerCase('tr-TR')}`)
+    .map(([state, labelKey]) => `${formatNumber(counts[state])} ${t(labelKey).toLocaleLowerCase(locale)}`)
     .join(' · ');
   const latestRunAlreadyManaged = Boolean(
     latestRun && ['failed', 'blocked'].includes(latestRun.status) && latestRun.resources?.length &&
@@ -845,14 +825,14 @@ const MigrationSettings = () => {
       return current?.management?.owner === 'foxos' && current.management.state === 'active';
     })
   );
-  const latestRunBlockerText = runBlockerText(latestRun);
+  const latestRunBlockerText = runBlockerText(latestRun, t);
 
   return (
     <div ref={rootRef}>
       <section style={{ padding: '0 0 26px 0', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
-        <h2 style={{ margin: '0 0 6px 0', fontSize: '16px' }}>Sunucu Taraması</h2>
+        <h2 style={{ margin: '0 0 6px 0', fontSize: '16px' }}>{t('migration.scan.title')}</h2>
         <div style={{ marginBottom: '14px', color: '#888', fontSize: '13px', lineHeight: 1.5 }}>
-          Docker kaynaklarını salt okunur inceler. Tarama hiçbir uygulamayı durdurmaz ve geçiş başlatmaz.
+          {t('migration.scan.description')}
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px' }}>
           <button
@@ -862,11 +842,14 @@ const MigrationSettings = () => {
             style={{ ...SECONDARY_BUTTON_STYLE, cursor: scanning ? 'wait' : 'pointer', opacity: scanning ? 0.6 : 1 }}
           >
             {scanning ? <Loader2 size={15} className="spin" /> : <RefreshCw size={15} />}
-            {scanning ? 'Taranıyor…' : 'Sunucuyu Tara'}
+            {scanning ? t('migration.scan.scanning') : t('migration.scan.action')}
           </button>
           {snapshot && (
             <div style={{ color: '#888', fontSize: '12px' }}>
-              Son tarama: {formatDate(snapshot.generatedAt)} · {snapshot.summary?.resources ?? resources.length} kaynak
+              {t('migration.scan.last', {
+                date: formatDate(snapshot.generatedAt, { dateStyle: 'short', timeStyle: 'medium' }),
+                count: formatNumber(snapshot.summary?.resources ?? resources.length)
+              })}
             </div>
           )}
         </div>
@@ -880,20 +863,20 @@ const MigrationSettings = () => {
 
       {selectionStatus?.stale && (
         <div style={{ marginTop: '20px', padding: '10px 12px', borderRadius: '8px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: '#ccc', fontSize: '13px', lineHeight: 1.45 }}>
-          Sunucu envanteri değiştiği için önceki seçim geçersiz. Yeni sonuçlara göre tekrar seçim yapmalısın.
+          {t('migration.scan.staleSelection')}
         </div>
       )}
 
       {!plan ? (
         <section style={{ padding: '26px 0 0 0' }}>
           <div style={{ ...RESOURCE_CARD_STYLE, color: '#8b93a1', textAlign: 'center', fontSize: '13px' }}>
-            Güncel bir tarama sonucu yok. Kaynakları sınıflandırmak için “Sunucuyu Tara” düğmesini kullan.
+            {t('migration.scan.empty')}
           </div>
         </section>
       ) : (
         <>
           <section style={{ padding: '26px 0', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
-            <h2 style={{ margin: '0 0 6px 0', fontSize: '16px' }}>Kaynaklar</h2>
+            <h2 style={{ margin: '0 0 6px 0', fontSize: '16px' }}>{t('migration.resources.title')}</h2>
             <div style={{ marginBottom: '14px', color: '#888', fontSize: '12px' }}>{countSummary}</div>
 
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '14px', marginBottom: '12px' }}>
@@ -904,9 +887,9 @@ const MigrationSettings = () => {
                   onChange={toggleAll}
                   disabled={!selectableIds.length}
                 />
-                Tüm uygun kaynakları seç
+                {t('migration.resources.selectAll')}
               </label>
-              <span style={{ color: '#8b93a1', fontSize: '12px' }}>{selectedIds.length} seçili</span>
+              <span style={{ color: '#8b93a1', fontSize: '12px' }}>{t('migration.resources.selected', { count: formatNumber(selectedIds.length) })}</span>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '9px' }}>
@@ -922,7 +905,7 @@ const MigrationSettings = () => {
                   <div key={resource.resourceId} style={{ ...RESOURCE_CARD_STYLE, display: 'flex', alignItems: 'center', gap: '14px' }}>
                     <input
                       type="checkbox"
-                      aria-label={`${resource.name} kaynağını seç`}
+                      aria-label={t('migration.resources.selectLabel', { name: resource.name })}
                       checked={selectedSet.has(resource.resourceId)}
                       onChange={() => toggleResource(resource.resourceId)}
                       disabled={!selectable}
@@ -935,17 +918,17 @@ const MigrationSettings = () => {
                         {resource.protected && <ShieldCheck size={14} color="#38bdf8" />}
                       </div>
                       <div style={{ color: '#8b93a1', fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: '3px' }}>
-                        {resource.currentProvider || resource.observedProvider || 'docker'} · {CLASS_LABELS[classification.workloadRole] || classification.workloadRole || 'Belirsiz'} · {observed.runtime?.health?.status || observed.runtime?.state || 'bilinmiyor'}
-                        {routeDomains.length ? ` · ${routeDomains.join(', ')}` : ` · ${(observed.mounts || []).length} depolama bağı`}
+                        {resource.currentProvider || resource.observedProvider || 'docker'} · {classification.workloadRole ? translatedMapValue(CLASS_LABELS, classification.workloadRole, t) : t('migration.resources.unknown')} · {observed.runtime?.health?.status || observed.runtime?.state || t('migration.resources.unknownLower')}
+                        {routeDomains.length ? ` · ${routeDomains.join(', ')}` : ` · ${t('migration.resources.storageBindings', { count: formatNumber((observed.mounts || []).length) })}`}
                       </div>
                     </div>
-                    <div style={{ color: '#8b93a1', fontSize: '12px', whiteSpace: 'nowrap' }}>{REVIEW_STATES[state]}</div>
+                    <div style={{ color: '#8b93a1', fontSize: '12px', whiteSpace: 'nowrap' }}>{translatedMapValue(REVIEW_STATES, state, t)}</div>
                     <button
                       type="button"
                       onClick={() => setDetailResourceId(resource.resourceId)}
                       style={ACTION_BUTTON_STYLE}
                     >
-                      Ayrıntılar <ChevronRight size={13} />
+                      {t('migration.resources.details')} <ChevronRight size={13} />
                     </button>
                   </div>
                 );
@@ -954,16 +937,23 @@ const MigrationSettings = () => {
           </section>
 
           <section style={{ padding: '26px 0 0 0' }}>
-            <h2 style={{ margin: '0 0 6px 0', fontSize: '16px' }}>Geçiş</h2>
+            <h2 style={{ margin: '0 0 6px 0', fontSize: '16px' }}>{t('migration.start.title')}</h2>
             <div style={{ marginBottom: '14px', color: '#888', fontSize: '13px', lineHeight: 1.5 }}>
-              Seçilen kaynakların değişmez ön kontrolleri birlikte tamamlanır; ardından uygun kaynaklar sağlık ve geri alma doğrulamasıyla sırayla geçirilir.
+              {t('migration.start.description')}
             </div>
             {latestRun && (
               <div style={{ marginBottom: '14px', color: '#888', fontSize: '12px' }}>
                 <div>
                   {latestRunAlreadyManaged
-                    ? `Son durum: Sunucu yönetiminde · ${latestRun.resources.length}/${latestRun.resources.length} tamamlandı`
-                    : `Son işlem: ${RUN_STATUS_LABELS[latestRun.status] || latestRun.status} · ${latestRun.summary?.completed || 0}/${latestRun.summary?.selected || 0} tamamlandı`}
+                    ? t('migration.start.latestManaged', {
+                      completed: formatNumber(latestRun.resources.length),
+                      total: formatNumber(latestRun.resources.length)
+                    })
+                    : t('migration.start.latestRun', {
+                      status: translatedMapValue(RUN_STATUS_LABELS, latestRun.status, t),
+                      completed: formatNumber(latestRun.summary?.completed || 0),
+                      total: formatNumber(latestRun.summary?.selected || 0)
+                    })}
                 </div>
                 {!latestRunAlreadyManaged && latestRunBlockerText && (
                   <div style={{ marginTop: '5px', color: '#ff8a84', lineHeight: 1.45 }}>{latestRunBlockerText}</div>
@@ -977,7 +967,7 @@ const MigrationSettings = () => {
               style={{ ...PRIMARY_BUTTON_STYLE, cursor: starting || !selectedIds.length || ACTIVE_RUN_STATUSES.has(latestRun?.status) ? 'not-allowed' : 'pointer', opacity: starting || !selectedIds.length || ACTIVE_RUN_STATUSES.has(latestRun?.status) ? 0.5 : 1 }}
             >
               {starting || ACTIVE_RUN_STATUSES.has(latestRun?.status) ? <Loader2 size={15} className="spin" /> : <CheckCircle2 size={15} />}
-              {starting || ACTIVE_RUN_STATUSES.has(latestRun?.status) ? 'Geçiş Başlatılıyor…' : 'Geçişi Başlat'}
+              {starting || ACTIVE_RUN_STATUSES.has(latestRun?.status) ? t('migration.start.starting') : t('migration.start.action')}
             </button>
           </section>
         </>

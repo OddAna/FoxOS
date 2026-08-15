@@ -27,9 +27,9 @@ repository or replace itself.
 6. Merge the verified result into `main`, create one new immutable tag, and
    publish a GitHub Release.
 
-The `v0.0.1` and `v0.0.2` tags are immutable public alpha snapshots. `v0.0.2`
-is the current stable release; later work remains on `develop` until another
-release is explicitly approved.
+The `v0.0.1`, `v0.0.2` and `v0.0.3` tags are immutable public alpha snapshots.
+`v0.0.3` is the current stable release; later work remains on `develop` until
+another release is explicitly approved.
 
 ## Required release checks
 

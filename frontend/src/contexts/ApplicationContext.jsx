@@ -2,6 +2,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { apiFetch } from '../api';
 import { DESKTOP_ROOT } from '../utils/desktopShortcuts';
+import { useI18n } from './LocaleContext';
 
 const ApplicationContext = createContext(null);
 
@@ -12,6 +13,7 @@ export const useApplicationInventory = () => {
 };
 
 export const ApplicationProvider = ({ children }) => {
+  const { t } = useI18n();
   const [applications, setApplications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -54,9 +56,9 @@ export const ApplicationProvider = ({ children }) => {
     const inactiveDefinition = application.installation &&
       application.installation.state === 'inactive-definition' && action === 'start';
     if (!allowed || (!containerId && !hostService && !inactiveDefinition)) {
-      throw new Error('Bu işlem uygulama için kullanılamıyor');
+      throw new Error(t('contextErrors.actionUnavailable'));
     }
-    if (pendingActions.current.has(application.id)) throw new Error('Uygulamada başka bir işlem sürüyor');
+    if (pendingActions.current.has(application.id)) throw new Error(t('contextErrors.actionPending'));
 
     pendingActions.current.add(application.id);
     setActions((current) => ({ ...current, [application.id]: action }));
@@ -81,11 +83,11 @@ export const ApplicationProvider = ({ children }) => {
       pendingActions.current.delete(application.id);
       setActions((current) => ({ ...current, [application.id]: null }));
     }
-  }, [refreshApplications]);
+  }, [refreshApplications, t]);
 
   const setDesktopShortcut = useCallback(async (application, visible) => {
     if (!application || typeof visible !== 'boolean') {
-      throw new Error('Masaüstü kısayol işlemi geçersiz');
+      throw new Error(t('contextErrors.invalidShortcut'));
     }
     await apiFetch(`/api/applications/${application.id}/desktop-shortcut`, {
       method: 'PUT',
@@ -93,11 +95,11 @@ export const ApplicationProvider = ({ children }) => {
       body: JSON.stringify({ visible })
     });
     await refreshApplications({ quiet: true });
-  }, [refreshApplications]);
+  }, [refreshApplications, t]);
 
   const setDesktopShortcutLocation = useCallback(async (application, folderPath) => {
     if (!application || typeof folderPath !== 'string') {
-      throw new Error('Masaüstü kısayol konumu geçersiz');
+      throw new Error(t('contextErrors.invalidShortcutLocation'));
     }
     const previousPath = application.desktopShortcutPath || DESKTOP_ROOT;
     const sequence = shortcutLocationSequence.current + 1;
@@ -141,7 +143,7 @@ export const ApplicationProvider = ({ children }) => {
       }
       throw shortcutError;
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     refreshApplications().catch(() => {});

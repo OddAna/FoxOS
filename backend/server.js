@@ -1,8 +1,9 @@
 const crypto = require('crypto');
 const fs = require('fs');
+const http = require('http');
 const os = require('os');
 const path = require('path');
-const { execFile } = require('child_process');
+const { execFile, spawn } = require('child_process');
 const express = require('express');
 const { AdoptionError, createAdoptionManager } = require('./adoptionManager');
 const {
@@ -73,6 +74,32 @@ const {
   CloudflareConnectionError,
   createCloudflareConnectionManager
 } = require('./cloudflareConnectionManager');
+const {
+  CodexConnectionError,
+  createCodexConnectionManager
+} = require('./codexConnectionManager');
+const {
+  GeminiConnectionError,
+  createGeminiConnectionManager
+} = require('./geminiConnectionManager');
+const {
+  AntigravityConnectionError,
+  createAntigravityConnectionManager
+} = require('./antigravityConnectionManager');
+const {
+  createAntigravityLoginController,
+  finalJsonPayload
+} = require('./antigravityLoginController');
+const {
+  codexDaemonEnsureScript,
+  codexDaemonSocket,
+  createCodexDaemonTransport
+} = require('./codexHostRuntime');
+const {
+  createCliUsageManager,
+  normalizeAntigravityUsage,
+  normalizeCodexRateLimits
+} = require('./cliUsageManager');
 const { createCoolifyMigrationReader } = require('./coolifyMigrationReader');
 const { createDockerClient } = require('./dockerClient');
 const { createEncryptionStore } = require('./encryptionStore');
@@ -80,6 +107,37 @@ const { createHostServiceDiscovery } = require('./hostServiceDiscovery');
 const { HostServiceError, createHostServiceManager } = require('./hostServiceManager');
 const { createRouteManager } = require('./routeManager');
 const { createSecretManager } = require('./secretManager');
+const { createSessionStore } = require('./sessionStore');
+const {
+  createLocalePreferencesRecord,
+  publicLocalePreferences,
+  validateLocalePreferences
+} = require('./localePreferences');
+const {
+  PASSWORD_MIN_LENGTH,
+  createPasswordCredential,
+  validateNewPassword
+} = require('./passwordSecurity');
+const { SecurityError, createSecurityManager } = require('./securityManager');
+const { createHostTerminalPtyFactory } = require('./hostTerminalPty');
+const { createTerminalSessionManager } = require('./terminalSessionManager');
+const {
+  MediaThumbnailError,
+  createMediaThumbnailManager
+} = require('./mediaThumbnailManager');
+const { FileSearchError, createFileSearchManager } = require('./fileSearchManager');
+const { CalendarError, createCalendarManager } = require('./calendarManager');
+const { createCalendarConnectionManager } = require('./calendarConnectionManager');
+const { WeatherError, createWeatherManager } = require('./weatherManager');
+const { NotificationError, createNotificationManager } = require('./notificationManager');
+const { createWebPushManager } = require('./webPushManager');
+const { createTelegramNotificationManager } = require('./telegramNotificationManager');
+const { TaskError, createTaskManager } = require('./taskManager');
+const {
+  CodexChecklistReviewError,
+  createCodexChecklistReviewManager
+} = require('./codexChecklistReviewManager');
+const { createCodexReviewSources } = require('./codexReviewSources');
 const {
   WorkloadEvidenceError,
   createWorkloadEvidenceManager
@@ -161,15 +219,42 @@ const HOST_ROOT = path.resolve(process.env.HOST_ROOT || path.parse(process.cwd()
 const HOST_EXECUTION = process.env.HOST_EXECUTION || 'local';
 const DOCKER_SOCKET = process.env.DOCKER_SOCKET || '/var/run/docker.sock';
 const AUTH_FILE = path.join(DATA_ROOT, 'auth.json');
+const SESSIONS_FILE = path.join(DATA_ROOT, 'sessions.json');
+const SECURITY_EVENTS_FILE = path.join(DATA_ROOT, 'security-events.jsonl');
+const THUMBNAIL_CACHE_ROOT = path.join(DATA_ROOT, 'thumbnail-cache');
 const PUBLIC_DIR = path.resolve(process.env.PUBLIC_DIR || path.join(__dirname, 'public'));
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+const SESSION_IDLE_TTL_MS = 30 * 60 * 1000;
+const INITIAL_SETUP_SCHEMA_VERSION = 1;
+const COMPLETE_INITIAL_SETUP_CONFIRMATION = 'COMPLETE INITIAL SETUP';
 const COMMAND_TIMEOUT_MS = Number.parseInt(process.env.COMMAND_TIMEOUT_MS || '120000', 10);
 const COMMAND_MAX_BUFFER = 2 * 1024 * 1024;
+const CODEX_HOST_STATE_ROOT = process.env.FOXOS_CODEX_HOST_STATE_ROOT || '/var/lib/foxos/codex';
+const CODEX_HOST_HOME = CODEX_HOST_STATE_ROOT;
+const CODEX_HOST_CONFIG_HOME = path.posix.join(CODEX_HOST_STATE_ROOT, '.codex');
+const CODEX_HOST_BINARY = path.posix.join(CODEX_HOST_STATE_ROOT, '.local', 'bin', 'codex');
+const CODEX_HOST_DAEMON_SOCKET = codexDaemonSocket(CODEX_HOST_CONFIG_HOME);
+const CODEX_MEMORY_VAULT = path.posix.join(CODEX_HOST_STATE_ROOT, 'ana-memory', 'vault');
+const CODEX_REVIEW_CONNECTORS_FILE = path.join(DATA_ROOT, 'tasks', 'codex-review', 'connectors.json');
+const GEMINI_HOST_STATE_ROOT = process.env.FOXOS_GEMINI_HOST_STATE_ROOT || '/var/lib/foxos/gemini';
+const GEMINI_HOST_HOME = GEMINI_HOST_STATE_ROOT;
+const GEMINI_INSTALL_PREFIX = path.posix.join(GEMINI_HOST_STATE_ROOT, '.local');
+const GEMINI_HOST_BINARY = path.posix.join(GEMINI_INSTALL_PREFIX, 'bin', 'gemini');
+const ANTIGRAVITY_HOST_STATE_ROOT = process.env.FOXOS_ANTIGRAVITY_HOST_STATE_ROOT || '/var/lib/foxos/antigravity';
+const ANTIGRAVITY_HOST_HOME = ANTIGRAVITY_HOST_STATE_ROOT;
+const ANTIGRAVITY_INSTALL_DIR = path.posix.join(ANTIGRAVITY_HOST_STATE_ROOT, '.local', 'bin');
+const ANTIGRAVITY_HOST_BINARY = path.posix.join(ANTIGRAVITY_INSTALL_DIR, 'agy');
+const ANTIGRAVITY_SETTINGS_FILE = path.posix.join(
+  ANTIGRAVITY_HOST_STATE_ROOT,
+  '.gemini',
+  'antigravity-cli',
+  'settings.json'
+);
 
-const sessions = new Map();
 const loginAttempts = new Map();
 const appInstallOperations = new Set();
 const containerPortCache = new Map();
+const activeTerminalManagers = new Set();
 
 if (process.env.FOXOS_TRUST_PROXY === '1') {
   app.set('trust proxy', 1);
@@ -199,6 +284,23 @@ function initializeDataDirectory() {
 }
 
 initializeDataDirectory();
+
+const mediaThumbnailManager = createMediaThumbnailManager({
+  cacheRoot: THUMBNAIL_CACHE_ROOT
+});
+
+const sessionStore = createSessionStore({
+  filePath: SESSIONS_FILE,
+  ttlMs: SESSION_TTL_MS,
+  idleTtlMs: SESSION_IDLE_TTL_MS,
+  onError: (error) => console.error('Could not read authentication sessions:', error.message)
+});
+
+const securityManager = createSecurityManager({
+  authFilePath: AUTH_FILE,
+  eventFilePath: SECURITY_EVENTS_FILE,
+  onError: (error) => console.error('Could not read security state:', error.message)
+});
 
 app.disable('x-powered-by');
 app.use(express.json({ limit: '1mb' }));
@@ -251,51 +353,107 @@ function parseCookies(header = '') {
   }, {});
 }
 
-function pruneSessions() {
-  const now = Date.now();
-  for (const [token, session] of sessions.entries()) {
-    if (session.expiresAt <= now) {
-      sessions.delete(token);
-    }
+function maskNetworkAddress(value) {
+  const address = String(value || '').replace(/^::ffff:/, '');
+  if (['127.0.0.1', '::1'].includes(address)) return 'local';
+  if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(address)) {
+    const parts = address.split('.');
+    return parts.slice(0, 3).join('.') + '.0/24';
   }
+  if (address.includes(':')) {
+    return address.split(':').slice(0, 4).join(':') + '::/64';
+  }
+  return null;
+}
+
+function summarizeAuthClient(req) {
+  const userAgent = String(req.get('user-agent') || '');
+  const browser = /Edg\//.test(userAgent) ? 'Edge'
+    : /Firefox\//.test(userAgent) ? 'Firefox'
+      : /CriOS\//.test(userAgent) ? 'Chrome iOS'
+        : /Chrome\//.test(userAgent) ? 'Chrome'
+          : /Safari\//.test(userAgent) ? 'Safari'
+            : 'Unknown browser';
+  const osName = /iPhone|iPad/.test(userAgent) ? 'iOS/iPadOS'
+    : /Mac OS X/.test(userAgent) ? 'macOS'
+      : /Android/.test(userAgent) ? 'Android'
+        : /Windows NT/.test(userAgent) ? 'Windows'
+          : /Linux/.test(userAgent) ? 'Linux'
+            : 'Unknown OS';
+  const device = /iPad|Tablet/.test(userAgent) ? 'tablet'
+    : /Mobile|iPhone|Android/.test(userAgent) ? 'mobile'
+      : 'desktop';
+  return {
+    browser,
+    os: osName,
+    device,
+    network: maskNetworkAddress(req.ip || req.socket.remoteAddress)
+  };
+}
+
+function secureSessionCookies() {
+  return process.env.FOXOS_SECURE_COOKIE === 'true';
+}
+
+function primarySessionCookieName() {
+  return secureSessionCookies() ? '__Host-foxos_session' : 'foxos_session';
 }
 
 function getSession(req) {
-  pruneSessions();
-  const token = parseCookies(req.headers.cookie).foxos_session;
+  const cookies = parseCookies(req.headers.cookie);
+  const primaryName = primarySessionCookieName();
+  const token = cookies[primaryName] || cookies.foxos_session;
   if (!token) {
     return null;
   }
-  const session = sessions.get(token);
-  if (!session || session.expiresAt <= Date.now()) {
-    sessions.delete(token);
-    return null;
-  }
-  return { token, ...session };
+  const session = sessionStore.get(token);
+  if (!session) return null;
+  return {
+    token,
+    cookieName: cookies[primaryName] ? primaryName : 'foxos_session',
+    ...session
+  };
 }
 
 function setSessionCookie(res, token) {
-  const secure = process.env.FOXOS_SECURE_COOKIE === 'true' ? '; Secure' : '';
-  res.setHeader(
-    'Set-Cookie',
-    'foxos_session=' + encodeURIComponent(token) +
-      '; HttpOnly; SameSite=Strict; Path=/; Max-Age=' + Math.floor(SESSION_TTL_MS / 1000) + secure
-  );
+  const secure = secureSessionCookies() ? '; Secure' : '';
+  const value = primarySessionCookieName() + '=' + encodeURIComponent(token) +
+    '; HttpOnly; SameSite=Strict; Path=/; Max-Age=' + Math.floor(SESSION_TTL_MS / 1000) + secure;
+  res.setHeader('Set-Cookie', value);
 }
 
-function createSession(res, username) {
-  const token = crypto.randomBytes(32).toString('base64url');
-  sessions.set(token, { username, expiresAt: Date.now() + SESSION_TTL_MS });
+function migrateLegacySessionCookie(res, session) {
+  if (!secureSessionCookies() || session.cookieName !== 'foxos_session') return;
+  const secureCookie = primarySessionCookieName() + '=' + encodeURIComponent(session.token) +
+    '; HttpOnly; SameSite=Strict; Path=/; Max-Age=' + Math.floor(SESSION_TTL_MS / 1000) + '; Secure';
+  const clearLegacy = 'foxos_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0; Secure';
+  res.setHeader('Set-Cookie', [secureCookie, clearLegacy]);
+}
+
+function createSession(req, res, username, authMethod = 'password') {
+  const token = sessionStore.create(username, {
+    authMethod,
+    client: summarizeAuthClient(req)
+  });
   setSessionCookie(res, token);
+  return { token, ...sessionStore.get(token, { touch: false }) };
 }
 
 function clearSession(req, res) {
   const session = getSession(req);
   if (session) {
-    sessions.delete(session.token);
+    const ownerId = crypto.createHash('sha256').update(session.token).digest('hex');
+    for (const terminalManager of activeTerminalManagers) {
+      terminalManager.closeOwnerSessions(ownerId);
+    }
+    sessionStore.remove(session.token);
   }
-  const secure = process.env.FOXOS_SECURE_COOKIE === 'true' ? '; Secure' : '';
-  res.setHeader('Set-Cookie', 'foxos_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' + secure);
+  const secure = secureSessionCookies() ? '; Secure' : '';
+  const clears = [primarySessionCookieName() + '=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' + secure];
+  if (primarySessionCookieName() !== 'foxos_session') {
+    clears.push('foxos_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' + secure);
+  }
+  res.setHeader('Set-Cookie', clears);
 }
 
 function requireAuth(req, res, next) {
@@ -303,8 +461,46 @@ function requireAuth(req, res, next) {
   if (!session) {
     return res.status(401).json({ error: 'Authentication required' });
   }
+  migrateLegacySessionCookie(res, session);
   req.session = session;
   next();
+}
+
+function terminalUpgradeOwner(req) {
+  const origin = String(req.headers.origin || '');
+  const host = String(req.headers.host || '');
+  if (!origin || !host) return null;
+  try {
+    if (new URL(origin).host !== host) return null;
+  } catch {
+    return null;
+  }
+
+  const session = getSession(req);
+  if (!session) return null;
+  return {
+    ownerId: crypto.createHash('sha256').update(session.token).digest('hex'),
+    expiresAt: session.expiresAt
+  };
+}
+
+function createFoxOSHttpServer({ spawnTerminalPty } = {}) {
+  const spawnPty = spawnTerminalPty || createHostTerminalPtyFactory({
+    hostRoot: HOST_ROOT,
+    hostExecution: HOST_EXECUTION
+  });
+  const terminalManager = createTerminalSessionManager({
+    authenticate: terminalUpgradeOwner,
+    spawnPty
+  });
+  const server = http.createServer(app);
+  terminalManager.attach(server);
+  activeTerminalManagers.add(terminalManager);
+  server.once('close', () => {
+    terminalManager.shutdown();
+    activeTerminalManagers.delete(terminalManager);
+  });
+  return server;
 }
 
 function isLoopbackRequest(req) {
@@ -313,35 +509,23 @@ function isLoopbackRequest(req) {
 }
 
 function readAuthRecord() {
-  if (!fs.existsSync(AUTH_FILE)) {
-    return null;
-  }
-  try {
-    return JSON.parse(fs.readFileSync(AUTH_FILE, 'utf8'));
-  } catch (error) {
-    console.error('Could not read authentication data:', error.message);
-    return null;
-  }
+  return securityManager.readRecord();
 }
 
 function writeAuthRecord(record) {
-  const temporaryFile = AUTH_FILE + '.tmp';
-  fs.writeFileSync(temporaryFile, JSON.stringify(record), { mode: 0o600 });
-  fs.renameSync(temporaryFile, AUTH_FILE);
-  fs.chmodSync(AUTH_FILE, 0o600);
+  securityManager.writeRecord(record);
 }
 
-function derivePassword(password, salt) {
-  return crypto.scryptSync(password, salt, 64).toString('hex');
+function initialSetupRequired(authRecord) {
+  return Boolean(
+    authRecord && authRecord.initialSetup &&
+    authRecord.initialSetup.schemaVersion === INITIAL_SETUP_SCHEMA_VERSION &&
+    authRecord.initialSetup.status === 'pending'
+  );
 }
 
-function passwordMatches(password, authRecord) {
-  if (!authRecord || !authRecord.salt || !authRecord.passwordHash) {
-    return false;
-  }
-  const actual = Buffer.from(derivePassword(password, authRecord.salt), 'hex');
-  const expected = Buffer.from(authRecord.passwordHash, 'hex');
-  return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+function localePreferencesForSession(authRecord, session) {
+  return session ? publicLocalePreferences(authRecord) : null;
 }
 
 function loginKey(req) {
@@ -458,6 +642,701 @@ function hostCommandArgs(command, cwd) {
     executable: '/bin/sh',
     args: ['-lc', command]
   };
+}
+
+function mountedHostPath(hostPath) {
+  const normalized = path.posix.resolve('/', String(hostPath || ''));
+  const mounted = path.resolve(HOST_ROOT, '.' + normalized);
+  if (mounted !== HOST_ROOT && !mounted.startsWith(HOST_ROOT + path.sep)) {
+    throw new Error('Host path escapes the mounted server root');
+  }
+  return mounted;
+}
+
+function installBundledCodexSkill(skillName, executableScripts = []) {
+  const source = [
+    path.join(__dirname, 'skills', skillName),
+    path.join(__dirname, '..', 'skills', skillName)
+  ].find((candidate) => fs.existsSync(path.join(candidate, 'SKILL.md')));
+  if (!source) return { installed: false, reason: 'bundle-unavailable' };
+  const skillsRoot = mountedHostPath(path.posix.join(CODEX_HOST_CONFIG_HOME, 'skills'));
+  const destination = path.join(skillsRoot, skillName);
+  if (fs.existsSync(destination)) return { installed: false, reason: 'already-present', destination };
+  fs.mkdirSync(skillsRoot, { recursive: true, mode: 0o700 });
+  fs.chmodSync(skillsRoot, 0o700);
+  const temporary = destination + '.tmp-' + process.pid + '-' + crypto.randomBytes(4).toString('hex');
+  try {
+    fs.cpSync(source, temporary, { recursive: true, errorOnExist: true, force: false });
+    fs.chmodSync(temporary, 0o700);
+    for (const script of executableScripts) {
+      fs.chmodSync(path.join(temporary, 'scripts', script), 0o755);
+    }
+    fs.renameSync(temporary, destination);
+    return { installed: true, reason: null, destination };
+  } catch (error) {
+    try {
+      fs.rmSync(temporary, { recursive: true, force: true });
+    } catch {
+      // The temporary path may not exist when the copy fails early.
+    }
+    throw error;
+  }
+}
+
+function installBundledCodexSkills() {
+  return [
+    installBundledCodexSkill('foxos-notifications', ['notify.py']),
+    installBundledCodexSkill('foxos-checklist', ['task.py'])
+  ];
+}
+
+function codexHostEnvironment() {
+  return {
+    HOME: CODEX_HOST_HOME,
+    CODEX_HOME: CODEX_HOST_CONFIG_HOME,
+    CODEX_INSTALL_DIR: path.posix.dirname(CODEX_HOST_BINARY),
+    CODEX_NON_INTERACTIVE: '1',
+    PATH: path.posix.dirname(CODEX_HOST_BINARY) + ':/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+    LANG: 'C.UTF-8',
+    LC_ALL: 'C.UTF-8',
+    LOGNAME: 'root',
+    SHELL: '/bin/sh',
+    TERM: 'xterm-256color',
+    USER: 'root'
+  };
+}
+
+function geminiHostEnvironment(apiKey = null) {
+  return {
+    HOME: GEMINI_HOST_HOME,
+    GEMINI_INSTALL_PREFIX,
+    PATH: GEMINI_INSTALL_PREFIX + '/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+    LANG: 'C.UTF-8',
+    LC_ALL: 'C.UTF-8',
+    LOGNAME: 'root',
+    NO_COLOR: '1',
+    SHELL: '/bin/sh',
+    TERM: 'xterm-256color',
+    USER: 'root',
+    ...(apiKey ? { GEMINI_API_KEY: apiKey } : {})
+  };
+}
+
+function antigravityHostEnvironment(remoteLogin = false) {
+  return {
+    HOME: ANTIGRAVITY_HOST_HOME,
+    ANTIGRAVITY_INSTALL_DIR,
+    PATH: ANTIGRAVITY_INSTALL_DIR + ':/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+    LANG: 'C.UTF-8',
+    LC_ALL: 'C.UTF-8',
+    LOGNAME: 'root',
+    NO_COLOR: '1',
+    SHELL: '/bin/sh',
+    TERM: 'xterm-256color',
+    USER: 'root',
+    ...(remoteLogin ? {
+      COLUMNS: '4096',
+      LINES: '60',
+      SSH_CLIENT: '127.0.0.1 1 22',
+      SSH_CONNECTION: '127.0.0.1 1 127.0.0.1 22',
+      SSH_TTY: '/dev/pts/0'
+    } : {})
+  };
+}
+
+function validateCodexHostPaths() {
+  const paths = [
+    CODEX_HOST_STATE_ROOT,
+    CODEX_HOST_HOME,
+    CODEX_HOST_CONFIG_HOME,
+    CODEX_HOST_BINARY,
+    CODEX_MEMORY_VAULT
+  ];
+  if (paths.some((entry) => (
+    !entry.startsWith('/') || entry === '/' || entry.length > 512 || /[\r\n\0]/.test(entry)
+  ))) {
+    throw new Error('FOXOS_CODEX_HOST_STATE_ROOT must be a safe absolute host path');
+  }
+}
+
+validateCodexHostPaths();
+
+function validateGeminiHostPaths() {
+  const paths = [GEMINI_HOST_STATE_ROOT, GEMINI_HOST_HOME, GEMINI_INSTALL_PREFIX, GEMINI_HOST_BINARY];
+  if (paths.some((entry) => (
+    !entry.startsWith('/') || entry === '/' || entry.length > 512 || /[\r\n\0]/.test(entry)
+  ))) {
+    throw new Error('FOXOS_GEMINI_HOST_STATE_ROOT must be a safe absolute host path');
+  }
+}
+
+validateGeminiHostPaths();
+
+function validateAntigravityHostPaths() {
+  const paths = [
+    ANTIGRAVITY_HOST_STATE_ROOT,
+    ANTIGRAVITY_HOST_HOME,
+    ANTIGRAVITY_INSTALL_DIR,
+    ANTIGRAVITY_HOST_BINARY,
+    ANTIGRAVITY_SETTINGS_FILE
+  ];
+  if (paths.some((entry) => (
+    !entry.startsWith('/') || entry === '/' || entry.length > 512 || /[\r\n\0]/.test(entry)
+  ))) {
+    throw new Error('FOXOS_ANTIGRAVITY_HOST_STATE_ROOT must be a safe absolute host path');
+  }
+}
+
+validateAntigravityHostPaths();
+
+function exactHostExecutableInvocation(hostExecutable, args) {
+  if (HOST_EXECUTION === 'nsenter') {
+    return {
+      executable: 'nsenter',
+      args: [
+        '--target', '1', '--mount', '--uts', '--ipc', '--net', '--pid',
+        // nsenter opens --wd before applying --root. Point both at the host
+        // root so getcwd() remains valid after chroot; --wd=/ leaves the
+        // process in the agent container's now-unreachable root directory.
+        '--root=/proc/1/root', '--wd=/proc/1/root', '--', hostExecutable, ...args
+      ],
+      cwd: '/'
+    };
+  }
+  return {
+    executable: mountedHostPath(hostExecutable),
+    args,
+    cwd: mountedHostPath('/')
+  };
+}
+
+function readCodexReviewConnectorPaths() {
+  let payload;
+  try {
+    payload = JSON.parse(fs.readFileSync(CODEX_REVIEW_CONNECTORS_FILE, 'utf8'));
+  } catch (error) {
+    if (error.code === 'ENOENT') return {};
+    console.error('Codex review connector configuration is invalid.');
+    return {};
+  }
+  const allowed = ['python', 'gmail', 'chat', 'telegram', 'whatsapp'];
+  if (
+    !payload || payload.schemaVersion !== 1 ||
+    Object.keys(payload).some((key) => key !== 'schemaVersion' && !allowed.includes(key))
+  ) {
+    console.error('Codex review connector configuration is invalid.');
+    return {};
+  }
+  const paths = {};
+  for (const key of allowed) {
+    const value = payload[key];
+    if (value === undefined || value === null || value === '') continue;
+    if (
+      typeof value !== 'string' || !path.posix.isAbsolute(value) || value === '/' ||
+      value.length > 512 || /[\r\n\0]/.test(value)
+    ) {
+      console.error('Codex review connector configuration is invalid.');
+      return {};
+    }
+    paths[key] = value;
+  }
+  return paths;
+}
+
+function runCodexReviewHostJson(hostExecutable, args, { timeoutMs = 120_000, maxBytes = 4 * 1024 * 1024 } = {}) {
+  if (
+    typeof hostExecutable !== 'string' || !path.posix.isAbsolute(hostExecutable) ||
+    !Array.isArray(args) || args.some((entry) => (
+      typeof entry !== 'string' || entry.length > 8_192 || /[\r\n\0]/.test(entry)
+    )) || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 300_000 ||
+    !Number.isSafeInteger(maxBytes) || maxBytes < 1_024 || maxBytes > 8 * 1024 * 1024
+  ) {
+    const error = new Error('Codex review host request is invalid');
+    error.code = 'codex-review-source-invalid';
+    return Promise.reject(error);
+  }
+  const invocation = exactHostExecutableInvocation(hostExecutable, args);
+  return new Promise((resolve, reject) => {
+    execFile(invocation.executable, invocation.args, {
+      cwd: invocation.cwd,
+      timeout: timeoutMs,
+      maxBuffer: maxBytes,
+      windowsHide: true
+    }, (error, stdout) => {
+      if (error) {
+        const failure = new Error('Codex review source command failed');
+        failure.code = error.killed
+          ? 'codex-review-source-timeout'
+          : 'codex-review-source-unavailable';
+        return reject(failure);
+      }
+      let payload;
+      try {
+        payload = JSON.parse(String(stdout || ''));
+      } catch {
+        const failure = new Error('Codex review source returned invalid JSON');
+        failure.code = 'codex-review-source-invalid';
+        return reject(failure);
+      }
+      resolve(payload);
+    });
+  });
+}
+
+function hostRootShellInvocation(command) {
+  if (HOST_EXECUTION === 'nsenter') {
+    return {
+      executable: 'nsenter',
+      args: [
+        '--target', '1', '--mount', '--uts', '--ipc', '--net', '--pid',
+        '--root=/proc/1/root', '--wd=/proc/1/root', '--', '/bin/sh', '-lc', command
+      ],
+      cwd: '/'
+    };
+  }
+  return {
+    executable: '/bin/sh',
+    args: ['-lc', command],
+    cwd: mountedHostPath('/')
+  };
+}
+
+async function inspectHostCodexCli() {
+  // The official installer creates an absolute host symlink. Checking that
+  // symlink through /host makes Node resolve its target inside the agent
+  // container, which incorrectly reports a successful host install as absent.
+  // Execute the binary in the host namespace; its exit status is the source of
+  // truth for both existence and executability.
+  const invocation = exactHostExecutableInvocation(CODEX_HOST_BINARY, ['--version']);
+  return new Promise((resolve) => {
+    execFile(invocation.executable, invocation.args, {
+      cwd: invocation.cwd,
+      env: codexHostEnvironment(),
+      timeout: 15000,
+      maxBuffer: 64 * 1024,
+      windowsHide: true
+    }, (error, stdout) => {
+      resolve({
+        installed: !error,
+        version: !error ? String(stdout || '').trim().slice(0, 120) || null : null
+      });
+    });
+  });
+}
+
+async function inspectHostCodexAccount() {
+  const invocation = exactHostExecutableInvocation(CODEX_HOST_BINARY, ['login', 'status']);
+  return new Promise((resolve) => {
+    execFile(invocation.executable, invocation.args, {
+      cwd: invocation.cwd,
+      env: codexHostEnvironment(),
+      timeout: 15000,
+      maxBuffer: 64 * 1024,
+      windowsHide: true
+    }, (error, stdout, stderr) => {
+      const output = String(stdout || '') + String(stderr || '');
+      resolve({
+        connected: !error,
+        authMode: !error && /chatgpt/i.test(output) ? 'chatgpt' : null
+      });
+    });
+  });
+}
+
+async function inspectHostGeminiCli() {
+  const invocation = exactHostExecutableInvocation(GEMINI_HOST_BINARY, ['--version']);
+  return new Promise((resolve) => {
+    execFile(invocation.executable, invocation.args, {
+      cwd: invocation.cwd,
+      env: geminiHostEnvironment(),
+      timeout: 15000,
+      maxBuffer: 64 * 1024,
+      windowsHide: true
+    }, (error, stdout) => {
+      resolve({
+        installed: !error,
+        version: !error ? String(stdout || '').trim().slice(0, 120) || null : null
+      });
+    });
+  });
+}
+
+async function inspectHostAntigravityCli() {
+  const invocation = exactHostExecutableInvocation(ANTIGRAVITY_HOST_BINARY, ['--version']);
+  return new Promise((resolve) => {
+    execFile(invocation.executable, invocation.args, {
+      cwd: invocation.cwd,
+      env: antigravityHostEnvironment(),
+      timeout: 15_000,
+      maxBuffer: 64 * 1024,
+      windowsHide: true
+    }, (error, stdout) => {
+      resolve({
+        installed: !error,
+        version: !error ? String(stdout || '').trim().slice(0, 120) || null : null
+      });
+    });
+  });
+}
+
+function installHostAntigravityCli() {
+  const script = [
+    'set -eu',
+    'umask 077',
+    'install -d -m 700 "$HOME" "$ANTIGRAVITY_INSTALL_DIR"',
+    'if test -x "$ANTIGRAVITY_INSTALL_DIR/agy"; then',
+    '  "$ANTIGRAVITY_INSTALL_DIR/agy" update',
+    'else',
+    '  antigravity_tmp="$(mktemp -d /tmp/foxos-antigravity-install.XXXXXX)"',
+    '  trap \'rm -f -- "$antigravity_tmp/install.sh"; rmdir -- "$antigravity_tmp" 2>/dev/null || true\' EXIT HUP INT TERM',
+    '  curl --fail --silent --show-error --location --proto \'=https\' --tlsv1.2 \\',
+    '    --output "$antigravity_tmp/install.sh" "https://antigravity.google/cli/install.sh"',
+    '  test -s "$antigravity_tmp/install.sh"',
+    '  /bin/bash "$antigravity_tmp/install.sh" --dir "$ANTIGRAVITY_INSTALL_DIR"',
+    'fi',
+    'test -x "$ANTIGRAVITY_INSTALL_DIR/agy"',
+    '"$ANTIGRAVITY_INSTALL_DIR/agy" --version >/dev/null'
+  ].join('\n');
+  const invocation = hostRootShellInvocation(script);
+  return new Promise((resolve, reject) => {
+    execFile(invocation.executable, invocation.args, {
+      cwd: invocation.cwd,
+      env: antigravityHostEnvironment(),
+      timeout: 5 * 60 * 1000,
+      maxBuffer: 512 * 1024,
+      windowsHide: true
+    }, (error) => {
+      if (error) {
+        return reject(new AntigravityConnectionError(
+          'Antigravity CLI sunucuya kurulamadı. Sunucu ağını ve resmi Google kurulum hizmetini kontrol edin.',
+          503,
+          'antigravity-cli-install-failed'
+        ));
+      }
+      resolve();
+    });
+  });
+}
+
+function antigravityUsageInvocation() {
+  return exactHostExecutableInvocation(ANTIGRAVITY_HOST_BINARY, [
+    '--output-format', 'json',
+    '--print-timeout', '20s',
+    '--print', '/usage'
+  ]);
+}
+
+function spawnHostAntigravityLogin() {
+  const shellQuote = (value) => "'" + String(value).replaceAll("'", "'\"'\"'") + "'";
+  const command = 'stty cols 4096 rows 60; exec ' + shellQuote(ANTIGRAVITY_HOST_BINARY);
+  const invocation = exactHostExecutableInvocation('/usr/bin/script', [
+    '-qefc',
+    command,
+    '/dev/null'
+  ]);
+  const child = spawn(invocation.executable, invocation.args, {
+    cwd: invocation.cwd,
+    detached: true,
+    env: antigravityHostEnvironment(true),
+    stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true
+  });
+  const killDirectChild = child.kill.bind(child);
+  child.kill = (signal = 'SIGTERM') => {
+    let groupSignalled = false;
+    if (Number.isInteger(child.pid) && child.pid > 1) {
+      try {
+        process.kill(-child.pid, signal);
+        groupSignalled = true;
+      } catch (error) {
+        if (error.code !== 'ESRCH') throw error;
+      }
+    }
+    let directSignalled = false;
+    try { directSignalled = killDirectChild(signal); } catch { /* The group signal may have won the race. */ }
+    return groupSignalled || directSignalled;
+  };
+  let selectedGoogleOauth = false;
+  let menuOutput = '';
+  const selectGoogleOauth = (chunk) => {
+    if (selectedGoogleOauth) return;
+    menuOutput = (menuOutput + String(chunk || '')).slice(-16 * 1024)
+      .replace(/\x1b\[[0-?]*[ -\/]*[@-~]/g, '');
+    if (!/>\s*1\.\s*Google OAuth/i.test(menuOutput)) return;
+    selectedGoogleOauth = true;
+    setTimeout(() => {
+      try { child.stdin.write('\r'); } catch { /* The TUI may already have exited. */ }
+    }, 100).unref?.();
+  };
+  child.stdout.on('data', selectGoogleOauth);
+  child.stderr.on('data', selectGoogleOauth);
+  return child;
+}
+
+function inspectHostAntigravityAccount() {
+  const invocation = antigravityUsageInvocation();
+  return new Promise((resolve, reject) => {
+    execFile(invocation.executable, invocation.args, {
+      cwd: invocation.cwd,
+      env: antigravityHostEnvironment(true),
+      timeout: 10_000,
+      maxBuffer: 256 * 1024,
+      windowsHide: true
+    }, (error, stdout, stderr) => {
+      const output = String(stdout || '') + '\n' + String(stderr || '');
+      const payload = finalJsonPayload(output);
+      if (!error && payload && payload.status !== 'ERROR' && !payload.error) {
+        return resolve({ connected: true, authMode: 'google-oauth' });
+      }
+      if (
+        /Authentication required|authentication failed|accounts\.google\.com\/o\/oauth2\/auth/i.test(output)
+      ) {
+        return resolve({ connected: false, authMode: null });
+      }
+      reject(new AntigravityConnectionError(
+        error && error.killed
+          ? 'Antigravity hesap kontrolü zaman aşımına uğradı.'
+          : 'Antigravity hesap durumu okunamadı.',
+        error && error.killed ? 504 : 502,
+        error && error.killed
+          ? 'antigravity-account-verification-timeout'
+          : 'antigravity-account-verification-failed'
+      ));
+    });
+  });
+}
+
+function readHostAntigravityUsage() {
+  const invocation = antigravityUsageInvocation();
+  return new Promise((resolve, reject) => {
+    execFile(invocation.executable, invocation.args, {
+      cwd: invocation.cwd,
+      env: antigravityHostEnvironment(true),
+      timeout: 30_000,
+      maxBuffer: 256 * 1024,
+      windowsHide: true
+    }, (error, stdout, stderr) => {
+      const output = String(stdout || '') + '\n' + String(stderr || '');
+      const payload = finalJsonPayload(output);
+      if (!error && payload && payload.status !== 'ERROR' && !payload.error) return resolve(payload);
+      if (/Authentication required|authentication failed|accounts\.google\.com\/o\/oauth2\/auth/i.test(output)) {
+        return reject(new AntigravityConnectionError(
+          'Antigravity hesabı bağlı değil.',
+          409,
+          'antigravity-account-required'
+        ));
+      }
+      reject(new AntigravityConnectionError(
+        error && error.killed
+          ? 'Antigravity kullanım bilgisi zaman aşımına uğradı.'
+          : 'Antigravity kullanım bilgisi okunamadı.',
+        error && error.killed ? 504 : 502,
+        error && error.killed
+          ? 'antigravity-usage-timeout'
+          : 'antigravity-usage-unavailable'
+      ));
+    });
+  });
+}
+
+function logoutHostAntigravityAccount() {
+  const invocation = exactHostExecutableInvocation(ANTIGRAVITY_HOST_BINARY, [
+    '--output-format', 'json',
+    '--print-timeout', '20s',
+    '--print', '/logout'
+  ]);
+  return new Promise((resolve, reject) => {
+    execFile(invocation.executable, invocation.args, {
+      cwd: invocation.cwd,
+      env: antigravityHostEnvironment(),
+      timeout: 30_000,
+      maxBuffer: 256 * 1024,
+      windowsHide: true
+    }, (error) => {
+      if (error && error.killed) {
+        return reject(new AntigravityConnectionError(
+          'Antigravity hesabından çıkış zaman aşımına uğradı.',
+          504,
+          'antigravity-logout-timeout'
+        ));
+      }
+      // The following account inspection is authoritative. Some releases exit
+      // non-zero after deleting the active session, so no output is trusted here.
+      resolve();
+    });
+  });
+}
+
+function installHostGeminiCli() {
+  const script = [
+    'set -eu',
+    'umask 077',
+    'install -d -m 700 "$HOME" "$GEMINI_INSTALL_PREFIX"',
+    'command -v node >/dev/null',
+    'command -v npm >/dev/null',
+    'node -e \'process.exit(Number(process.versions.node.split(".")[0]) >= 20 ? 0 : 1)\'',
+    'gemini_version="$(npm view --silent @google/gemini-cli@latest version)"',
+    'printf "%s" "$gemini_version" | grep -Eq \'^[0-9]+\\.[0-9]+\\.[0-9]+([-.][0-9A-Za-z.-]+)?$\'',
+    'npm install --global --prefix "$GEMINI_INSTALL_PREFIX" --no-audit --no-fund --loglevel=error "@google/gemini-cli@$gemini_version"',
+    'test -x "$GEMINI_INSTALL_PREFIX/bin/gemini"',
+    '"$GEMINI_INSTALL_PREFIX/bin/gemini" --version >/dev/null'
+  ].join('\n');
+  const invocation = hostRootShellInvocation(script);
+  return new Promise((resolve, reject) => {
+    execFile(invocation.executable, invocation.args, {
+      cwd: invocation.cwd,
+      env: geminiHostEnvironment(),
+      timeout: 5 * 60 * 1000,
+      maxBuffer: 512 * 1024,
+      windowsHide: true
+    }, (error) => {
+      if (error) {
+        return reject(new GeminiConnectionError(
+          'Gemini CLI sunucuya kurulamadı. Node.js 20+, npm ve sunucu ağını kontrol edin.',
+          503,
+          'gemini-cli-install-failed'
+        ));
+      }
+      resolve();
+    });
+  });
+}
+
+function verifyHostGeminiCredential(apiKey) {
+  const script = [
+    'set -eu',
+    'cd "$HOME"',
+    'exec "$GEMINI_INSTALL_PREFIX/bin/gemini" \\',
+    '  --skip-trust \\',
+    '  --approval-mode plan \\',
+    '  --extensions none \\',
+    '  --output-format json \\',
+    '  --prompt "Reply with exactly FOXOS_GEMINI_CONNECTED. Do not use tools."'
+  ].join('\n');
+  const invocation = hostRootShellInvocation(script);
+  return new Promise((resolve, reject) => {
+    execFile(invocation.executable, invocation.args, {
+      cwd: invocation.cwd,
+      env: geminiHostEnvironment(apiKey),
+      timeout: 90_000,
+      maxBuffer: 512 * 1024,
+      windowsHide: true
+    }, (error, stdout) => {
+      if (error) {
+        return reject(new GeminiConnectionError(
+          error.killed
+            ? 'Gemini CLI doğrulaması zaman aşımına uğradı.'
+            : 'Gemini API anahtarı veya hesabın erişim türü doğrulanamadı.',
+          error.killed ? 504 : 409,
+          error.killed ? 'gemini-verification-timeout' : 'gemini-api-key-verification-failed'
+        ));
+      }
+      let payload;
+      try {
+        payload = JSON.parse(String(stdout || '').trim());
+      } catch {
+        return reject(new GeminiConnectionError(
+          'Gemini CLI doğrulama yanıtı geçersiz.',
+          502,
+          'gemini-verification-response-invalid'
+        ));
+      }
+      if (payload.error || typeof payload.response !== 'string' || !payload.response.trim()) {
+        return reject(new GeminiConnectionError(
+          'Gemini API anahtarı CLI tarafından doğrulanamadı.',
+          409,
+          'gemini-api-key-verification-failed'
+        ));
+      }
+      resolve({ verified: true });
+    });
+  });
+}
+
+function installHostCodexCli() {
+  const script = [
+    'set -eu',
+    'umask 077',
+    'install -d -m 700 "$HOME" "$CODEX_HOME" "$CODEX_INSTALL_DIR"',
+    'installer="$(mktemp)"',
+    'trap \'rm -f "$installer"\' EXIT HUP INT TERM',
+    'curl --proto "=https" --tlsv1.2 --fail --silent --show-error --location https://chatgpt.com/codex/install.sh -o "$installer"',
+    'sh "$installer"',
+    'test -x "$CODEX_INSTALL_DIR/codex"',
+    '"$CODEX_INSTALL_DIR/codex" app-server daemon bootstrap >/dev/null',
+    'test -S "$CODEX_HOME/app-server-control/app-server-control.sock"'
+  ].join('\n');
+  const invocation = hostRootShellInvocation(script);
+  return new Promise((resolve, reject) => {
+    execFile(invocation.executable, invocation.args, {
+      cwd: invocation.cwd,
+      env: codexHostEnvironment(),
+      timeout: 5 * 60 * 1000,
+      maxBuffer: 512 * 1024,
+      windowsHide: true
+    }, (error) => {
+      if (error) {
+        return reject(new CodexConnectionError(
+          'Codex CLI sunucuya kurulamadı. Sunucu ağını ve Linux araçlarını kontrol edin.',
+          503,
+          'codex-cli-install-failed'
+        ));
+      }
+      resolve();
+    });
+  });
+}
+
+function prepareHostCodexAppServer() {
+  const invocation = hostRootShellInvocation(codexDaemonEnsureScript());
+  return new Promise((resolve, reject) => {
+    execFile(invocation.executable, invocation.args, {
+      cwd: invocation.cwd,
+      env: codexHostEnvironment(),
+      timeout: 30000,
+      maxBuffer: 64 * 1024,
+      windowsHide: true
+    }, (error) => {
+      if (error) {
+        return reject(new CodexConnectionError(
+          'Codex host daemon başlatılamadı.',
+          503,
+          'codex-app-server-unavailable'
+        ));
+      }
+      resolve();
+    });
+  });
+}
+
+function spawnHostCodexAppServer() {
+  return createCodexDaemonTransport({
+    socketPath: mountedHostPath(CODEX_HOST_DAEMON_SOCKET)
+  });
+}
+
+function stopHostCodexAppServer() {
+  const invocation = exactHostExecutableInvocation(CODEX_HOST_BINARY, [
+    'app-server', 'daemon', 'stop'
+  ]);
+  return new Promise((resolve, reject) => {
+    execFile(invocation.executable, invocation.args, {
+      cwd: invocation.cwd,
+      env: codexHostEnvironment(),
+      timeout: 30000,
+      maxBuffer: 64 * 1024,
+      windowsHide: true
+    }, (error) => {
+      if (error) {
+        return reject(new CodexConnectionError(
+          'Codex host daemon durdurulamadı.',
+          503,
+          'codex-app-server-stop-failed'
+        ));
+      }
+      resolve();
+    });
+  });
 }
 
 function runHostCommand(command, cwd = '/') {
@@ -732,6 +1611,181 @@ const dockerRequest = dockerClient.request;
 const encryptionStore = createEncryptionStore({ dataRoot: DATA_ROOT });
 const maintenanceSessionManager = createMaintenanceSessionManager({ dataRoot: DATA_ROOT });
 const desktopShortcutManager = createDesktopShortcutManager({ dataRoot: DATA_ROOT });
+const fileSearchManager = createFileSearchManager({
+  diskRoot: DISK_ROOT,
+  followedSymlinkRootNames: ['Masaüstü'],
+  allowedSymlinkTargetRoots: [HOST_ROOT]
+});
+const calendarManager = createCalendarManager({ dataRoot: DATA_ROOT });
+const calendarConnectionManager = createCalendarConnectionManager({
+  dataRoot: DATA_ROOT,
+  encryptionStore
+});
+const weatherManager = createWeatherManager({ dataRoot: DATA_ROOT });
+const notificationManager = createNotificationManager({ dataRoot: DATA_ROOT });
+const codexConnectionManager = createCodexConnectionManager({
+  dataRoot: DATA_ROOT,
+  inspectAccount: inspectHostCodexAccount,
+  inspectCli: inspectHostCodexCli,
+  installCli: installHostCodexCli,
+  prepareAppServer: prepareHostCodexAppServer,
+  spawnAppServer: spawnHostCodexAppServer,
+  stopAppServer: stopHostCodexAppServer,
+  memoryVaultPath: CODEX_MEMORY_VAULT
+});
+const taskManager = createTaskManager({
+  dataRoot: DATA_ROOT,
+  notificationManager,
+  onError: (error) => console.error('Checklist reminder pass failed:', error.message)
+});
+const codexReviewSources = createCodexReviewSources({
+  runHostJson: runCodexReviewHostJson,
+  paths: readCodexReviewConnectorPaths()
+});
+const codexChecklistReviewManager = createCodexChecklistReviewManager({
+  dataRoot: DATA_ROOT,
+  taskManager,
+  notificationManager,
+  sourceAdapter: codexReviewSources,
+  codexConnectionManager,
+  onError: (error) => console.error('Codex checklist review failed:', error.code || error.message)
+});
+const webPushManager = createWebPushManager({
+  dataRoot: DATA_ROOT,
+  notificationManager
+});
+const telegramNotificationManager = createTelegramNotificationManager({
+  dataRoot: DATA_ROOT,
+  encryptionStore,
+  notificationManager,
+  taskManager
+});
+notificationManager.ensureIngestToken();
+notificationManager.onNotification((notification) => {
+  webPushManager.deliver(notification).catch((error) => {
+    console.error('Web Push delivery failed:', error.message);
+  });
+  telegramNotificationManager.deliver(notification).catch((error) => {
+    console.error('Telegram notification delivery failed:', error.message);
+  });
+});
+notificationManager.onStatus((notification) => {
+  telegramNotificationManager.syncStatus(notification).catch((error) => {
+    console.error('Telegram notification status sync failed:', error.code || 'telegram-message-sync-failed');
+  });
+});
+telegramNotificationManager.start();
+telegramNotificationManager.reconcileCommands().catch((error) => {
+  console.error('Telegram command reconciliation failed:', error.code || 'telegram-command-reconciliation-failed');
+});
+taskManager.start();
+codexChecklistReviewManager.start();
+
+function calendarPublicBaseUrl(req) {
+  const configured = String(process.env.FOXOS_ROUTE_BASE_URL || '').trim();
+  const candidate = configured || `${req.protocol}://${req.get('host')}`;
+  let url;
+  try {
+    url = new URL(candidate);
+  } catch {
+    throw new CalendarError('Takvim OAuth genel adresi geçersiz.', 503, 'calendar-oauth-base-url-invalid');
+  }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) {
+    throw new CalendarError('Takvim OAuth genel adresi geçersiz.', 503, 'calendar-oauth-base-url-invalid');
+  }
+  return url.origin;
+}
+
+function calendarRedirectUri(req, providerId) {
+  return new URL(`/oauth/calendar/${encodeURIComponent(providerId)}/callback`, calendarPublicBaseUrl(req)).toString();
+}
+
+function calendarRedirectUris(req) {
+  return {
+    google: calendarRedirectUri(req, 'google'),
+    microsoft: calendarRedirectUri(req, 'microsoft')
+  };
+}
+
+function sendCalendarError(res, error) {
+  const status = error instanceof CalendarError ? error.statusCode : 500;
+  if (status >= 500 && !(error instanceof CalendarError)) {
+    console.error('Calendar operation failed:', error.message);
+  }
+  return res.status(status).json({
+    error: status >= 500 && !(error instanceof CalendarError)
+      ? 'Takvim işlemi tamamlanamadı.'
+      : error.message,
+    code: error.code || 'calendar-operation-failed'
+  });
+}
+
+function sendWeatherError(res, error) {
+  const status = error instanceof WeatherError ? error.statusCode : 500;
+  if (status >= 500 && !(error instanceof WeatherError)) {
+    console.error('Weather operation failed:', error.message);
+  }
+  return res.status(status).json({
+    error: status >= 500 && !(error instanceof WeatherError)
+      ? 'Hava durumu işlemi tamamlanamadı.'
+      : error.message,
+    code: error.code || 'weather-operation-failed'
+  });
+}
+
+function sendNotificationError(res, error) {
+  const status = error instanceof NotificationError ? error.statusCode : 500;
+  if (status >= 500 && !(error instanceof NotificationError)) {
+    console.error('Notification operation failed:', error.message);
+  }
+  return res.status(status).json({
+    error: status >= 500 && !(error instanceof NotificationError)
+      ? 'Bildirim işlemi tamamlanamadı.'
+      : error.message,
+    code: error.code || 'notification-operation-failed'
+  });
+}
+
+function sendTaskError(res, error) {
+  const status = error instanceof TaskError ? error.statusCode : 500;
+  if (status >= 500 && !(error instanceof TaskError)) {
+    console.error('Checklist operation failed:', error.message);
+  }
+  return res.status(status).json({
+    error: status >= 500 && !(error instanceof TaskError)
+      ? 'Görev işlemi tamamlanamadı.'
+      : error.message,
+    code: error.code || 'task-operation-failed'
+  });
+}
+
+function sendCodexChecklistReviewError(res, error) {
+  const status = error instanceof CodexChecklistReviewError ? error.statusCode : 500;
+  if (status >= 500 && !(error instanceof CodexChecklistReviewError)) {
+    console.error('Codex checklist review operation failed:', error.message);
+  }
+  return res.status(status).json({
+    error: status >= 500 && !(error instanceof CodexChecklistReviewError)
+      ? 'Codex iş kontrolü tamamlanamadı.'
+      : error.message,
+    code: error.code || 'codex-review-operation-failed'
+  });
+}
+
+async function codexChecklistReviewStatus() {
+  const [review, connection] = await Promise.all([
+    Promise.resolve(codexChecklistReviewManager.status()),
+    codexConnectionManager.status()
+  ]);
+  return {
+    ...review,
+    codex: {
+      ready: connection.ready === true && connection.fullServer === true,
+      connected: connection.connected === true,
+      fullServer: connection.fullServer === true
+    }
+  };
+}
 
 function desktopShortcutPathForWorkspaceTarget(target) {
   const desktopDirectory = path.join(DISK_ROOT, DESKTOP_ROOT.slice(1));
@@ -825,6 +1879,49 @@ const backupManager = createBackupManager({
 const cloudflareConnectionManager = createCloudflareConnectionManager({
   dataRoot: DATA_ROOT,
   encryptionStore
+});
+const geminiConnectionManager = createGeminiConnectionManager({
+  dataRoot: DATA_ROOT,
+  encryptionStore,
+  inspectCli: inspectHostGeminiCli,
+  installCli: installHostGeminiCli,
+  verifyCredential: verifyHostGeminiCredential
+});
+const antigravityLoginController = createAntigravityLoginController({
+  spawnLogin: spawnHostAntigravityLogin,
+  authorizationCodeTerminator: '\r',
+  postSubmissionWaitMs: 12_000,
+  postTerminationWaitMs: 1500
+});
+const antigravityConnectionManager = createAntigravityConnectionManager({
+  dataRoot: DATA_ROOT,
+  settingsFile: mountedHostPath(ANTIGRAVITY_SETTINGS_FILE),
+  inspectCli: inspectHostAntigravityCli,
+  installCli: installHostAntigravityCli,
+  inspectAccount: inspectHostAntigravityAccount,
+  loginController: antigravityLoginController,
+  logoutAccount: logoutHostAntigravityAccount
+});
+const cliUsageManager = createCliUsageManager({
+  providers: [
+    {
+      id: 'codex',
+      name: 'Codex',
+      connection: () => codexConnectionManager.status(),
+      read: () => codexConnectionManager.readRateLimits(),
+      normalize: normalizeCodexRateLimits
+    },
+    {
+      id: 'antigravity-cli',
+      name: 'Antigravity',
+      connection: () => antigravityConnectionManager.status(),
+      read: readHostAntigravityUsage,
+      normalize: normalizeAntigravityUsage
+    }
+  ],
+  onError: (provider, error) => {
+    console.error('CLI usage refresh failed:', provider, error && error.code || 'cli-usage-unavailable');
+  }
 });
 const adoptionManager = createAdoptionManager({
   dataRoot: DATA_ROOT,
@@ -1213,7 +2310,9 @@ function sendConnectionError(res, error, action) {
   const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
   if (status >= 500) console.error(action + ':', error.message);
   res.status(status).json({
-    error: status >= 500 && !(error instanceof CloudflareConnectionError)
+    error: status >= 500 && !(error instanceof CloudflareConnectionError) &&
+      !(error instanceof CodexConnectionError) && !(error instanceof GeminiConnectionError) &&
+      !(error instanceof AntigravityConnectionError)
       ? 'Bağlantı işlemi tamamlanamadı'
       : error.message,
     code: error.code || 'connection-error'
@@ -1543,43 +2642,242 @@ async function getApplicationInventory() {
   };
 }
 
+function requireOwnerIngestToken(req, res, next) {
+  const authorization = String(req.get('authorization') || '');
+  const match = /^Bearer ([a-f0-9]{64})$/.exec(authorization);
+  if (!match || !notificationManager.authenticateIngestToken(match[1])) {
+    return res.status(401).json({ error: 'Owner ingest authentication required' });
+  }
+  next();
+}
+
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
+app.post('/api/notifications/ingest', requireOwnerIngestToken, (req, res) => {
+  try {
+    const notification = notificationManager.create(req.body);
+    res.status(201).json({ notification });
+  } catch (error) {
+    sendNotificationError(res, error);
+  }
+});
+
+app.post('/api/notifications/ingest/resolve', requireOwnerIngestToken, (req, res) => {
+  try {
+    const notification = notificationManager.resolveByDedupeKey(req.body);
+    res.json({ notification });
+  } catch (error) {
+    sendNotificationError(res, error);
+  }
+});
+
+app.get('/api/tasks/ingest', requireOwnerIngestToken, (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(taskManager.list({
+      status: req.query.status || 'open',
+      limit: req.query.limit === undefined ? 100 : Number(req.query.limit)
+    }));
+  } catch (error) {
+    sendTaskError(res, error);
+  }
+});
+
+app.post('/api/tasks/ingest', requireOwnerIngestToken, (req, res) => {
+  try {
+    const result = taskManager.create(req.body);
+    res.status(result.created ? 201 : 200).json(result);
+  } catch (error) {
+    sendTaskError(res, error);
+  }
+});
+
+app.patch('/api/tasks/ingest/:taskId', requireOwnerIngestToken, (req, res) => {
+  try {
+    res.json(taskManager.update(req.params.taskId, req.body));
+  } catch (error) {
+    sendTaskError(res, error);
+  }
+});
+
+app.post('/api/tasks/ingest/:taskId/complete', requireOwnerIngestToken, (req, res) => {
+  try {
+    res.json(taskManager.complete(req.params.taskId));
+  } catch (error) {
+    sendTaskError(res, error);
+  }
+});
+
+app.post('/api/tasks/ingest/:taskId/reopen', requireOwnerIngestToken, (req, res) => {
+  try {
+    res.json(taskManager.reopen(req.params.taskId));
+  } catch (error) {
+    sendTaskError(res, error);
+  }
+});
+
+app.post('/api/tasks/ingest/:taskId/snooze', requireOwnerIngestToken, (req, res) => {
+  try {
+    res.json(taskManager.snooze(req.params.taskId, req.body));
+  } catch (error) {
+    sendTaskError(res, error);
+  }
+});
+
+app.get('/api/tasks/codex-review/ingest', requireOwnerIngestToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ codexReview: await codexChecklistReviewStatus() });
+  } catch (error) {
+    sendCodexChecklistReviewError(res, error);
+  }
+});
+
+app.put('/api/tasks/codex-review/ingest', requireOwnerIngestToken, async (req, res) => {
+  try {
+    codexChecklistReviewManager.updateSettings(req.body || {});
+    res.json({ codexReview: await codexChecklistReviewStatus() });
+  } catch (error) {
+    sendCodexChecklistReviewError(res, error);
+  }
+});
+
+app.post('/api/tasks/codex-review/ingest/run', requireOwnerIngestToken, async (req, res) => {
+  try {
+    const result = await codexChecklistReviewManager.runNow();
+    res.json({ result, codexReview: await codexChecklistReviewStatus() });
+  } catch (error) {
+    sendCodexChecklistReviewError(res, error);
+  }
+});
+
+function passkeyContext(req) {
+  const configuredRPID = String(process.env.FOXOS_WEBAUTHN_RP_ID || process.env.FOXOS_DOMAIN || '').trim();
+  const candidateOrigin = String(req.get('origin') || `${req.protocol}://${req.get('host')}`).trim();
+  let origin;
+  try {
+    origin = new URL(candidateOrigin);
+  } catch {
+    throw new SecurityError('Passkey origin is invalid', 400, 'passkey-origin-invalid');
+  }
+  const rpID = configuredRPID || origin.hostname;
+  if (origin.hostname !== rpID && !origin.hostname.endsWith('.' + rpID)) {
+    throw new SecurityError('Passkey origin is not trusted', 403, 'passkey-origin-untrusted');
+  }
+  return { rpID, origin: origin.origin };
+}
+
+function sendSecurityError(res, error) {
+  const status = error instanceof SecurityError ? error.statusCode : 500;
+  if (status >= 500 && !(error instanceof SecurityError)) {
+    console.error('Security operation failed:', error.message);
+  }
+  res.status(status).json({
+    error: status >= 500 && !(error instanceof SecurityError)
+      ? 'Security operation failed'
+      : error.message,
+    code: error.code || 'security-operation-failed'
+  });
+}
+
+function closeRevokedTerminalSessions(removed) {
+  for (const item of removed || []) {
+    if (!item || typeof item.tokenHash !== 'string') continue;
+    for (const terminalManager of activeTerminalManagers) {
+      terminalManager.closeOwnerSessions(item.tokenHash);
+    }
+  }
+}
+
 app.get('/api/auth/status', (req, res) => {
   const authRecord = readAuthRecord();
   const session = getSession(req);
+  if (session) migrateLegacySessionCookie(res, session);
+  const security = authRecord ? securityManager.status() : null;
+  res.setHeader('Cache-Control', 'private, no-store');
   res.json({
     isSetup: Boolean(authRecord),
     authenticated: Boolean(session),
-    username: session ? session.username : authRecord ? authRecord.username : null
+    username: session ? session.username : authRecord ? authRecord.username : null,
+    onboardingRequired: Boolean(session && initialSetupRequired(authRecord)),
+    localePreferences: localePreferencesForSession(authRecord, session),
+    passkeyAvailable: Boolean(security && security.passkeys.length),
+    recoveryAvailable: Boolean(security && security.recovery.configured),
+    session: session ? {
+      id: session.id,
+      authMethod: session.authMethod,
+      expiresAt: new Date(session.expiresAt).toISOString(),
+      idleExpiresAt: new Date(session.idleExpiresAt).toISOString()
+    } : null
   });
 });
 
-app.post('/api/auth/setup', (req, res) => {
-  const username = typeof req.body.username === 'string' ? req.body.username.trim() : '';
-  const password = typeof req.body.password === 'string' ? req.body.password : '';
-  if (!username || password.length < 10) {
-    return res.status(400).json({ error: 'Use a username and a password of at least 10 characters' });
+app.post('/api/auth/setup', async (req, res) => {
+  const username = typeof (req.body && req.body.username) === 'string' ? req.body.username.trim() : '';
+  const password = typeof (req.body && req.body.password) === 'string' ? req.body.password : '';
+  const localeValidation = validateLocalePreferences(
+    req.body && req.body.localePreferences,
+    { defaultWhenMissing: true }
+  );
+  if (!username || username.length > 128) {
+    return res.status(400).json({ error: 'Use a valid owner name', code: 'username-invalid' });
+  }
+  const validation = validateNewPassword(password, { username });
+  if (!validation.ok) {
+    return res.status(400).json({
+      error: `Use a password of at least ${PASSWORD_MIN_LENGTH} characters`,
+      code: validation.code
+    });
+  }
+  if (!localeValidation.ok) {
+    return res.status(400).json({
+      error: 'Choose supported language and region settings',
+      code: localeValidation.code
+    });
   }
   if (readAuthRecord()) {
     return res.status(409).json({ error: 'FoxOS is already configured' });
   }
 
-  const salt = crypto.randomBytes(16).toString('hex');
+  const createdAt = new Date().toISOString();
+  const passwordCredential = await createPasswordCredential(password, { now: createdAt });
+  if (readAuthRecord()) {
+    return res.status(409).json({ error: 'FoxOS is already configured' });
+  }
   writeAuthRecord({
-    version: 2,
+    version: 4,
+    securitySchemaVersion: 1,
     username,
-    salt,
-    passwordHash: derivePassword(password, salt),
-    createdAt: new Date().toISOString()
+    password: passwordCredential,
+    webauthnUserId: crypto.randomBytes(32).toString('base64url'),
+    passkeys: [],
+    recovery: { salt: null, generatedAt: null, needsRotation: false, codes: [] },
+    localePreferences: createLocalePreferencesRecord(localeValidation.preferences, { now: createdAt }),
+    createdAt,
+    initialSetup: {
+      schemaVersion: INITIAL_SETUP_SCHEMA_VERSION,
+      status: 'pending',
+      startedAt: createdAt
+    }
   });
-  createSession(res, username);
-  res.status(201).json({ success: true, username });
+  const session = createSession(req, res, username, 'password');
+  securityManager.recordEvent({
+    type: 'owner-created',
+    method: 'password',
+    sessionId: session.id,
+    client: summarizeAuthClient(req)
+  });
+  res.status(201).json({
+    success: true,
+    username,
+    onboardingRequired: true,
+    localePreferences: localeValidation.preferences
+  });
 });
 
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
   const retryAfter = checkLoginRateLimit(req);
   if (retryAfter) {
     res.setHeader('Retry-After', String(retryAfter));
@@ -1591,15 +2889,133 @@ app.post('/api/auth/login', (req, res) => {
     return res.status(400).json({ error: 'FoxOS has not been configured' });
   }
 
-  const password = typeof req.body.password === 'string' ? req.body.password : '';
-  if (!passwordMatches(password, authRecord)) {
+  const password = typeof (req.body && req.body.password) === 'string' ? req.body.password : '';
+  const verification = await securityManager.verifyOwnerPassword(password, {
+    client: summarizeAuthClient(req)
+  });
+  if (!verification.matched) {
     recordFailedLogin(req);
+    securityManager.recordEvent({
+      type: 'login-failed',
+      success: false,
+      method: 'password',
+      client: summarizeAuthClient(req)
+    });
     return res.status(401).json({ error: 'Invalid password' });
   }
 
   loginAttempts.delete(loginKey(req));
-  createSession(res, authRecord.username);
-  res.json({ success: true, username: authRecord.username });
+  const session = createSession(req, res, authRecord.username, 'password');
+  securityManager.recordEvent({
+    type: 'login-succeeded',
+    method: 'password',
+    sessionId: session.id,
+    client: summarizeAuthClient(req)
+  });
+  res.json({
+    success: true,
+    username: authRecord.username,
+    onboardingRequired: initialSetupRequired(authRecord),
+    localePreferences: publicLocalePreferences(authRecord)
+  });
+});
+
+app.post('/api/auth/passkey/options', async (req, res) => {
+  const retryAfter = checkLoginRateLimit(req);
+  if (retryAfter) {
+    res.setHeader('Retry-After', String(retryAfter));
+    return res.status(429).json({ error: 'Too many login attempts. Try again later.' });
+  }
+  res.setHeader('Cache-Control', 'private, no-store');
+  try {
+    res.json(await securityManager.beginPasskeyAuthentication(passkeyContext(req)));
+  } catch (error) {
+    sendSecurityError(res, error);
+  }
+});
+
+app.post('/api/auth/passkey/verify', async (req, res) => {
+  const retryAfter = checkLoginRateLimit(req);
+  if (retryAfter) {
+    res.setHeader('Retry-After', String(retryAfter));
+    return res.status(429).json({ error: 'Too many login attempts. Try again later.' });
+  }
+  res.setHeader('Cache-Control', 'private, no-store');
+  try {
+    const result = await securityManager.finishPasskeyAuthentication({
+      ceremonyId: req.body && req.body.ceremonyId,
+      response: req.body && req.body.response,
+      context: passkeyContext(req),
+      metadata: { client: summarizeAuthClient(req) }
+    });
+    loginAttempts.delete(loginKey(req));
+    const session = createSession(req, res, result.username, 'passkey');
+    securityManager.recordEvent({
+      type: 'login-succeeded',
+      method: 'passkey',
+      sessionId: session.id,
+      client: summarizeAuthClient(req)
+    });
+    const authRecord = readAuthRecord();
+    res.json({
+      success: true,
+      username: result.username,
+      onboardingRequired: initialSetupRequired(authRecord),
+      localePreferences: publicLocalePreferences(authRecord)
+    });
+  } catch (error) {
+    recordFailedLogin(req);
+    securityManager.recordEvent({
+      type: 'login-failed',
+      success: false,
+      method: 'passkey',
+      client: summarizeAuthClient(req)
+    });
+    sendSecurityError(res, error);
+  }
+});
+
+app.post('/api/auth/recovery/reset-password', async (req, res) => {
+  const retryAfter = checkLoginRateLimit(req);
+  if (retryAfter) {
+    res.setHeader('Retry-After', String(retryAfter));
+    return res.status(429).json({ error: 'Too many recovery attempts. Try again later.' });
+  }
+  res.setHeader('Cache-Control', 'private, no-store');
+  try {
+    const result = await securityManager.resetPasswordWithRecovery(
+      req.body && req.body.code,
+      req.body && req.body.newPassword,
+      { client: summarizeAuthClient(req) }
+    );
+    loginAttempts.delete(loginKey(req));
+    const removed = sessionStore.removeAll();
+    closeRevokedTerminalSessions(removed);
+    const session = createSession(req, res, result.username, 'recovery');
+    securityManager.recordEvent({
+      type: 'login-succeeded',
+      method: 'recovery',
+      sessionId: session.id,
+      client: summarizeAuthClient(req)
+    });
+    const authRecord = readAuthRecord();
+    res.json({
+      success: true,
+      username: result.username,
+      onboardingRequired: initialSetupRequired(authRecord),
+      localePreferences: publicLocalePreferences(authRecord),
+      recoveryCodesNeedRotation: true
+    });
+  } catch (error) {
+    recordFailedLogin(req);
+    securityManager.recordEvent({
+      type: 'login-failed',
+      success: false,
+      method: 'recovery',
+      client: summarizeAuthClient(req)
+    });
+    sendSecurityError(res, error);
+  }
 });
 
 app.post('/api/auth/maintenance-session', (req, res) => {
@@ -1608,8 +3024,20 @@ app.post('/api/auth/maintenance-session', (req, res) => {
     const authRecord = readAuthRecord();
     if (!authRecord) return res.status(409).json({ error: 'FoxOS has not been configured' });
     maintenanceSessionManager.consume(req.body && req.body.token);
-    createSession(res, authRecord.username);
-    res.json({ success: true, username: authRecord.username, localOnly: true });
+    const session = createSession(req, res, authRecord.username, 'maintenance');
+    securityManager.recordEvent({
+      type: 'login-succeeded',
+      method: 'maintenance',
+      sessionId: session.id,
+      client: summarizeAuthClient(req)
+    });
+    res.json({
+      success: true,
+      username: authRecord.username,
+      localOnly: true,
+      onboardingRequired: initialSetupRequired(authRecord),
+      localePreferences: publicLocalePreferences(authRecord)
+    });
   } catch (error) {
     const status = Number.isInteger(error.statusCode) ? error.statusCode : 500;
     res.status(status).json({
@@ -1622,13 +3050,836 @@ app.post('/api/auth/maintenance-session', (req, res) => {
 });
 
 app.post('/api/auth/logout', requireAuth, (req, res) => {
+  securityManager.recordEvent({
+    type: 'logout',
+    method: req.session.authMethod,
+    sessionId: req.session.id,
+    client: summarizeAuthClient(req)
+  });
   clearSession(req, res);
   res.status(204).end();
 });
 
+app.get('/oauth/calendar/:provider/callback', async (req, res) => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  try {
+    await calendarConnectionManager.completeAuthorization(req.params.provider, {
+      state: req.query.state,
+      code: req.query.code,
+      error: req.query.error
+    });
+    res.status(200).type('html').send(`<!doctype html>
+<html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Takvim bağlandı</title></head>
+<body style="margin:0;min-height:100vh;display:grid;place-items:center;background:#111318;color:#f8fafc;font-family:system-ui,sans-serif">
+<main style="max-width:420px;padding:32px;text-align:center"><h1 style="font-size:22px">Takvim hesabı bağlandı</h1><p style="color:#a1a1aa;line-height:1.55">FoxOS Takvim artık bu hesabı gösterebilir. Bu pencereyi kapatabilirsiniz.</p></main>
+</body></html>`);
+  } catch (error) {
+    const status = error instanceof CalendarError ? error.statusCode : 500;
+    res.status(status).type('html').send(`<!doctype html>
+<html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Takvim bağlanamadı</title></head>
+<body style="margin:0;min-height:100vh;display:grid;place-items:center;background:#111318;color:#f8fafc;font-family:system-ui,sans-serif">
+<main style="max-width:440px;padding:32px;text-align:center"><h1 style="font-size:22px">Takvim hesabı bağlanamadı</h1><p style="color:#fca5a5;line-height:1.55">Bağlantı oturumu tamamlanmadı veya süresi doldu. Bu pencereyi kapatıp FoxOS’tan yeniden deneyin.</p></main>
+</body></html>`);
+  }
+});
+
 app.use('/api', requireAuth);
 
+app.get('/api/settings/locale', (req, res) => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.json({ localePreferences: publicLocalePreferences(readAuthRecord()) });
+});
+
+app.put('/api/settings/locale', (req, res) => {
+  const validation = validateLocalePreferences(req.body && req.body.localePreferences);
+  if (!validation.ok) {
+    return res.status(400).json({
+      error: 'Choose supported language and region settings',
+      code: validation.code
+    });
+  }
+  try {
+    const authRecord = readAuthRecord();
+    if (!authRecord) {
+      return res.status(409).json({ error: 'FoxOS has not been configured', code: 'locale-auth-missing' });
+    }
+    const localePreferences = createLocalePreferencesRecord(validation.preferences);
+    writeAuthRecord({ ...authRecord, localePreferences });
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ success: true, localePreferences: validation.preferences });
+  } catch (error) {
+    console.error('Could not save locale preferences:', error.message);
+    res.status(500).json({ error: 'Could not save language and region settings', code: 'locale-write-failed' });
+  }
+});
+
+async function verifySecurityPassword(req, res, password) {
+  const retryAfter = checkLoginRateLimit(req);
+  if (retryAfter) {
+    res.setHeader('Retry-After', String(retryAfter));
+    res.status(429).json({
+      error: 'Too many password attempts. Try again later.',
+      code: 'security-password-rate-limited'
+    });
+    return false;
+  }
+  const verification = await securityManager.verifyOwnerPassword(password, {
+    client: summarizeAuthClient(req),
+    sessionId: req.session.id
+  });
+  if (!verification.matched) {
+    recordFailedLogin(req);
+    securityManager.recordEvent({
+      type: 'login-failed',
+      success: false,
+      method: 'password',
+      sessionId: req.session.id,
+      client: summarizeAuthClient(req)
+    });
+    res.status(401).json({ error: 'Current password is invalid', code: 'current-password-invalid' });
+    return false;
+  }
+  loginAttempts.delete(loginKey(req));
+  return true;
+}
+
+app.get('/api/security/overview', (req, res) => {
+  const security = securityManager.status();
+  const sessions = sessionStore.list(req.session.token);
+  let secureTransport = false;
+  try {
+    secureTransport = passkeyContext(req).origin.startsWith('https://') && secureSessionCookies();
+  } catch {
+    // The overview stays available on the loopback maintenance path. Passkey
+    // ceremonies themselves still enforce the configured HTTPS origin.
+  }
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.json({
+    security,
+    posture: {
+      passkeyReady: security.passkeys.length > 0,
+      recoveryReady: security.recovery.configured && !security.recovery.needsRotation,
+      secureTransport,
+      activeSessionCount: sessions.length,
+      attentionRequired: !security.passkeys.length || !security.recovery.configured || security.recovery.needsRotation
+    },
+    passwordPolicy: {
+      minimumLength: PASSWORD_MIN_LENGTH,
+      maximumLength: 256,
+      compositionRules: false
+    },
+    sessions: sessions.slice(0, 3),
+    events: securityManager.listEvents(8)
+  });
+});
+
+app.get('/api/security/sessions', (req, res) => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.json({ sessions: sessionStore.list(req.session.token) });
+});
+
+app.delete('/api/security/sessions/:sessionId', (req, res) => {
+  if (req.params.sessionId === req.session.id) {
+    return res.status(409).json({ error: 'Use logout to end the current session', code: 'current-session-revoke' });
+  }
+  const removed = sessionStore.removeById(req.params.sessionId);
+  if (!removed.removed) {
+    return res.status(404).json({ error: 'Session was not found', code: 'session-not-found' });
+  }
+  closeRevokedTerminalSessions([removed]);
+  securityManager.recordEvent({
+    type: 'session-revoked',
+    method: req.session.authMethod,
+    sessionId: req.session.id,
+    client: summarizeAuthClient(req),
+    detail: removed.session.authMethod
+  });
+  res.status(204).end();
+});
+
+app.post('/api/security/sessions/revoke-others', (req, res) => {
+  const removed = sessionStore.removeOthers(req.session.token);
+  closeRevokedTerminalSessions(removed);
+  securityManager.recordEvent({
+    type: 'sessions-revoked',
+    method: req.session.authMethod,
+    sessionId: req.session.id,
+    client: summarizeAuthClient(req),
+    detail: String(removed.length)
+  });
+  res.json({ revoked: removed.length, sessions: sessionStore.list(req.session.token) });
+});
+
+app.get('/api/security/events', (req, res) => {
+  const limit = Number.parseInt(req.query.limit || '100', 10);
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.json({ events: securityManager.listEvents(limit) });
+});
+
+app.post('/api/security/passkeys/options', async (req, res) => {
+  try {
+    if (!await verifySecurityPassword(req, res, req.body && req.body.currentPassword)) return;
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(await securityManager.beginPasskeyRegistration({
+      sessionToken: req.session.token,
+      name: req.body && req.body.name,
+      preferredAuthenticatorType: req.body && req.body.preferredAuthenticatorType,
+      context: passkeyContext(req)
+    }));
+  } catch (error) {
+    sendSecurityError(res, error);
+  }
+});
+
+app.post('/api/security/passkeys/verify', async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'private, no-store');
+    const passkey = await securityManager.finishPasskeyRegistration({
+      sessionToken: req.session.token,
+      ceremonyId: req.body && req.body.ceremonyId,
+      response: req.body && req.body.response,
+      context: passkeyContext(req),
+      metadata: {
+        sessionId: req.session.id,
+        client: summarizeAuthClient(req)
+      }
+    });
+    res.status(201).json({ passkey, security: securityManager.status() });
+  } catch (error) {
+    sendSecurityError(res, error);
+  }
+});
+
+app.patch('/api/security/passkeys/:passkeyId', async (req, res) => {
+  try {
+    if (!await verifySecurityPassword(req, res, req.body && req.body.currentPassword)) return;
+    await securityManager.renamePasskey(req.params.passkeyId, req.body && req.body.name, {
+      method: 'password',
+      sessionId: req.session.id,
+      client: summarizeAuthClient(req)
+    });
+    res.json({ security: securityManager.status() });
+  } catch (error) {
+    sendSecurityError(res, error);
+  }
+});
+
+app.delete('/api/security/passkeys/:passkeyId', async (req, res) => {
+  try {
+    if (!await verifySecurityPassword(req, res, req.body && req.body.currentPassword)) return;
+    await securityManager.removePasskey(req.params.passkeyId, {
+      method: 'password',
+      sessionId: req.session.id,
+      client: summarizeAuthClient(req)
+    });
+    res.json({ security: securityManager.status() });
+  } catch (error) {
+    sendSecurityError(res, error);
+  }
+});
+
+app.post('/api/security/recovery-codes', async (req, res) => {
+  try {
+    if (!await verifySecurityPassword(req, res, req.body && req.body.currentPassword)) return;
+    res.setHeader('Cache-Control', 'private, no-store');
+    const codes = await securityManager.rotateRecoveryCodes({
+      method: 'password',
+      sessionId: req.session.id,
+      client: summarizeAuthClient(req)
+    });
+    res.status(201).json({ codes, security: securityManager.status() });
+  } catch (error) {
+    sendSecurityError(res, error);
+  }
+});
+
+app.put('/api/security/password', async (req, res) => {
+  const retryAfter = checkLoginRateLimit(req);
+  if (retryAfter) {
+    res.setHeader('Retry-After', String(retryAfter));
+    return res.status(429).json({
+      error: 'Too many password attempts. Try again later.',
+      code: 'security-password-rate-limited'
+    });
+  }
+  try {
+    await securityManager.changePassword(
+      req.body && req.body.currentPassword,
+      req.body && req.body.newPassword,
+      {
+        method: 'password',
+        sessionId: req.session.id,
+        client: summarizeAuthClient(req)
+      }
+    );
+    loginAttempts.delete(loginKey(req));
+    const removed = sessionStore.removeAll();
+    closeRevokedTerminalSessions(removed);
+    const session = createSession(req, res, req.session.username, 'password');
+    res.json({
+      success: true,
+      session: sessionStore.list(session.token).find((item) => item.current),
+      security: securityManager.status()
+    });
+  } catch (error) {
+    if (error instanceof SecurityError && error.code === 'current-password-invalid') {
+      recordFailedLogin(req);
+    }
+    sendSecurityError(res, error);
+  }
+});
+
+app.post('/api/setup/onboarding/complete', (req, res) => {
+  const resolution = req.body && req.body.resolution;
+  if (!['reviewed', 'deferred'].includes(resolution)) {
+    return res.status(400).json({
+      error: 'Choose whether the initial server review was completed or deferred',
+      code: 'initial-setup-resolution-invalid'
+    });
+  }
+  if (!req.body || req.body.confirmation !== COMPLETE_INITIAL_SETUP_CONFIRMATION) {
+    return res.status(400).json({
+      error: 'Exact initial setup confirmation is required',
+      code: 'initial-setup-confirmation-required'
+    });
+  }
+
+  try {
+    const authRecord = readAuthRecord();
+    if (!authRecord) {
+      return res.status(409).json({
+        error: 'FoxOS has not been configured',
+        code: 'initial-setup-auth-missing'
+      });
+    }
+    if (!initialSetupRequired(authRecord)) {
+      return res.json({ success: true, onboardingRequired: false, alreadyComplete: true });
+    }
+
+    let review = null;
+    if (resolution === 'reviewed') {
+      const snapshot = resourceRegistry.getLatest();
+      const latestPlan = migrationOrchestrator.status().latest;
+      const startedAtMs = Date.parse(authRecord.initialSetup.startedAt);
+      const scannedAtMs = Date.parse(snapshot && snapshot.generatedAt);
+      if (
+        !snapshot || !latestPlan || latestPlan.sourceSnapshotId !== snapshot.snapshotId ||
+        !Number.isFinite(startedAtMs) || !Number.isFinite(scannedAtMs) || scannedAtMs < startedAtMs
+      ) {
+        return res.status(409).json({
+          error: 'Complete a fresh server scan before finishing the initial review',
+          code: 'initial-setup-review-incomplete'
+        });
+      }
+      review = {
+        sourceSnapshotId: snapshot.snapshotId,
+        serverPlanId: latestPlan.planId,
+        scannedAt: snapshot.generatedAt
+      };
+    }
+
+    const completedAt = new Date().toISOString();
+    writeAuthRecord({
+      ...authRecord,
+      initialSetup: {
+        ...authRecord.initialSetup,
+        status: 'completed',
+        resolution,
+        completedAt,
+        ...(review ? { review } : {})
+      }
+    });
+    res.json({ success: true, onboardingRequired: false, resolution, completedAt });
+  } catch (error) {
+    console.error('Could not complete initial server setup:', error.message);
+    res.status(500).json({
+      error: 'Could not complete initial server setup',
+      code: 'initial-setup-write-failed'
+    });
+  }
+});
+
+app.get('/api/file-content', (req, res) => {
+  try {
+    const requestedPath = req.query.path;
+    const targetFile = resolveWorkspacePath(requestedPath);
+    const stats = fs.statSync(targetFile);
+    if (!stats.isFile()) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+    const resolvedFile = fs.realpathSync(targetFile);
+    res.sendFile(resolvedFile, (error) => {
+      if (!error || res.headersSent) return;
+      res.status(error.statusCode || 404).json({ error: 'File not found' });
+    });
+  } catch {
+    res.status(404).json({ error: 'File not found' });
+  }
+});
+
+app.get('/api/file-thumbnail', async (req, res) => {
+  try {
+    const requestedPath = req.query.path;
+    const targetFile = resolveWorkspacePath(requestedPath);
+    const stats = fs.statSync(targetFile);
+    if (!stats.isFile()) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+    const resolvedFile = fs.realpathSync(targetFile);
+    const thumbnailPath = await mediaThumbnailManager.getThumbnail(resolvedFile);
+    res.setHeader('Cache-Control', 'private, max-age=86400');
+    res.type('jpg');
+    res.sendFile(thumbnailPath, { cacheControl: false }, (error) => {
+      if (!error || res.headersSent) return;
+      res.status(error.statusCode || 404).json({ error: 'Thumbnail not found' });
+    });
+  } catch (error) {
+    if (error instanceof MediaThumbnailError) {
+      if (error.statusCode === 503) res.setHeader('Retry-After', '2');
+      return res.status(error.statusCode).json({ error: 'Thumbnail unavailable', code: error.code });
+    }
+    res.status(404).json({ error: 'File not found' });
+  }
+});
+
+app.get('/api/file-download', (req, res) => {
+  try {
+    const requestedPath = req.query.path;
+    const targetFile = resolveWorkspacePath(requestedPath);
+    const stats = fs.statSync(targetFile);
+    if (!stats.isFile()) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+    const resolvedFile = fs.realpathSync(targetFile);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.download(resolvedFile, path.basename(targetFile), (error) => {
+      if (!error) return;
+      if (res.headersSent) {
+        res.destroy(error);
+        return;
+      }
+      res.status(error.statusCode || 404).json({ error: 'File not found' });
+    });
+  } catch {
+    res.status(404).json({ error: 'File not found' });
+  }
+});
+
 app.use('/api/static', express.static(DISK_ROOT, { dotfiles: 'deny', fallthrough: false }));
+
+app.get('/api/tasks', (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(taskManager.list({
+      status: req.query.status || 'all',
+      limit: req.query.limit === undefined ? 100 : Number(req.query.limit)
+    }));
+  } catch (error) {
+    sendTaskError(res, error);
+  }
+});
+
+app.post('/api/tasks', (req, res) => {
+  try {
+    const result = taskManager.create(req.body);
+    res.status(result.created ? 201 : 200).json(result);
+  } catch (error) {
+    sendTaskError(res, error);
+  }
+});
+
+app.patch('/api/tasks/:taskId', (req, res) => {
+  try {
+    res.json(taskManager.update(req.params.taskId, req.body));
+  } catch (error) {
+    sendTaskError(res, error);
+  }
+});
+
+app.post('/api/tasks/:taskId/complete', (req, res) => {
+  try {
+    res.json(taskManager.complete(req.params.taskId));
+  } catch (error) {
+    sendTaskError(res, error);
+  }
+});
+
+app.post('/api/tasks/:taskId/reopen', (req, res) => {
+  try {
+    res.json(taskManager.reopen(req.params.taskId));
+  } catch (error) {
+    sendTaskError(res, error);
+  }
+});
+
+app.post('/api/tasks/:taskId/snooze', (req, res) => {
+  try {
+    res.json(taskManager.snooze(req.params.taskId, req.body));
+  } catch (error) {
+    sendTaskError(res, error);
+  }
+});
+
+app.get('/api/tasks/codex-review', async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ codexReview: await codexChecklistReviewStatus() });
+  } catch (error) {
+    sendCodexChecklistReviewError(res, error);
+  }
+});
+
+app.get('/api/tasks/codex-review/telegram-chats', async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(await codexChecklistReviewManager.listTelegramChats());
+  } catch (error) {
+    sendCodexChecklistReviewError(res, error);
+  }
+});
+
+app.put('/api/tasks/codex-review', async (req, res) => {
+  try {
+    codexChecklistReviewManager.updateSettings(req.body || {});
+    res.json({ codexReview: await codexChecklistReviewStatus() });
+  } catch (error) {
+    sendCodexChecklistReviewError(res, error);
+  }
+});
+
+app.post('/api/tasks/codex-review/run', async (req, res) => {
+  try {
+    const result = await codexChecklistReviewManager.runNow();
+    res.json({ result, codexReview: await codexChecklistReviewStatus() });
+  } catch (error) {
+    sendCodexChecklistReviewError(res, error);
+  }
+});
+
+app.get('/api/notifications', (req, res) => {
+  try {
+    const result = notificationManager.list({
+      status: req.query.status || 'all',
+      limit: req.query.limit === undefined ? 50 : Number(req.query.limit),
+      source: req.query.source || null
+    });
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(result);
+  } catch (error) {
+    sendNotificationError(res, error);
+  }
+});
+
+app.post('/api/notifications', (req, res) => {
+  try {
+    const notification = notificationManager.create(req.body);
+    res.status(201).json({ notification });
+  } catch (error) {
+    sendNotificationError(res, error);
+  }
+});
+
+app.patch('/api/notifications/:notificationId', (req, res) => {
+  try {
+    const notification = notificationManager.updateStatus(req.params.notificationId, req.body);
+    res.json({ notification, stats: notificationManager.stats() });
+  } catch (error) {
+    sendNotificationError(res, error);
+  }
+});
+
+app.post('/api/notifications/read-all', (req, res) => {
+  try {
+    res.json(notificationManager.readAll());
+  } catch (error) {
+    sendNotificationError(res, error);
+  }
+});
+
+app.get('/api/notifications/settings', async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({
+      settings: notificationManager.settings(),
+      sources: notificationManager.sources(),
+      push: webPushManager.status(),
+      telegram: telegramNotificationManager.status(),
+      codexReview: await codexChecklistReviewStatus()
+    });
+  } catch (error) {
+    sendNotificationError(res, error);
+  }
+});
+
+app.put('/api/notifications/settings', async (req, res) => {
+  try {
+    const settings = notificationManager.updateSettings(req.body);
+    res.json({
+      settings,
+      sources: notificationManager.sources(),
+      push: webPushManager.status(),
+      telegram: telegramNotificationManager.status(),
+      codexReview: await codexChecklistReviewStatus()
+    });
+  } catch (error) {
+    sendNotificationError(res, error);
+  }
+});
+
+app.get('/api/notifications/push', (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(webPushManager.status());
+  } catch (error) {
+    sendNotificationError(res, error);
+  }
+});
+
+app.post('/api/notifications/push/subscriptions', (req, res) => {
+  try {
+    const result = webPushManager.subscribe(req.body && req.body.subscription, req.get('user-agent') || '');
+    res.status(201).json(result);
+  } catch (error) {
+    sendNotificationError(res, error);
+  }
+});
+
+app.delete('/api/notifications/push/subscriptions', (req, res) => {
+  try {
+    res.json(webPushManager.unsubscribe(req.body && req.body.endpoint));
+  } catch (error) {
+    sendNotificationError(res, error);
+  }
+});
+
+app.get('/api/notifications/telegram', (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(telegramNotificationManager.status());
+  } catch (error) {
+    sendNotificationError(res, error);
+  }
+});
+
+app.post('/api/notifications/telegram/configure', async (req, res) => {
+  try {
+    const telegram = await telegramNotificationManager.configure(req.body || {});
+    res.status(201).json({ telegram });
+  } catch (error) {
+    sendNotificationError(res, error);
+  }
+});
+
+app.post('/api/notifications/telegram/pair', (req, res) => {
+  try {
+    res.status(201).json({ telegram: telegramNotificationManager.startPairing() });
+  } catch (error) {
+    sendNotificationError(res, error);
+  }
+});
+
+app.put('/api/notifications/telegram', (req, res) => {
+  try {
+    res.json({ telegram: telegramNotificationManager.setEnabled(req.body && req.body.enabled) });
+  } catch (error) {
+    sendNotificationError(res, error);
+  }
+});
+
+app.post('/api/notifications/telegram/pause', (req, res) => {
+  try {
+    const hours = req.body && Object.hasOwn(req.body, 'hours') ? req.body.hours : null;
+    res.json({ telegram: telegramNotificationManager.pause(hours) });
+  } catch (error) {
+    sendNotificationError(res, error);
+  }
+});
+
+app.delete('/api/notifications/telegram', (req, res) => {
+  try {
+    res.json({ telegram: telegramNotificationManager.disconnect(req.body && req.body.confirmation) });
+  } catch (error) {
+    sendNotificationError(res, error);
+  }
+});
+
+app.post('/api/notifications/test', (req, res) => {
+  try {
+    const notification = notificationManager.create({
+      source: 'foxos',
+      category: 'test',
+      severity: 'success',
+      title: 'FoxOS bildirimleri hazır',
+      body: 'Bu test hem Bildirim Merkezi’ne hem etkin teslimat kanallarına gönderildi.',
+      target: { app: 'settings', tab: 'notifications' }
+    });
+    res.status(201).json({ notification });
+  } catch (error) {
+    sendNotificationError(res, error);
+  }
+});
+
+app.get('/api/notifications/stream', (req, res) => {
+  let initialStats;
+  let initialTaskStats;
+  try {
+    initialStats = notificationManager.stats();
+    initialTaskStats = taskManager.stats();
+  } catch (error) {
+    if (error instanceof TaskError) return sendTaskError(res, error);
+    return sendNotificationError(res, error);
+  }
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'private, no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders();
+  res.write('retry: 5000\n');
+  res.write(`event: ready\ndata: ${JSON.stringify({ stats: initialStats, tasks: initialTaskStats })}\n\n`);
+  const writeChange = (change) => {
+    try {
+      res.write(`event: change\ndata: ${JSON.stringify({
+        ...change,
+        stats: notificationManager.stats(),
+        tasks: taskManager.stats()
+      })}\n\n`);
+    } catch {
+      // The next successful state change or reconnect will refresh the client.
+    }
+  };
+  const removeNotificationListener = notificationManager.onChange(writeChange);
+  const removeTaskListener = taskManager.onChange(writeChange);
+  const keepAlive = setInterval(() => res.write(': keep-alive\n\n'), 25_000);
+  const close = () => {
+    clearInterval(keepAlive);
+    removeNotificationListener();
+    removeTaskListener();
+  };
+  req.once('close', close);
+  res.once('close', close);
+});
+
+app.get('/api/weather/locations', async (req, res) => {
+  try {
+    const locations = await weatherManager.searchLocations(req.query.q);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ locations });
+  } catch (error) {
+    sendWeatherError(res, error);
+  }
+});
+
+app.put('/api/weather/location', (req, res) => {
+  try {
+    res.json({ location: weatherManager.saveLocation(req.body) });
+  } catch (error) {
+    sendWeatherError(res, error);
+  }
+});
+
+app.get('/api/weather', async (req, res) => {
+  try {
+    const forecast = await weatherManager.forecast({ force: req.query.refresh === '1' });
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(forecast);
+  } catch (error) {
+    sendWeatherError(res, error);
+  }
+});
+
+app.get('/api/calendar/events', async (req, res) => {
+  try {
+    const localEvents = calendarManager.list({ from: req.query.from, to: req.query.to }).map((event) => ({
+      ...event,
+      source: 'local',
+      sourceId: null,
+      provider: 'local',
+      providerName: 'FoxOS',
+      accountName: 'Bu sunucu',
+      calendarId: 'local',
+      calendarName: 'FoxOS Takvimi',
+      editable: true
+    }));
+    const remote = await calendarConnectionManager.listEvents({
+      from: req.query.from,
+      to: req.query.to,
+      timeZone: req.query.timeZone || 'UTC'
+    });
+    const events = [...localEvents, ...remote.events].sort((left, right) => (
+      left.date.localeCompare(right.date) ||
+      Number(right.allDay) - Number(left.allDay) ||
+      String(left.startTime || '').localeCompare(String(right.startTime || '')) ||
+      left.title.localeCompare(right.title, 'tr')
+    ));
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ events, warnings: remote.warnings });
+  } catch (error) {
+    sendCalendarError(res, error);
+  }
+});
+
+app.post('/api/calendar/events', async (req, res) => {
+  try {
+    const remote = req.body && req.body.sourceId && req.body.sourceId !== 'local';
+    const event = remote
+      ? await calendarConnectionManager.createEvent(req.body)
+      : calendarManager.create(req.body);
+    res.status(201).json({ event });
+  } catch (error) {
+    sendCalendarError(res, error);
+  }
+});
+
+app.put('/api/calendar/events/:eventId', async (req, res) => {
+  try {
+    const event = req.params.eventId.startsWith('rem_')
+      ? await calendarConnectionManager.updateEvent(req.params.eventId, req.body)
+      : calendarManager.update(req.params.eventId, req.body);
+    res.json({ event });
+  } catch (error) {
+    sendCalendarError(res, error);
+  }
+});
+
+app.delete('/api/calendar/events/:eventId', async (req, res) => {
+  try {
+    const result = req.params.eventId.startsWith('rem_')
+      ? await calendarConnectionManager.removeEvent(req.params.eventId)
+      : calendarManager.remove(req.params.eventId);
+    res.json(result);
+  } catch (error) {
+    sendCalendarError(res, error);
+  }
+});
+
+app.get('/api/calendar/sources', async (req, res) => {
+  try {
+    const result = await calendarConnectionManager.listSources({ refresh: req.query.refresh === '1' });
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(result);
+  } catch (error) {
+    sendCalendarError(res, error);
+  }
+});
+
+app.get('/api/file-search', async (req, res) => {
+  try {
+    const result = await fileSearchManager.search(req.query.q, { limit: req.query.limit });
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(result);
+  } catch (error) {
+    const status = error instanceof FileSearchError ? error.statusCode : 500;
+    if (status >= 500 && !(error instanceof FileSearchError)) {
+      console.error('File search failed:', error.message);
+    }
+    res.status(status).json({
+      error: status >= 500 && !(error instanceof FileSearchError)
+        ? 'Dosya araması tamamlanamadı.'
+        : error.message,
+      code: error.code || 'file-search-failed'
+    });
+  }
+});
 
 app.get('/api/files', (req, res) => {
   try {
@@ -1677,6 +3928,7 @@ app.post('/api/save', (req, res) => {
       return res.status(400).json({ error: 'Target is a directory' });
     }
     fs.writeFileSync(targetFile, typeof req.body.content === 'string' ? req.body.content : '', 'utf8');
+    fileSearchManager.invalidate();
     res.json({ success: true });
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -1707,6 +3959,7 @@ app.post('/api/delete', (req, res) => {
     if (releasedShortcutDirectory && releasedShortcutDirectory !== DESKTOP_ROOT) {
       desktopShortcutManager.releaseDirectory(releasedShortcutDirectory);
     }
+    fileSearchManager.invalidate();
     res.json({ success: true });
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -1740,6 +3993,7 @@ app.post('/api/rename', (req, res) => {
         desktopShortcutManager.releaseDirectory(sourceShortcutDirectory);
       }
     }
+    fileSearchManager.invalidate();
     res.json({ success: true });
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -1776,6 +4030,7 @@ app.post('/api/move', (req, res) => {
         desktopShortcutManager.releaseDirectory(sourceShortcutDirectory);
       }
     }
+    fileSearchManager.invalidate();
     res.json({ success: true });
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -1791,6 +4046,7 @@ app.post('/api/mkdir', (req, res) => {
       return res.status(409).json({ error: 'Directory already exists' });
     }
     fs.mkdirSync(target);
+    fileSearchManager.invalidate();
     res.status(201).json({ success: true });
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -2648,11 +4904,369 @@ app.post('/api/adoptions/:operationId/rollback', async (req, res) => {
   }
 });
 
-app.get('/api/connections', (req, res) => {
+app.get('/api/connections', async (req, res) => {
   try {
-    res.json({ connections: [cloudflareConnectionManager.status()] });
+    const [codex, antigravity, gemini] = await Promise.all([
+      codexConnectionManager.status(),
+      antigravityConnectionManager.status(),
+      geminiConnectionManager.status()
+    ]);
+    const calendar = calendarConnectionManager.status({ redirectUris: calendarRedirectUris(req) });
+    res.json({ connections: [calendar, codex, antigravity, gemini, cloudflareConnectionManager.status()] });
   } catch (error) {
     sendConnectionError(res, error, 'Could not read provider connections');
+  }
+});
+
+app.get('/api/cli-usage', async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(await cliUsageManager.status());
+  } catch (error) {
+    console.error('CLI usage status failed:', error.message);
+    res.status(500).json({ error: 'CLI kullanım bilgisi alınamadı.', code: 'cli-usage-unavailable' });
+  }
+});
+
+app.post('/api/cli-usage/refresh', async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(await cliUsageManager.status({ force: true }));
+  } catch (error) {
+    console.error('CLI usage refresh failed:', error.message);
+    res.status(500).json({ error: 'CLI kullanım bilgisi yenilenemedi.', code: 'cli-usage-refresh-failed' });
+  }
+});
+
+app.get('/api/connections/calendar', (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ connection: calendarConnectionManager.status({ redirectUris: calendarRedirectUris(req) }) });
+  } catch (error) {
+    sendCalendarError(res, error);
+  }
+});
+
+app.put('/api/connections/calendar/providers/:provider', (req, res) => {
+  try {
+    calendarConnectionManager.configureProvider(req.params.provider, req.body || {});
+    res.json({ connection: calendarConnectionManager.status({ redirectUris: calendarRedirectUris(req) }) });
+  } catch (error) {
+    sendCalendarError(res, error);
+  }
+});
+
+app.post('/api/connections/calendar/providers/:provider/authorize', (req, res) => {
+  try {
+    const ownerFingerprint = crypto.createHash('sha256').update(req.session.token).digest('hex');
+    const authorization = calendarConnectionManager.startAuthorization(req.params.provider, {
+      redirectUri: calendarRedirectUri(req, req.params.provider),
+      ownerFingerprint
+    });
+    res.status(201).json({ authorization });
+  } catch (error) {
+    sendCalendarError(res, error);
+  }
+});
+
+app.delete('/api/connections/calendar/accounts/:accountId', (req, res) => {
+  try {
+    calendarConnectionManager.disconnectAccount(
+      req.params.accountId,
+      req.body && req.body.confirmation
+    );
+    res.json({ connection: calendarConnectionManager.status({ redirectUris: calendarRedirectUris(req) }) });
+  } catch (error) {
+    sendCalendarError(res, error);
+  }
+});
+
+app.delete('/api/connections/calendar/providers/:provider', (req, res) => {
+  try {
+    calendarConnectionManager.disconnectProvider(
+      req.params.provider,
+      req.body && req.body.confirmation
+    );
+    res.json({ connection: calendarConnectionManager.status({ redirectUris: calendarRedirectUris(req) }) });
+  } catch (error) {
+    sendCalendarError(res, error);
+  }
+});
+
+app.get('/api/connections/codex', async (req, res) => {
+  try {
+    res.json({ connection: await codexConnectionManager.status() });
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not read Codex connection');
+  }
+});
+
+app.post('/api/connections/codex/install', async (req, res) => {
+  try {
+    const result = await codexConnectionManager.install(req.body && req.body.confirmation);
+    try {
+      installBundledCodexSkills();
+    } catch (error) {
+      console.error('Could not install bundled FoxOS skills:', error.message);
+    }
+    res.status(201).json(result);
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not install Codex CLI');
+  }
+});
+
+app.post('/api/connections/codex/login', async (req, res) => {
+  try {
+    res.status(201).json({ login: await codexConnectionManager.startLogin() });
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not start Codex login');
+  }
+});
+
+app.post('/api/connections/codex/login/cancel', async (req, res) => {
+  try {
+    res.json(await codexConnectionManager.cancelLogin(req.body && req.body.loginId));
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not cancel Codex login');
+  }
+});
+
+app.put('/api/connections/codex/access-profile', async (req, res) => {
+  try {
+    const connection = await codexConnectionManager.setAccessProfile(
+      req.body && req.body.accessProfile,
+      req.body && req.body.confirmation
+    );
+    res.json({ connection });
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not configure Codex access');
+  }
+});
+
+app.put('/api/connections/codex/approval-policy', async (req, res) => {
+  try {
+    const connection = await codexConnectionManager.setApprovalPolicy(
+      req.body && req.body.approvalPolicy
+    );
+    res.json({ connection });
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not configure Codex approval policy');
+  }
+});
+
+app.put('/api/connections/codex/memory', async (req, res) => {
+  try {
+    const connection = await codexConnectionManager.configureMemory(req.body || {});
+    res.json({ connection });
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not configure Codex memory');
+  }
+});
+
+app.delete('/api/connections/codex', async (req, res) => {
+  try {
+    res.json(await codexConnectionManager.disconnect(req.body && req.body.confirmation));
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not disconnect Codex');
+  }
+});
+
+app.get('/api/connections/antigravity', async (req, res) => {
+  try {
+    res.json({ connection: await antigravityConnectionManager.status() });
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not read Antigravity CLI connection');
+  }
+});
+
+app.post('/api/connections/antigravity/install', async (req, res) => {
+  try {
+    res.status(201).json(await antigravityConnectionManager.install(req.body && req.body.confirmation));
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not install Antigravity CLI');
+  }
+});
+
+app.post('/api/connections/antigravity/login', async (req, res) => {
+  try {
+    res.status(201).json({ login: await antigravityConnectionManager.startLogin() });
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not start Antigravity login');
+  }
+});
+
+app.post('/api/connections/antigravity/login/complete', async (req, res) => {
+  try {
+    const connection = await antigravityConnectionManager.completeLogin(
+      req.body && req.body.loginId,
+      req.body && req.body.authorizationCode
+    );
+    res.json({ connection });
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not complete Antigravity login');
+  }
+});
+
+app.post('/api/connections/antigravity/login/cancel', async (req, res) => {
+  try {
+    res.json(await antigravityConnectionManager.cancelLogin(req.body && req.body.loginId));
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not cancel Antigravity login');
+  }
+});
+
+app.put('/api/connections/antigravity/access-profile', async (req, res) => {
+  try {
+    const connection = await antigravityConnectionManager.setAccessProfile(
+      req.body && req.body.accessProfile,
+      req.body && req.body.confirmation
+    );
+    res.json({ connection });
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not configure Antigravity access');
+  }
+});
+
+app.post('/api/connections/antigravity/verify', async (req, res) => {
+  try {
+    res.json({ connection: await antigravityConnectionManager.verify() });
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not verify Antigravity connection');
+  }
+});
+
+app.delete('/api/connections/antigravity', async (req, res) => {
+  try {
+    res.json(await antigravityConnectionManager.disconnect(req.body && req.body.confirmation));
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not disconnect Antigravity CLI');
+  }
+});
+
+app.get('/api/connections/gemini', async (req, res) => {
+  try {
+    res.json({ connection: await geminiConnectionManager.status() });
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not read Gemini CLI connection');
+  }
+});
+
+app.post('/api/connections/gemini/install', async (req, res) => {
+  try {
+    res.status(201).json(await geminiConnectionManager.install(req.body && req.body.confirmation));
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not install Gemini CLI');
+  }
+});
+
+app.put('/api/connections/gemini', async (req, res) => {
+  try {
+    const connection = await geminiConnectionManager.configure(req.body || {});
+    res.json({ connection });
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not configure Gemini CLI connection');
+  }
+});
+
+app.post('/api/connections/gemini/verify', async (req, res) => {
+  try {
+    const connection = await geminiConnectionManager.verifyStored();
+    res.json({ connection });
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not verify Gemini CLI connection');
+  }
+});
+
+app.delete('/api/connections/gemini', async (req, res) => {
+  try {
+    res.json(await geminiConnectionManager.disconnect(req.body && req.body.confirmation));
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not disconnect Gemini CLI');
+  }
+});
+
+app.get('/api/codex/models', async (req, res) => {
+  try {
+    res.json(await codexConnectionManager.listModels());
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not read Codex models');
+  }
+});
+
+app.get('/api/codex/threads', async (req, res) => {
+  try {
+    res.json(await codexConnectionManager.listThreads(req.query.cursor || null));
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not read Codex threads');
+  }
+});
+
+app.post('/api/codex/threads', async (req, res) => {
+  try {
+    res.status(201).json(await codexConnectionManager.startThread(
+      req.body && req.body.model,
+      req.body && req.body.reasoningEffort
+    ));
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not start Codex thread');
+  }
+});
+
+app.post('/api/codex/threads/:threadId/resume', async (req, res) => {
+  try {
+    res.json(await codexConnectionManager.resumeThread(req.params.threadId));
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not resume Codex thread');
+  }
+});
+
+app.post('/api/codex/threads/:threadId/turns', async (req, res) => {
+  try {
+    res.status(201).json(await codexConnectionManager.startTurn(
+      req.params.threadId,
+      req.body && req.body.text
+    ));
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not start Codex turn');
+  }
+});
+
+app.post('/api/codex/threads/:threadId/turns/:turnId/steer', async (req, res) => {
+  try {
+    res.json(await codexConnectionManager.steerTurn(
+      req.params.threadId,
+      req.params.turnId,
+      req.body && req.body.text
+    ));
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not steer Codex turn');
+  }
+});
+
+app.post('/api/codex/threads/:threadId/turns/:turnId/interrupt', async (req, res) => {
+  try {
+    res.json(await codexConnectionManager.interruptTurn(req.params.threadId, req.params.turnId));
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not interrupt Codex turn');
+  }
+});
+
+app.get('/api/codex/events', (req, res) => {
+  try {
+    res.json(codexConnectionManager.events(Number(req.query.after || 0), req.query.threadId || null));
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not read Codex events');
+  }
+});
+
+app.post('/api/codex/approvals/:requestId', (req, res) => {
+  try {
+    res.json(codexConnectionManager.resolveApproval(
+      req.params.requestId,
+      req.body && req.body.decision
+    ));
+  } catch (error) {
+    sendConnectionError(res, error, 'Could not resolve Codex approval');
   }
 });
 
@@ -2719,10 +5333,21 @@ app.post('/api/application-removal-plans/:planId/apply', async (req, res) => {
       code: 'application-removal-password-rate-limited'
     });
   }
-  const authRecord = readAuthRecord();
   const password = typeof body.password === 'string' ? body.password : '';
-  if (!authRecord || !passwordMatches(password, authRecord)) {
+  const verification = await securityManager.verifyOwnerPassword(password, {
+    client: summarizeAuthClient(req),
+    sessionId: req.session.id
+  });
+  if (!verification.matched) {
     recordFailedLogin(req);
+    securityManager.recordEvent({
+      type: 'login-failed',
+      success: false,
+      method: 'password',
+      sessionId: req.session.id,
+      client: summarizeAuthClient(req),
+      detail: 'application-removal'
+    });
     return res.status(401).json({
       error: 'Şifre hatalı. Uygulama kaldırılmadı.',
       code: 'application-removal-password-invalid'
@@ -3133,6 +5758,17 @@ app.use((error, req, res, next) => {
 });
 
 if (require.main === module) {
+  const shutdownAntigravityLogin = () => {
+    telegramNotificationManager.stop();
+    codexChecklistReviewManager.stop();
+    taskManager.stop();
+    for (const terminalManager of activeTerminalManagers) terminalManager.shutdown();
+    antigravityLoginController.shutdown()
+      .catch(() => {})
+      .finally(() => process.exit(0));
+  };
+  process.once('SIGTERM', shutdownAntigravityLogin);
+  process.once('SIGINT', shutdownAntigravityLogin);
   statefulMigrationManager.recoverInterruptedOperations({ clearStaleLock: true })
     .then((recovery) => {
       if (recovery.recovered.length) {
@@ -3173,10 +5809,14 @@ if (require.main === module) {
       console.error('Initial server ingress reconciliation failed:', error.message);
     })
     .finally(() => {
-      app.listen(PORT, '0.0.0.0', () => {
+      createFoxOSHttpServer().listen(PORT, '0.0.0.0', () => {
         console.log('FoxOS is listening on port ' + PORT);
         console.log('Host execution mode: ' + HOST_EXECUTION);
         console.log('Host filesystem mount: ' + HOST_ROOT);
+
+        inspectHostCodexCli()
+          .then((inspection) => inspection.installed && installBundledCodexSkills())
+          .catch((error) => console.error('Could not reconcile bundled FoxOS skills:', error.message));
 
         if (process.env.FOXOS_RESOURCE_SCAN_ON_STARTUP === 'false') return;
         resourceRegistry.scan()
@@ -3208,4 +5848,5 @@ if (require.main === module) {
     });
 }
 
+app.createHttpServer = createFoxOSHttpServer;
 module.exports = app;

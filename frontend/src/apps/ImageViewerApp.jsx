@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import { ZoomIn, ZoomOut, Maximize } from 'lucide-react';
+import { useI18n } from '../contexts/LocaleContext';
 
 const ImageViewerApp = ({ filePath }) => {
+  const { t } = useI18n();
   const [scale, setScale] = useState(1);
   const [showToolbar, setShowToolbar] = useState(false);
 
@@ -93,14 +95,14 @@ const ImageViewerApp = ({ filePath }) => {
         zIndex: 2,
         boxShadow: '0 10px 30px rgba(0,0,0,0.5)'
       }}>
-        <div className="toolbar-btn" onClick={() => setScale(s => Math.min(s + 0.25, 3))} title="Yakınlaştır">
+        <div className="toolbar-btn" onClick={() => setScale(s => Math.min(s + 0.25, 3))} title={t('imageViewer.zoomIn')}>
           <ZoomIn size={18} color="#fff" />
         </div>
-        <div className="toolbar-btn" onClick={() => setScale(s => Math.max(s - 0.25, 0.5))} title="Uzaklaştır">
+        <div className="toolbar-btn" onClick={() => setScale(s => Math.max(s - 0.25, 0.5))} title={t('imageViewer.zoomOut')}>
           <ZoomOut size={18} color="#fff" />
         </div>
         <div style={{ width: '1px', background: 'rgba(255,255,255,0.2)', margin: '0 4px', height: '20px' }} />
-        <div className="toolbar-btn" onClick={() => setScale(1)} title="Gerçek Boyut">
+        <div className="toolbar-btn" onClick={() => setScale(1)} title={t('imageViewer.actualSize')}>
           <Maximize size={18} color="#fff" />
         </div>
       </div>

@@ -4,6 +4,7 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const WebSocket = require('ws');
 const { APP_CATALOG, getCatalogApp } = require('./appCatalog');
 const { iconCandidatesFromHtml, safeHttpUrl } = require('./appIcon');
 const {
@@ -23,6 +24,21 @@ process.env.DATA_ROOT = path.join(testRoot, 'data');
 process.env.HOST_ROOT = testRoot;
 process.env.HOST_EXECUTION = 'local';
 process.env.DOCKER_SOCKET = path.join(testRoot, 'docker.sock');
+const thumbnailGenerator = path.join(testRoot, 'thumbnail-generator');
+const thumbnailGenerationCounter = path.join(testRoot, 'thumbnail-generations');
+fs.writeFileSync(thumbnailGenerator, [
+  '#!/bin/sh',
+  'output=',
+  'previous=',
+  'for argument in "$@"; do',
+  '  if [ "$argument" = "/output/thumbnail.jpg" ]; then output=$previous; break; fi',
+  '  previous=$argument',
+  'done',
+  'printf x >> "$FOXOS_THUMBNAIL_TEST_COUNTER"',
+  'printf thumbnail-bytes > "$output"'
+].join('\n') + '\n', { mode: 0o700 });
+process.env.FOXOS_PRLIMIT_BINARY = thumbnailGenerator;
+process.env.FOXOS_THUMBNAIL_TEST_COUNTER = thumbnailGenerationCounter;
 
 let mockContainer = null;
 let lastContainerPayload = null;
@@ -169,8 +185,80 @@ const dockerMock = http.createServer((req, res) => {
 
 dockerMock.listen(process.env.DOCKER_SOCKET);
 
+const testTerminalPtys = [];
+function spawnTestTerminalPty(size) {
+  const dataListeners = new Set();
+  const exitListeners = new Set();
+  const terminal = {
+    size,
+    writes: [],
+    resizes: [],
+    killedWith: null,
+    onData(listener) {
+      dataListeners.add(listener);
+      return { dispose: () => dataListeners.delete(listener) };
+    },
+    onExit(listener) {
+      exitListeners.add(listener);
+      return { dispose: () => exitListeners.delete(listener) };
+    },
+    write(data) { this.writes.push(data); },
+    resize(cols, rows) { this.resizes.push([cols, rows]); },
+    kill(signal) { this.killedWith = signal; },
+    emitData(data) { for (const listener of dataListeners) listener(data); }
+  };
+  testTerminalPtys.push(terminal);
+  return terminal;
+}
+
+function waitForSocketMessage(socket, type) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error('Timed out waiting for terminal socket message'));
+    }, 2000);
+    const onMessage = (payload) => {
+      const message = JSON.parse(payload.toString('utf8'));
+      if (message.type !== type) return;
+      cleanup();
+      resolve(message);
+    };
+    const cleanup = () => {
+      clearTimeout(timeout);
+      socket.off('message', onMessage);
+    };
+    socket.on('message', onMessage);
+  });
+}
+
+async function waitForCondition(predicate, message) {
+  const deadline = Date.now() + 2000;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error(message);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+function expectWebSocketUpgradeStatus(url, options, expectedStatus) {
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(url, options);
+    socket.once('open', () => reject(new Error('Unexpected terminal WebSocket connection')));
+    socket.once('error', () => {});
+    socket.once('unexpected-response', (_request, response) => {
+      response.resume();
+      try {
+        assert.equal(response.statusCode, expectedStatus);
+        resolve();
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
+}
+
 const app = require('./server');
-const server = app.listen(0, '127.0.0.1');
+const server = app.createHttpServer({ spawnTerminalPty: spawnTestTerminalPty });
+server.listen(0, '127.0.0.1');
 
 const baseUrl = () => {
   const address = server.address();
@@ -432,8 +520,27 @@ test('health is public while management APIs require a session', async () => {
   assert.equal(healthResponse.status, 200);
   assert.deepEqual(await healthResponse.json(), { status: 'ok' });
 
+  await expectWebSocketUpgradeStatus(
+    baseUrl().replace('http:', 'ws:') + '/api/terminal/socket',
+    { headers: { Origin: baseUrl() } },
+    401
+  );
+
   const filesResponse = await fetch(baseUrl() + '/api/files');
   assert.equal(filesResponse.status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/file-search?q=rapor')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/calendar/events?from=2026-08-01&to=2026-08-31')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/calendar/sources')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/weather')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/notifications')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/notifications/settings')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/notifications/telegram')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/tasks/codex-review')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/notifications/ingest', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
+  const fileDownloadResponse = await fetch(baseUrl() + '/api/file-download?path=Masa%C3%BCst%C3%BC%2Ftest.zip');
+  assert.equal(fileDownloadResponse.status, 401);
 
   const resourcesResponse = await fetch(baseUrl() + '/api/resources');
   assert.equal(resourcesResponse.status, 401);
@@ -493,6 +600,58 @@ test('health is public while management APIs require a session', async () => {
   assert.equal(migrationRunsResponse.status, 401);
   const connectionsResponse = await fetch(baseUrl() + '/api/connections');
   assert.equal(connectionsResponse.status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/codex')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/codex/install', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/codex/memory', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/codex/approval-policy', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/antigravity')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/cli-usage')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/cli-usage/refresh', { method: 'POST' })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/antigravity/install', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/antigravity/login', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/antigravity/login/complete', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/antigravity/login/cancel', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/antigravity/access-profile', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/antigravity/verify', {
+    method: 'POST'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/antigravity', {
+    method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/gemini')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/gemini/install', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/gemini', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/gemini/verify', {
+    method: 'POST'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/connections/gemini', {
+    method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/codex/models')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/codex/events')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/codex/threads/thr_1/turns/turn_1/steer', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
   const applicationOperationsId = 'res_' + '7'.repeat(32);
   assert.equal((await fetch(baseUrl() + '/api/applications/' + applicationOperationsId + '/update-check')).status, 401);
   assert.equal((await fetch(baseUrl() + '/api/applications/' + applicationOperationsId + '/update-plans', {
@@ -522,6 +681,24 @@ test('health is public while management APIs require a session', async () => {
     baseUrl() + '/api/migration-runs/mrun_' + '1'.repeat(32)
   );
   assert.equal(migrationRunResponse.status, 401);
+  const initialSetupCompleteResponse = await fetch(baseUrl() + '/api/setup/onboarding/complete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}'
+  });
+  assert.equal(initialSetupCompleteResponse.status, 401);
+  const localeSettingsResponse = await fetch(baseUrl() + '/api/settings/locale', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}'
+  });
+  assert.equal(localeSettingsResponse.status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/security/overview')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/security/sessions')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/security/events')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/security/recovery-codes', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  })).status, 401);
   const statelessMigrationsResponse = await fetch(baseUrl() + '/api/stateless-migrations');
   assert.equal(statelessMigrationsResponse.status, 401);
   const statelessMigrationPlanResponse = await fetch(baseUrl() + '/api/stateless-migrations/plans', {
@@ -546,7 +723,15 @@ test('health is public while management APIs require a session', async () => {
   assert.equal(statelessMigrationRunResponse.status, 401);
 });
 
-test('setup creates an authenticated session and unlocks the workspace', async () => {
+test('setup creates an authenticated session and server-owned onboarding state', async () => {
+  const localePreferences = {
+    language: 'en',
+    region: 'GB',
+    timeZone: 'Europe/London',
+    hourCycle: 'h23',
+    weekStartsOn: 'monday',
+    measurementSystem: 'metric'
+  };
   const weakPasswordResponse = await fetch(baseUrl() + '/api/auth/setup', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -557,19 +742,336 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   const setupResponse = await fetch(baseUrl() + '/api/auth/setup', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: 'tester', password: 'correct-horse-battery' })
+    body: JSON.stringify({
+      username: 'tester',
+      password: 'correct-horse-battery',
+      localePreferences
+    })
   });
   assert.equal(setupResponse.status, 201);
+  assert.deepEqual(await setupResponse.json(), {
+    success: true,
+    username: 'tester',
+    onboardingRequired: true,
+    localePreferences
+  });
   const cookie = setupResponse.headers.get('set-cookie').split(';')[0];
+
+  await expectWebSocketUpgradeStatus(
+    baseUrl().replace('http:', 'ws:') + '/api/terminal/socket',
+    { headers: { Cookie: cookie, Origin: 'https://attacker.example' } },
+    401
+  );
 
   const statusResponse = await fetch(baseUrl() + '/api/auth/status', {
     headers: { Cookie: cookie }
   });
-  assert.deepEqual(await statusResponse.json(), {
+  const status = await statusResponse.json();
+  assert.deepEqual((({ isSetup, authenticated, username, onboardingRequired }) => ({
+    isSetup, authenticated, username, onboardingRequired
+  }))(status), {
     isSetup: true,
     authenticated: true,
-    username: 'tester'
+    username: 'tester',
+    onboardingRequired: true
   });
+  assert.equal(status.passkeyAvailable, false);
+  assert.equal(status.recoveryAvailable, false);
+  assert.deepEqual(status.localePreferences, localePreferences);
+  assert.match(status.session.id, /^ses_[a-f0-9]{32}$/);
+  assert.equal(status.session.authMethod, 'password');
+
+  const invalidOnboardingResponse = await fetch(baseUrl() + '/api/setup/onboarding/complete', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ resolution: 'deferred', confirmation: 'WRONG' })
+  });
+  assert.equal(invalidOnboardingResponse.status, 400);
+  assert.equal(
+    (await invalidOnboardingResponse.json()).code,
+    'initial-setup-confirmation-required'
+  );
+
+  const incompleteReviewResponse = await fetch(baseUrl() + '/api/setup/onboarding/complete', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      resolution: 'reviewed',
+      confirmation: 'COMPLETE INITIAL SETUP'
+    })
+  });
+  assert.equal(incompleteReviewResponse.status, 409);
+  assert.equal((await incompleteReviewResponse.json()).code, 'initial-setup-review-incomplete');
+
+  const completeOnboardingResponse = await fetch(baseUrl() + '/api/setup/onboarding/complete', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      resolution: 'deferred',
+      confirmation: 'COMPLETE INITIAL SETUP'
+    })
+  });
+  assert.equal(completeOnboardingResponse.status, 200);
+  assert.deepEqual(
+    (({ success, onboardingRequired, resolution }) => ({ success, onboardingRequired, resolution }))(
+      await completeOnboardingResponse.json()
+    ),
+    { success: true, onboardingRequired: false, resolution: 'deferred' }
+  );
+  const authFile = path.join(process.env.DATA_ROOT, 'auth.json');
+  assert.equal(fs.statSync(authFile).mode & 0o777, 0o600);
+  const completedAuthRecord = JSON.parse(fs.readFileSync(authFile, 'utf8'));
+  assert.equal(completedAuthRecord.initialSetup.status, 'completed');
+  assert.equal(completedAuthRecord.localePreferences.schemaVersion, 1);
+  assert.deepEqual(
+    (({ language, region, timeZone, hourCycle, weekStartsOn, measurementSystem }) => ({
+      language, region, timeZone, hourCycle, weekStartsOn, measurementSystem
+    }))(completedAuthRecord.localePreferences),
+    localePreferences
+  );
+
+  const invalidLocaleResponse = await fetch(baseUrl() + '/api/settings/locale', {
+    method: 'PUT',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ localePreferences: { ...localePreferences, region: 'ZZ' } })
+  });
+  assert.equal(invalidLocaleResponse.status, 400);
+  assert.equal((await invalidLocaleResponse.json()).code, 'locale-region-invalid');
+
+  const updatedLocalePreferences = {
+    language: 'tr',
+    region: 'TR',
+    timeZone: 'Europe/Istanbul',
+    hourCycle: 'regional',
+    weekStartsOn: 'regional',
+    measurementSystem: 'regional'
+  };
+  const localeUpdateResponse = await fetch(baseUrl() + '/api/settings/locale', {
+    method: 'PUT',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ localePreferences: updatedLocalePreferences })
+  });
+  assert.equal(localeUpdateResponse.status, 200);
+  assert.deepEqual((await localeUpdateResponse.json()).localePreferences, updatedLocalePreferences);
+  const localeReadResponse = await fetch(baseUrl() + '/api/settings/locale', { headers: { Cookie: cookie } });
+  assert.equal(localeReadResponse.status, 200);
+  assert.deepEqual((await localeReadResponse.json()).localePreferences, updatedLocalePreferences);
+
+  const completedStatusResponse = await fetch(baseUrl() + '/api/auth/status', {
+    headers: { Cookie: cookie }
+  });
+  const completedStatus = await completedStatusResponse.json();
+  assert.deepEqual((({ isSetup, authenticated, username, onboardingRequired }) => ({
+    isSetup, authenticated, username, onboardingRequired
+  }))(completedStatus), {
+    isSetup: true,
+    authenticated: true,
+    username: 'tester',
+    onboardingRequired: false
+  });
+
+  const workspaceDocument = path.join(process.env.DATA_ROOT, 'files', 'Belgeler', 'Toplantı Notu.txt');
+  fs.writeFileSync(workspaceDocument, 'FoxOS');
+  const fileSearchResponse = await fetch(baseUrl() + '/api/file-search?q=toplanti', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(fileSearchResponse.status, 200);
+  assert.equal((await fileSearchResponse.json()).items[0].path, '/Belgeler/Toplantı Notu.txt');
+
+  const calendarCreateResponse = await fetch(baseUrl() + '/api/calendar/events', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      title: 'Takvim API testi',
+      date: '2026-08-13',
+      startTime: '10:00',
+      endTime: '11:00'
+    })
+  });
+  assert.equal(calendarCreateResponse.status, 201);
+  const calendarEvent = (await calendarCreateResponse.json()).event;
+  const calendarListResponse = await fetch(
+    baseUrl() + '/api/calendar/events?from=2026-08-01&to=2026-08-31',
+    { headers: { Cookie: cookie } }
+  );
+  assert.equal(calendarListResponse.status, 200);
+  assert.equal((await calendarListResponse.json()).events[0].id, calendarEvent.id);
+  const calendarSourcesResponse = await fetch(baseUrl() + '/api/calendar/sources', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(calendarSourcesResponse.status, 200);
+  const calendarSources = await calendarSourcesResponse.json();
+  assert.deepEqual(calendarSources.sources.map((source) => source.id), ['local']);
+  assert.deepEqual(calendarSources.accounts, []);
+  const calendarDeleteResponse = await fetch(baseUrl() + '/api/calendar/events/' + calendarEvent.id, {
+    method: 'DELETE',
+    headers: { Cookie: cookie }
+  });
+  assert.equal(calendarDeleteResponse.status, 200);
+
+  const weatherStatusResponse = await fetch(baseUrl() + '/api/weather', { headers: { Cookie: cookie } });
+  assert.equal(weatherStatusResponse.status, 200);
+  assert.equal((await weatherStatusResponse.json()).configured, false);
+  const shortLocationQueryResponse = await fetch(baseUrl() + '/api/weather/locations?q=x', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(shortLocationQueryResponse.status, 400);
+
+  const initialNotificationsResponse = await fetch(baseUrl() + '/api/notifications', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(initialNotificationsResponse.status, 200);
+  assert.equal((await initialNotificationsResponse.json()).stats.unread, 0);
+  const notificationSettingsResponse = await fetch(baseUrl() + '/api/notifications/settings', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(notificationSettingsResponse.status, 200);
+  const notificationSettings = await notificationSettingsResponse.json();
+  assert.equal(notificationSettings.settings.browserPush.enabled, false);
+  assert.match(notificationSettings.push.publicKey, /^[A-Za-z0-9_-]{40,200}$/);
+  assert.equal(notificationSettings.telegram.configured, false);
+  assert.equal(notificationSettings.telegram.tokenIncluded, false);
+  assert.equal(notificationSettings.codexReview.enabled, false);
+  assert.equal(notificationSettings.codexReview.intervalMinutes, 120);
+  assert.equal(notificationSettings.codexReview.decisionAuthority, 'codex');
+  assert.equal(notificationSettings.codexReview.fallback, 'none');
+  assert.deepEqual(
+    notificationSettings.codexReview.sources.map((source) => source.id),
+    ['work-gmail', 'work-chat', 'telegram', 'whatsapp']
+  );
+  const codexReviewStatusResponse = await fetch(baseUrl() + '/api/tasks/codex-review', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(codexReviewStatusResponse.status, 200);
+  assert.equal((await codexReviewStatusResponse.json()).codexReview.enabled, false);
+  const invalidCodexReviewResponse = await fetch(baseUrl() + '/api/tasks/codex-review', {
+    method: 'PUT',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ intervalMinutes: 7 })
+  });
+  assert.equal(invalidCodexReviewResponse.status, 400);
+  assert.equal((await invalidCodexReviewResponse.json()).code, 'codex-review-settings-invalid');
+  const telegramStatusResponse = await fetch(baseUrl() + '/api/notifications/telegram', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(telegramStatusResponse.status, 200);
+  assert.equal((await telegramStatusResponse.json()).configured, false);
+  const invalidTelegramConfigureResponse = await fetch(baseUrl() + '/api/notifications/telegram/configure', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ botToken: 'not-a-token' })
+  });
+  assert.equal(invalidTelegramConfigureResponse.status, 400);
+  assert.equal((await invalidTelegramConfigureResponse.json()).code, 'notification-telegram-token-invalid');
+  const testNotificationResponse = await fetch(baseUrl() + '/api/notifications/test', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: '{}'
+  });
+  assert.equal(testNotificationResponse.status, 201);
+  const testNotification = (await testNotificationResponse.json()).notification;
+  assert.equal(testNotification.source, 'foxos');
+  const readNotificationResponse = await fetch(baseUrl() + '/api/notifications/' + testNotification.id, {
+    method: 'PATCH',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: 'read' })
+  });
+  assert.equal(readNotificationResponse.status, 200);
+  assert.equal((await readNotificationResponse.json()).notification.status, 'read');
+  const ingestToken = JSON.parse(fs.readFileSync(
+    path.join(process.env.DATA_ROOT, 'notifications', 'ingest-token.json'),
+    'utf8'
+  )).token;
+  const ingestedNotificationResponse = await fetch(baseUrl() + '/api/notifications/ingest', {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer ' + ingestToken,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ source: 'test-agent', title: 'Ajan bildirimi', dedupeKey: 'agent-test' })
+  });
+  assert.equal(ingestedNotificationResponse.status, 201);
+  assert.equal((await ingestedNotificationResponse.json()).notification.source, 'test-agent');
+  const resolvedIngestResponse = await fetch(baseUrl() + '/api/notifications/ingest/resolve', {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer ' + ingestToken,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ source: 'test-agent', dedupeKey: 'agent-test' })
+  });
+  assert.equal(resolvedIngestResponse.status, 200);
+  assert.equal((await resolvedIngestResponse.json()).notification.status, 'resolved');
+
+  const initialTasksResponse = await fetch(baseUrl() + '/api/tasks', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(initialTasksResponse.status, 200);
+  assert.deepEqual((await initialTasksResponse.json()).stats, {
+    total: 0,
+    open: 0,
+    overdue: 0,
+    completed: 0
+  });
+  const taskCreateResponse = await fetch(baseUrl() + '/api/tasks', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      title: 'API checklist testi',
+      dueAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      timeZone: 'UTC'
+    })
+  });
+  assert.equal(taskCreateResponse.status, 201);
+  const task = (await taskCreateResponse.json()).task;
+  assert.match(task.id, /^tsk_[a-f0-9]{32}$/);
+  const taskCompleteResponse = await fetch(baseUrl() + '/api/tasks/' + task.id + '/complete', {
+    method: 'POST',
+    headers: { Cookie: cookie }
+  });
+  assert.equal(taskCompleteResponse.status, 200);
+  assert.equal((await taskCompleteResponse.json()).task.status, 'completed');
+
+  const ingestedTaskResponse = await fetch(baseUrl() + '/api/tasks/ingest', {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer ' + ingestToken,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      title: 'Ajan checklist testi',
+      dueAt: new Date(Date.now() - 1_000).toISOString(),
+      timeZone: 'UTC',
+      source: 'test-agent',
+      externalKey: 'server-api-task-test'
+    })
+  });
+  assert.equal(ingestedTaskResponse.status, 201);
+  const ingestedTask = (await ingestedTaskResponse.json()).task;
+  assert.match(ingestedTask.reminderNotificationId, /^ntf_[a-f0-9]{32}$/);
+  const ingestTaskCompleteResponse = await fetch(
+    baseUrl() + '/api/tasks/ingest/' + ingestedTask.id + '/complete',
+    {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + ingestToken }
+    }
+  );
+  assert.equal(ingestTaskCompleteResponse.status, 200);
+  assert.equal((await ingestTaskCompleteResponse.json()).task.status, 'completed');
+  const unauthorizedTaskIngest = await fetch(baseUrl() + '/api/tasks/ingest');
+  assert.equal(unauthorizedTaskIngest.status, 401);
+
+  const legacyAuthRecord = JSON.parse(fs.readFileSync(authFile, 'utf8'));
+  delete legacyAuthRecord.initialSetup;
+  delete legacyAuthRecord.localePreferences;
+  legacyAuthRecord.version = 2;
+  fs.writeFileSync(authFile, JSON.stringify(legacyAuthRecord), { mode: 0o600 });
+  const legacyStatusResponse = await fetch(baseUrl() + '/api/auth/status', {
+    headers: { Cookie: cookie }
+  });
+  const legacyStatus = await legacyStatusResponse.json();
+  assert.equal(legacyStatus.onboardingRequired, false);
+  assert.equal(legacyStatus.localePreferences, null);
 
   const removalPlanId = 'arplan_' + '1'.repeat(32);
   const wrongRemovalPassword = await fetch(baseUrl() + '/api/application-removal-plans/' + removalPlanId + '/apply', {
@@ -593,10 +1095,98 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   });
   assert.equal(connectionsResponse.status, 200);
   const connections = (await connectionsResponse.json()).connections;
-  assert.equal(connections.length, 1);
-  assert.equal(connections[0].id, 'cloudflare');
+  assert.equal(connections.length, 5);
+  assert.equal(connections[0].id, 'calendar-accounts');
   assert.equal(connections[0].connected, false);
-  assert.equal(connections[0].tokenIncluded, false);
+  assert.equal(connections[0].credentialsIncluded, false);
+  assert.deepEqual(connections[0].accounts, []);
+  assert.equal(connections[1].id, 'codex');
+  assert.equal(connections[1].installed, false);
+  assert.equal(connections[1].connected, false);
+  assert.equal(connections[1].accessProfile, 'read-only');
+  assert.equal(connections[1].credentialIncluded, false);
+  assert.equal(connections[2].id, 'antigravity-cli');
+  assert.equal(connections[2].installed, false);
+  assert.equal(connections[2].connected, false);
+  assert.equal(connections[2].accessProfile, 'read-only');
+  assert.equal(connections[2].credentialIncluded, false);
+  assert.equal(connections[2].oauthAuthorizationUrlIncluded, false);
+  assert.equal(connections[3].id, 'gemini-cli');
+  assert.equal(connections[3].installed, false);
+  assert.equal(connections[3].connected, false);
+  assert.equal(connections[3].credentialIncluded, false);
+  assert.equal(connections[4].id, 'cloudflare');
+  assert.equal(connections[4].connected, false);
+  assert.equal(connections[4].tokenIncluded, false);
+
+  const unconfirmedCodexInstall = await fetch(baseUrl() + '/api/connections/codex/install', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ confirmation: 'yes' })
+  });
+  assert.equal(unconfirmedCodexInstall.status, 400);
+  assert.equal((await unconfirmedCodexInstall.json()).code, 'codex-install-confirmation-required');
+
+  const unconfirmedAntigravityInstall = await fetch(baseUrl() + '/api/connections/antigravity/install', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ confirmation: 'yes' })
+  });
+  assert.equal(unconfirmedAntigravityInstall.status, 400);
+  assert.equal((await unconfirmedAntigravityInstall.json()).code, 'antigravity-install-confirmation-required');
+
+  const antigravityFullServerWithoutCli = await fetch(
+    baseUrl() + '/api/connections/antigravity/access-profile',
+    {
+      method: 'PUT',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        accessProfile: 'full-server',
+        confirmation: 'ENABLE ANTIGRAVITY FULL SERVER'
+      })
+    }
+  );
+  assert.equal(antigravityFullServerWithoutCli.status, 409);
+  assert.equal((await antigravityFullServerWithoutCli.json()).code, 'antigravity-cli-not-installed');
+
+  const unconfirmedGeminiInstall = await fetch(baseUrl() + '/api/connections/gemini/install', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ confirmation: 'yes' })
+  });
+  assert.equal(unconfirmedGeminiInstall.status, 400);
+  assert.equal((await unconfirmedGeminiInstall.json()).code, 'gemini-install-confirmation-required');
+
+  const testGeminiApiKey = 'AIza' + 'x'.repeat(35);
+  const geminiWithoutCli = await fetch(baseUrl() + '/api/connections/gemini', {
+    method: 'PUT',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ apiKey: testGeminiApiKey })
+  });
+  assert.equal(geminiWithoutCli.status, 409);
+  const geminiWithoutCliPayload = await geminiWithoutCli.json();
+  assert.equal(geminiWithoutCliPayload.code, 'gemini-cli-not-installed');
+  assert.equal(JSON.stringify(geminiWithoutCliPayload).includes(testGeminiApiKey), false);
+
+  const codexThreadWithoutCli = await fetch(baseUrl() + '/api/codex/threads', {
+    method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json' }, body: '{}'
+  });
+  assert.equal(codexThreadWithoutCli.status, 409);
+  assert.equal((await codexThreadWithoutCli.json()).code, 'codex-cli-not-installed');
+
+  const codexModelsWithoutCli = await fetch(baseUrl() + '/api/codex/models', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(codexModelsWithoutCli.status, 409);
+  assert.equal((await codexModelsWithoutCli.json()).code, 'codex-cli-not-installed');
+
+  const codexApprovalWithoutCli = await fetch(baseUrl() + '/api/connections/codex/approval-policy', {
+    method: 'PUT',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ approvalPolicy: 'never' })
+  });
+  assert.equal(codexApprovalWithoutCli.status, 409);
+  assert.equal((await codexApprovalWithoutCli.json()).code, 'codex-cli-not-installed');
 
   const filesResponse = await fetch(baseUrl() + '/api/files?path=%2F', {
     headers: { Cookie: cookie }
@@ -605,6 +1195,97 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   const workspace = await filesResponse.json();
   assert.ok(workspace.items.some((entry) => entry.name === 'Sunucu' && entry.symlink));
 
+  const externalPreviewDirectory = path.join(testRoot, 'external-preview-directory');
+  const externalPreview = path.join(externalPreviewDirectory, 'linked-preview.jpg');
+  const thumbnailPreview = path.join(externalPreviewDirectory, 'thumbnail-preview.jpg');
+  const previewLink = path.join(process.env.DATA_ROOT, 'files', 'Masaüstü', 'linked-previews');
+  fs.mkdirSync(externalPreviewDirectory);
+  fs.writeFileSync(externalPreview, 'preview-bytes');
+  fs.writeFileSync(thumbnailPreview, 'thumbnail-source');
+  fs.symlinkSync(externalPreviewDirectory, previewLink);
+  const previewResponse = await fetch(
+    baseUrl() + '/api/file-content?path=Masa%C3%BCst%C3%BC%2Flinked-previews%2Flinked-preview.jpg',
+    { headers: { Cookie: cookie } }
+  );
+  assert.equal(previewResponse.status, 200);
+  assert.equal(await previewResponse.text(), 'preview-bytes');
+
+  const thumbnailUrl = baseUrl() +
+    '/api/file-thumbnail?path=Masa%C3%BCst%C3%BC%2Flinked-previews%2Fthumbnail-preview.jpg&v=1';
+  const thumbnailResponse = await fetch(thumbnailUrl, { headers: { Cookie: cookie } });
+  assert.equal(thumbnailResponse.status, 200);
+  assert.equal(thumbnailResponse.headers.get('content-type'), 'image/jpeg');
+  assert.equal(thumbnailResponse.headers.get('cache-control'), 'private, max-age=86400');
+  assert.equal(await thumbnailResponse.text(), 'thumbnail-bytes');
+  assert.equal(fs.readFileSync(thumbnailGenerationCounter, 'utf8'), 'x');
+
+  const cachedThumbnailResponse = await fetch(thumbnailUrl, { headers: { Cookie: cookie } });
+  assert.equal(cachedThumbnailResponse.status, 200);
+  assert.equal(await cachedThumbnailResponse.text(), 'thumbnail-bytes');
+  assert.equal(fs.readFileSync(thumbnailGenerationCounter, 'utf8'), 'x');
+
+  fs.appendFileSync(thumbnailPreview, '-changed');
+  const refreshedThumbnailResponse = await fetch(thumbnailUrl.replace('&v=1', '&v=2'), {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(refreshedThumbnailResponse.status, 200);
+  assert.equal(await refreshedThumbnailResponse.text(), 'thumbnail-bytes');
+  assert.equal(fs.readFileSync(thumbnailGenerationCounter, 'utf8'), 'xx');
+
+  const escapedPreviewResponse = await fetch(
+    baseUrl() + '/api/file-content?path=..%2Fexternal-preview.jpg',
+    { headers: { Cookie: cookie } }
+  );
+  assert.equal(escapedPreviewResponse.status, 404);
+
+  const escapedThumbnailResponse = await fetch(
+    baseUrl() + '/api/file-thumbnail?path=..%2Fexternal-preview.jpg&v=1',
+    { headers: { Cookie: cookie } }
+  );
+  assert.equal(escapedThumbnailResponse.status, 404);
+
+  const downloadName = 'oredata-kapakları.zip';
+  const downloadBytes = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0xff, 0x7f]);
+  fs.writeFileSync(path.join(process.env.DATA_ROOT, 'files', 'Masaüstü', downloadName), downloadBytes);
+  const downloadResponse = await fetch(
+    baseUrl() + '/api/file-download?path=' + encodeURIComponent('Masaüstü/' + downloadName),
+    { headers: { Cookie: cookie } }
+  );
+  assert.equal(downloadResponse.status, 200);
+  assert.match(downloadResponse.headers.get('content-disposition'), /^attachment;/i);
+  assert.match(downloadResponse.headers.get('content-disposition'), /oredata-kapaklar%C4%B1\.zip/i);
+  assert.equal(downloadResponse.headers.get('cache-control'), 'private, no-store');
+  assert.deepEqual(Buffer.from(await downloadResponse.arrayBuffer()), downloadBytes);
+
+  const linkedDownloadResponse = await fetch(
+    baseUrl() + '/api/file-download?path=Masa%C3%BCst%C3%BC%2Flinked-previews%2Flinked-preview.jpg',
+    { headers: { Cookie: cookie } }
+  );
+  assert.equal(linkedDownloadResponse.status, 200);
+  assert.match(linkedDownloadResponse.headers.get('content-disposition'), /^attachment;/i);
+  assert.equal(await linkedDownloadResponse.text(), 'preview-bytes');
+
+  const hostDownloadName = 'server-photo.jpg';
+  fs.writeFileSync(path.join(testRoot, hostDownloadName), 'server-photo-bytes');
+  const hostDownloadResponse = await fetch(
+    baseUrl() + '/api/file-download?path=' + encodeURIComponent('Sunucu/' + hostDownloadName),
+    { headers: { Cookie: cookie } }
+  );
+  assert.equal(hostDownloadResponse.status, 200);
+  assert.equal(await hostDownloadResponse.text(), 'server-photo-bytes');
+
+  const directoryDownloadResponse = await fetch(
+    baseUrl() + '/api/file-download?path=Masa%C3%BCst%C3%BC',
+    { headers: { Cookie: cookie } }
+  );
+  assert.equal(directoryDownloadResponse.status, 404);
+
+  const escapedDownloadResponse = await fetch(
+    baseUrl() + '/api/file-download?path=..%2Fexternal-preview.jpg',
+    { headers: { Cookie: cookie } }
+  );
+  assert.equal(escapedDownloadResponse.status, 404);
+
   const terminalResponse = await fetch(baseUrl() + '/api/terminal', {
     method: 'POST',
     headers: { Cookie: cookie, 'Content-Type': 'application/json' },
@@ -612,6 +1293,34 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   });
   assert.equal(terminalResponse.status, 200);
   assert.equal((await terminalResponse.json()).output, 'foxos-ok');
+
+  const terminalSocket = new WebSocket(
+    baseUrl().replace('http:', 'ws:') + '/api/terminal/socket',
+    { headers: { Cookie: cookie, Origin: baseUrl() } }
+  );
+  const readyMessage = waitForSocketMessage(terminalSocket, 'ready');
+  await new Promise((resolve, reject) => {
+    terminalSocket.once('open', resolve);
+    terminalSocket.once('error', reject);
+  });
+  assert.deepEqual(await readyMessage, { type: 'ready' });
+  const pty = testTerminalPtys.at(-1);
+  assert.deepEqual(pty.size, { cols: 80, rows: 24 });
+  terminalSocket.send(JSON.stringify({ type: 'resize', cols: 120, rows: 40 }));
+  terminalSocket.send(JSON.stringify({ type: 'input', data: 'printf foxos-pty\r' }));
+  await waitForCondition(
+    () => pty.resizes.length === 1 && pty.writes.length === 1,
+    'Timed out waiting for the authenticated terminal PTY'
+  );
+  assert.deepEqual(pty.resizes, [[120, 40]]);
+  assert.deepEqual(pty.writes, ['printf foxos-pty\r']);
+  const ptyOutput = waitForSocketMessage(terminalSocket, 'output');
+  pty.emitData('foxos-pty\r\n');
+  assert.deepEqual(await ptyOutput, { type: 'output', data: 'foxos-pty\r\n' });
+  const terminalClosed = new Promise((resolve) => terminalSocket.once('close', resolve));
+  terminalSocket.close(1000, 'test complete');
+  await terminalClosed;
+  assert.equal(pty.killedWith, 'SIGHUP');
 
   const secretResponse = await fetch(baseUrl() + '/api/secrets', {
     method: 'POST',
@@ -1003,6 +1712,29 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   );
   assert.equal(fs.statSync(migrationPlanFile).mode & 0o777, 0o600);
 
+  const reviewedAuthRecord = JSON.parse(fs.readFileSync(authFile, 'utf8'));
+  reviewedAuthRecord.version = 3;
+  reviewedAuthRecord.initialSetup = {
+    schemaVersion: 1,
+    status: 'pending',
+    startedAt: new Date(Date.parse(scanPayload.snapshot.generatedAt) - 1000).toISOString()
+  };
+  fs.writeFileSync(authFile, JSON.stringify(reviewedAuthRecord), { mode: 0o600 });
+  const reviewedOnboardingResponse = await fetch(baseUrl() + '/api/setup/onboarding/complete', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      resolution: 'reviewed',
+      confirmation: 'COMPLETE INITIAL SETUP'
+    })
+  });
+  assert.equal(reviewedOnboardingResponse.status, 200);
+  assert.equal((await reviewedOnboardingResponse.json()).resolution, 'reviewed');
+  const reviewedInitialSetup = JSON.parse(fs.readFileSync(authFile, 'utf8')).initialSetup;
+  assert.equal(reviewedInitialSetup.status, 'completed');
+  assert.equal(reviewedInitialSetup.review.sourceSnapshotId, scanPayload.snapshot.snapshotId);
+  assert.equal(reviewedInitialSetup.review.serverPlanId, serverMigrationPlan.planId);
+
   const migrationSelectionStatusResponse = await fetch(
     baseUrl() + '/api/migration-selections/current',
     { headers: { Cookie: cookie } }
@@ -1109,6 +1841,65 @@ test('setup creates an authenticated session and unlocks the workspace', async (
   assert.equal(blockedAdoptionResponse.status, 403);
   assert.equal((await blockedAdoptionResponse.json()).code, 'pilot-resource-only');
   assert.equal(dockerRequestLog.every((request) => request.method === 'GET'), true);
+
+  const securityOverviewResponse = await fetch(baseUrl() + '/api/security/overview', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(securityOverviewResponse.status, 200);
+  const securityOverview = await securityOverviewResponse.json();
+  assert.equal(securityOverview.security.username, 'tester');
+  assert.equal(securityOverview.security.password.modern, true);
+  assert.deepEqual(securityOverview.security.passkeys, []);
+  assert.equal(securityOverview.security.recovery.configured, false);
+  assert.equal(securityOverview.posture.attentionRequired, true);
+  assert.equal(securityOverview.posture.activeSessionCount, 1);
+  assert.equal(securityOverview.sessions[0].current, true);
+
+  const rejectedRecoveryCodesResponse = await fetch(baseUrl() + '/api/security/recovery-codes', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ currentPassword: 'definitely-wrong-password' })
+  });
+  assert.equal(rejectedRecoveryCodesResponse.status, 401);
+
+  const recoveryCodesResponse = await fetch(baseUrl() + '/api/security/recovery-codes', {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ currentPassword: 'correct-horse-battery' })
+  });
+  assert.equal(recoveryCodesResponse.status, 201);
+  const recoveryCodes = await recoveryCodesResponse.json();
+  assert.equal(recoveryCodes.codes.length, 10);
+  assert.equal(new Set(recoveryCodes.codes).size, 10);
+  assert.equal(recoveryCodes.security.recovery.availableCodes, 10);
+  const persistedAuth = fs.readFileSync(authFile, 'utf8');
+  assert.equal(persistedAuth.includes(recoveryCodes.codes[0]), false);
+
+  const securityEventsResponse = await fetch(baseUrl() + '/api/security/events?limit=20', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(securityEventsResponse.status, 200);
+  const securityEvents = (await securityEventsResponse.json()).events;
+  assert.equal(securityEvents.some((event) => event.type === 'recovery-codes-created'), true);
+  assert.equal(JSON.stringify(securityEvents).includes(recoveryCodes.codes[0]), false);
+
+  const passwordChangeResponse = await fetch(baseUrl() + '/api/security/password', {
+    method: 'PUT',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      currentPassword: 'correct-horse-battery',
+      newPassword: 'a-distinct-long-password-for-the-foxos-owner'
+    })
+  });
+  assert.equal(passwordChangeResponse.status, 200);
+  const changedCookie = passwordChangeResponse.headers.get('set-cookie').split(';')[0];
+  assert.notEqual(changedCookie, cookie);
+  assert.equal((await fetch(baseUrl() + '/api/security/overview', {
+    headers: { Cookie: cookie }
+  })).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/security/overview', {
+    headers: { Cookie: changedCookie }
+  })).status, 200);
   mockContainer = null;
 });
 

@@ -12,19 +12,24 @@ import {
   Server,
   ShieldCheck
 } from 'lucide-react';
+import { useI18n } from '../contexts/LocaleContext';
 
-const formatBytes = (bytes) => {
+const formatBytes = (bytes, formatNumber) => {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
   const unit = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
-  return (bytes / (1024 ** unit)).toFixed(unit > 1 ? 1 : 0) + ' ' + units[unit];
+  return `${formatNumber(bytes / (1024 ** unit), { maximumFractionDigits: unit > 1 ? 1 : 0 })} ${units[unit]}`;
 };
 
-const formatUptime = (seconds) => {
+const formatUptime = (seconds, t) => {
   const days = Math.floor(seconds / 86400);
   const hours = Math.floor((seconds % 86400) / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
-  return [days ? days + 'g' : null, hours ? hours + 's' : null, minutes + 'dk'].filter(Boolean).join(' ');
+  return [
+    days ? t('serverApp.uptimeDays', { count: days }) : null,
+    hours ? t('serverApp.uptimeHours', { count: hours }) : null,
+    t('serverApp.uptimeMinutes', { count: minutes })
+  ].filter(Boolean).join(' ');
 };
 
 const percentage = (used, total) => total > 0 ? Math.round((used / total) * 100) : 0;
@@ -66,6 +71,7 @@ const MetricCard = ({ icon: Icon, label, value, detail, progress }) => (
 );
 
 const ServerApp = () => {
+  const { formatNumber, t } = useI18n();
   const [system, setSystem] = useState(null);
   const [containers, setContainers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -85,8 +91,8 @@ const ServerApp = () => {
       const systemData = await systemResponse.json();
       const containersData = await containersResponse.json();
 
-      if (!systemResponse.ok) throw new Error(systemData.error || 'Sistem bilgisi alınamadı');
-      if (!containersResponse.ok) throw new Error(containersData.error || 'Docker bilgisi alınamadı');
+      if (!systemResponse.ok) throw new Error(systemData.error || t('serverApp.systemError'));
+      if (!containersResponse.ok) throw new Error(containersData.error || t('serverApp.dockerError'));
 
       setSystem(systemData);
       setContainers(containersData);
@@ -97,7 +103,7 @@ const ServerApp = () => {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     load();
@@ -111,7 +117,7 @@ const ServerApp = () => {
     try {
       const response = await fetch('/api/containers/' + container.id + '/' + action, { method: 'POST' });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Container işlemi başarısız');
+      if (!response.ok) throw new Error(data.error || t('serverApp.containerActionError'));
       await load(true);
     } catch (requestError) {
       setError(requestError.message);
@@ -133,12 +139,12 @@ const ServerApp = () => {
   const runningCount = containers.filter((container) => container.state === 'running').length;
 
   return (
-    <div style={{ height: '100%', overflowY: 'auto', color: '#fff', background: 'rgba(16,18,22,0.96)', padding: '24px', boxSizing: 'border-box' }}>
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '16px', marginBottom: '22px' }}>
+    <div className="server-app" style={{ height: '100%', overflowY: 'auto', color: '#fff', background: 'rgba(16,18,22,0.96)', padding: '24px', boxSizing: 'border-box' }}>
+      <div className="server-header" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '16px', marginBottom: '22px' }}>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <Server size={24} color="#38bdf8" />
-            <h1 style={{ margin: 0, fontSize: '23px' }}>{system?.hostname || 'Sunucu'}</h1>
+            <h1 style={{ margin: 0, fontSize: '23px' }}>{system?.hostname || t('common.server')}</h1>
           </div>
           <div style={{ marginTop: '6px', color: '#8b93a1', fontSize: '13px' }}>{system?.os} · {system?.kernel}</div>
         </div>
@@ -148,7 +154,7 @@ const ServerApp = () => {
           disabled={refreshing}
           style={{ ...actionButtonStyle, opacity: refreshing ? 0.6 : 1 }}
         >
-          <RefreshCw size={14} className={refreshing ? 'spin' : ''} /> Yenile
+          <RefreshCw size={14} className={refreshing ? 'spin' : ''} /> {t('common.refresh')}
         </button>
       </div>
 
@@ -158,24 +164,24 @@ const ServerApp = () => {
         </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '12px', marginBottom: '24px' }}>
-        <MetricCard icon={Activity} label="Çalışma süresi" value={formatUptime(system?.uptimeSeconds || 0)} detail={'Load: ' + (system?.loadAverage || []).join(' / ')} />
-        <MetricCard icon={MemoryStick} label="Bellek" value={memoryUsage + '%'} detail={formatBytes(system?.memory.used) + ' / ' + formatBytes(system?.memory.total)} progress={memoryUsage} />
-        <MetricCard icon={HardDrive} label="Disk" value={diskUsage + '%'} detail={formatBytes(system?.disk.used) + ' / ' + formatBytes(system?.disk.total)} progress={diskUsage} />
-        <MetricCard icon={Cpu} label="Mimari" value={system?.architecture || '—'} detail={'Yürütme: ' + (system?.executionMode || '—')} />
+      <div className="server-metrics" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '12px', marginBottom: '24px' }}>
+        <MetricCard icon={Activity} label={t('serverApp.uptime')} value={formatUptime(system?.uptimeSeconds || 0, t)} detail={t('serverApp.load', { value: (system?.loadAverage || []).join(' / ') })} />
+        <MetricCard icon={MemoryStick} label={t('serverApp.memory')} value={`${formatNumber(memoryUsage)}%`} detail={`${formatBytes(system?.memory.used, formatNumber)} / ${formatBytes(system?.memory.total, formatNumber)}`} progress={memoryUsage} />
+        <MetricCard icon={HardDrive} label={t('serverApp.disk')} value={`${formatNumber(diskUsage)}%`} detail={`${formatBytes(system?.disk.used, formatNumber)} / ${formatBytes(system?.disk.total, formatNumber)}`} progress={diskUsage} />
+        <MetricCard icon={Cpu} label={t('serverApp.architecture')} value={system?.architecture || '—'} detail={t('serverApp.execution', { mode: system?.executionMode || '—' })} />
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+      <div className="server-section-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '9px' }}>
           <Box size={19} color="#38bdf8" />
-          <h2 style={{ fontSize: '17px', margin: 0 }}>Docker Containerları</h2>
+          <h2 style={{ fontSize: '17px', margin: 0 }}>{t('serverApp.containers')}</h2>
         </div>
-        <span style={{ color: '#8b93a1', fontSize: '12px' }}>{runningCount} çalışıyor · {containers.length} toplam</span>
+        <span style={{ color: '#8b93a1', fontSize: '12px' }}>{t('serverApp.containerSummary', { running: formatNumber(runningCount), total: formatNumber(containers.length) })}</span>
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '9px' }}>
         {containers.length === 0 && (
-          <div style={{ ...cardStyle, color: '#8b93a1', textAlign: 'center' }}>Bu sunucuda container bulunamadı.</div>
+          <div style={{ ...cardStyle, color: '#8b93a1', textAlign: 'center' }}>{t('serverApp.noContainers')}</div>
         )}
 
         {containers.map((container) => {
@@ -187,12 +193,12 @@ const ServerApp = () => {
             .join(', ');
 
           return (
-            <div key={container.id} style={{ ...cardStyle, display: 'flex', alignItems: 'center', gap: '14px' }}>
+            <div key={container.id} className="server-container-row" style={{ ...cardStyle, display: 'flex', alignItems: 'center', gap: '14px' }}>
               <div style={{ width: '10px', height: '10px', borderRadius: '50%', flex: '0 0 auto', background: isRunning ? '#27c93f' : '#6b7280', boxShadow: isRunning ? '0 0 12px rgba(39,201,63,0.45)' : 'none' }} />
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <strong style={{ fontSize: '14px', overflow: 'hidden', textOverflow: 'ellipsis' }}>{container.name}</strong>
-                  {container.protected && <ShieldCheck size={14} color="#38bdf8" />}
+                  {container.protected && <ShieldCheck size={14} color="#38bdf8" aria-label={t('serverApp.protected')} />}
                 </div>
                 <div style={{ color: '#8b93a1', fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: '3px' }}>
                   {container.image} · {container.status}{portText ? ' · ' + portText : ''}
@@ -200,19 +206,19 @@ const ServerApp = () => {
               </div>
 
               {!container.protected && (
-                <div style={{ display: 'flex', gap: '6px' }}>
+                <div className="server-container-actions" style={{ display: 'flex', gap: '6px' }}>
                   {!isRunning && (
                     <button type="button" disabled={isBusy} onClick={() => runContainerAction(container, 'start')} style={actionButtonStyle}>
-                      <Play size={13} /> Başlat
+                      <Play size={13} /> {t('applications.start')}
                     </button>
                   )}
                   {isRunning && (
                     <>
                       <button type="button" disabled={isBusy} onClick={() => runContainerAction(container, 'restart')} style={actionButtonStyle}>
-                        <RotateCw size={13} /> Yeniden başlat
+                        <RotateCw size={13} /> {t('applications.restart')}
                       </button>
                       <button type="button" disabled={isBusy} onClick={() => runContainerAction(container, 'stop')} style={{ ...actionButtonStyle, color: '#ffaaa5' }}>
-                        <CircleStop size={13} /> Durdur
+                        <CircleStop size={13} /> {t('applications.stop')}
                       </button>
                     </>
                   )}
