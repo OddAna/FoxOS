@@ -17,6 +17,7 @@ import {
 import { apiFetch } from '../api';
 import ApplicationLogo from '../components/ApplicationLogo';
 import ApplicationStatus from '../components/ApplicationStatus';
+import ApplicationObservabilityPanel from './ApplicationObservabilityPanel';
 import { useApplicationInventory } from '../contexts/ApplicationContext';
 import { useDialog } from '../contexts/DialogContext';
 import { useI18n } from '../contexts/LocaleContext';
@@ -722,6 +723,8 @@ const ApplicationManager = ({ target }) => {
             {message.text}
           </div>
         )}
+
+        <ApplicationObservabilityPanel application={selectedApplication} />
 
         <section style={{ padding: '26px 0', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
           <h3 style={{ margin: '0 0 14px 0', fontSize: '16px' }}>{t('applications.controls')}</h3>

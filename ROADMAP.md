@@ -563,15 +563,20 @@ target blocks only adoption/migration operations that require restore proof.
   and replaces the file atomically while preserving owner/mode. Saving does not
   redeploy the application. Provider-owned files explicitly warn that the
   provider may overwrite them until migration is complete.
-- [ ] Add reviewed environment/secret editing, logs, health history, resource
-  limits, direct-container/host-service updates and general backup/restore controls from the same
+- [ ] Add reviewed environment/secret editing, resource limits,
+  direct-container/host-service updates and general backup/restore controls from the same
   canonical application record as their safety contracts become complete.
 - [ ] On first installation, run the server scan before presenting applications,
   then offer the optional migration selection flow. Declining migration must
   still leave discovery, desktop shortcuts and management of safe observed
   capabilities operational.
 
-- [ ] Add application logs, health history, resource metrics and actionable alerts.
+- [x] Add the first read-only observability slice: bounded host history,
+  allowlisted per-application runtime facts and resource metrics, redacted
+  non-persistent Docker logs, application health/state events, downloadable
+  redacted diagnostics and deduplicated disk, sustained-memory and application
+  error alerts through Notification Hub. Keep long-term telemetry, tracing,
+  profiling and automatic remediation outside this slice.
 - [ ] Add audit logs, users/roles and explicit authorization for destructive actions.
 - [ ] Add CPU/memory/storage limits and disk-pressure protection.
 - [ ] Add database-aware lifecycle and backup safety rather than treating databases

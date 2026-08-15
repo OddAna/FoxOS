@@ -247,6 +247,16 @@
   reviewed image digest, `slab_*` identity, `.foxos.invalid` hostname,
   loopback-only ports, injected-fault rollback and exact run-labeled cleanup;
   it must never accept a real domain or emulate production approval.
+- The Observability Center is a local read-only projection, not a lifecycle or
+  remediation authority. Preserve the fixed host-only sampler, 1,440-sample
+  history, 2,000-application/event bounds, exact inventory-bound full Docker
+  container identities, one-shot statistics, non-following 500-line/512-KiB
+  log reads and redacted allowlisted diagnostics. Never persist raw logs or
+  expose environment values, labels, commands, mount source paths, Compose
+  content, tokens or private configuration. Host services and inactive
+  definitions must remain truthfully unsupported where Docker telemetry does
+  not exist. Alerts may only use deduplicated Notification Hub events and must
+  never restart, stop, update, reconfigure or delete a resource.
 - The production stateless adapter is authorized only through the authenticated
   one-click run coordinator and the exact reviewed manifest contract. Preserve
   registry/manifest/image drift binding, encrypted environment resolution,

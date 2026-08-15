@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Settings, Globe, Monitor, Shield, User, Bell, Server, Box, Link2 } from 'lucide-react';
+import { Settings, Globe, Monitor, Shield, User, Bell, Server, Box, Link2, Activity } from 'lucide-react';
 import MigrationSettings from './MigrationSettings';
 import ApplicationManager from './ApplicationManager';
 import ConnectionsSettings from './ConnectionsSettings';
@@ -8,6 +8,7 @@ import GeneralSettings from './GeneralSettings';
 import AppearanceSettings from './AppearanceSettings';
 import LanguageRegionSettings from './LanguageRegionSettings';
 import SecuritySettings from './SecuritySettings';
+import ObservabilitySettings from './ObservabilitySettings';
 import { useI18n } from '../contexts/LocaleContext';
 
 const SettingsApp = ({ target }) => {
@@ -28,6 +29,7 @@ const SettingsApp = ({ target }) => {
     { id: 'language', icon: <Globe size={18} />, label: t('settings.tabs.language') },
     { id: 'security', icon: <Shield size={18} />, label: t('settings.tabs.security') },
     { id: 'notifications', icon: <Bell size={18} />, label: t('settings.tabs.notifications') },
+    { id: 'observability', icon: <Activity size={18} />, label: t('settings.tabs.observability') },
     { id: 'users', icon: <User size={18} />, label: t('settings.tabs.users') },
     { id: 'connections', icon: <Link2 size={18} />, label: t('settings.tabs.connections') },
     { id: 'applications', icon: <Box size={18} />, label: t('settings.tabs.applications') },
@@ -88,8 +90,9 @@ const SettingsApp = ({ target }) => {
         {activeTab === 'connections' && <ConnectionsSettings />}
         {activeTab === 'applications' && <ApplicationManager target={applicationTarget} />}
         {activeTab === 'notifications' && <NotificationSettings />}
+        {activeTab === 'observability' && <ObservabilitySettings />}
 
-        {activeTab !== 'general' && activeTab !== 'display' && activeTab !== 'language' && activeTab !== 'security' && activeTab !== 'migration' && activeTab !== 'connections' && activeTab !== 'applications' && activeTab !== 'notifications' && (
+        {activeTab !== 'general' && activeTab !== 'display' && activeTab !== 'language' && activeTab !== 'security' && activeTab !== 'migration' && activeTab !== 'connections' && activeTab !== 'applications' && activeTab !== 'notifications' && activeTab !== 'observability' && (
           <p style={{ color: '#888', fontSize: '14px' }}>{t('settings.comingSoon')}</p>
         )}
       </div>

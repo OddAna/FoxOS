@@ -10,7 +10,8 @@ const notifications = {
     calendar: 'Takvim',
     weather: 'Hava Durumu',
     backups: 'Yedekler',
-    mail: 'E-posta'
+    mail: 'E-posta',
+    observability: 'Gözlem'
   },
   delivery: {
     delivered: 'Ulaştı',

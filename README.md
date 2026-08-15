@@ -91,6 +91,28 @@ agent is still required to perform management operations.
 - Create or remove a desktop shortcut from either the context menu or
   Application Manager.
 
+### Observability
+
+- Open **Settings → Observability** for a read-only view of host CPU, memory,
+  root-disk, load, temperature and network activity with up to 24 hours of
+  bounded local history, application-state totals, active alerts and recent
+  runtime events.
+- Open an application's **Summary**, **Metrics**, **Logs** and **Events** tabs
+  from Application Manager. Container inspection and metrics use only the
+  application's exact inventory-bound runtime identity; inactive definitions
+  and host services report unsupported capabilities instead of inventing data.
+- Read at most 500 Docker log lines through a bounded, non-streaming request.
+  FoxOS strips terminal controls and masks likely credentials, tokens, cookies,
+  private keys and URL passwords before returning the lines; raw logs are not
+  persisted by the observability layer.
+- Download an authenticated, allowlisted and redacted JSON diagnostics report
+  without exporting environment values, Docker labels, commands, mount source
+  paths or private configuration.
+- Send persistent disk pressure, sustained memory pressure and application
+  error conditions through the existing Notification Hub with deduplication
+  and recovery resolution. Observability never restarts, stops, updates or
+  reconfigures a workload automatically.
+
 ### First run, language, appearance and security
 
 - Guide a new server owner through interface language, hardened owner
@@ -605,6 +627,9 @@ flow rather than opening a public issue with exploit details or secrets.
   arbitrary custom build systems are not a general update path yet.
 - Compose editing changes source only; it does not automatically deploy the
   edited file.
+- Observability is intentionally local and bounded: it is not a long-term log
+  archive, distributed tracing system, profiler or automatic remediation
+  service.
 - Cloudflare automation supports only the explicitly connected, accessible
   zones. Manual DNS and any other DNS provider remain valid alternatives.
 - Some recovery and adoption operations require an explicitly configured

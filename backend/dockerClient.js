@@ -5,6 +5,16 @@ const DEFAULT_JSON_LIMIT = 16 * 1024 * 1024;
 const DEFAULT_ARCHIVE_LIMIT = 64 * 1024 * 1024;
 const DEFAULT_BUILD_LOG_LIMIT = 8 * 1024 * 1024;
 const DEFAULT_BUILD_TIMEOUT_MS = 10 * 60 * 1000;
+const DEFAULT_OBSERVABILITY_LIMIT = 512 * 1024;
+const DEFAULT_OBSERVABILITY_TIMEOUT_MS = 5_000;
+
+function exactContainerId(containerId) {
+  const normalized = String(containerId || '');
+  if (!/^[a-f0-9]{64}$/i.test(normalized)) {
+    throw new Error('Docker observability requires an exact container ID');
+  }
+  return normalized;
+}
 
 function createDockerClient(socketPath) {
   if (!socketPath) {
@@ -114,6 +124,68 @@ function createDockerClient(socketPath) {
     });
   }
 
+  async function containerStats(containerId) {
+    const exactId = exactContainerId(containerId);
+    const response = await requestRaw(
+      'GET',
+      '/containers/' + exactId + '/stats?stream=false&one-shot=true',
+      null,
+      {
+        contentType: 'application/json',
+        maxResponseBytes: 2 * 1024 * 1024,
+        timeoutMs: DEFAULT_OBSERVABILITY_TIMEOUT_MS
+      }
+    );
+    try {
+      return JSON.parse(response.toString('utf8'));
+    } catch {
+      throw new Error('Docker returned invalid container statistics');
+    }
+  }
+
+  async function containerInspect(containerId) {
+    const exactId = exactContainerId(containerId);
+    const response = await requestRaw(
+      'GET',
+      '/containers/' + exactId + '/json',
+      null,
+      {
+        contentType: 'application/json',
+        maxResponseBytes: 2 * 1024 * 1024,
+        timeoutMs: DEFAULT_OBSERVABILITY_TIMEOUT_MS
+      }
+    );
+    try {
+      return JSON.parse(response.toString('utf8'));
+    } catch {
+      throw new Error('Docker returned invalid container inspection data');
+    }
+  }
+
+  async function containerLogs(containerId, { tail = 200, timestamps = true } = {}) {
+    const exactId = exactContainerId(containerId);
+    const boundedTail = Number(tail);
+    if (!Number.isSafeInteger(boundedTail) || boundedTail < 1 || boundedTail > 500) {
+      throw new Error('Docker log tail is outside the configured safety limit');
+    }
+    const params = new URLSearchParams({
+      stdout: '1',
+      stderr: '1',
+      timestamps: timestamps ? '1' : '0',
+      tail: String(boundedTail)
+    });
+    return requestRaw(
+      'GET',
+      '/containers/' + exactId + '/logs?' + params.toString(),
+      null,
+      {
+        contentType: 'application/octet-stream',
+        maxResponseBytes: DEFAULT_OBSERVABILITY_LIMIT,
+        timeoutMs: DEFAULT_OBSERVABILITY_TIMEOUT_MS
+      }
+    );
+  }
+
   async function exec(containerId, command, options = {}) {
     if (!/^[a-f0-9]{12,64}$/i.test(String(containerId || ''))) {
       throw new Error('Docker exec requires an exact container ID');
@@ -150,12 +222,14 @@ function createDockerClient(socketPath) {
     };
   }
 
-  return { exec, request, requestBuffer, requestBuild };
+  return { containerInspect, containerLogs, containerStats, exec, request, requestBuffer, requestBuild };
 }
 
 module.exports = {
   DEFAULT_ARCHIVE_LIMIT,
   DEFAULT_BUILD_LOG_LIMIT,
   DEFAULT_BUILD_TIMEOUT_MS,
+  DEFAULT_OBSERVABILITY_LIMIT,
+  DEFAULT_OBSERVABILITY_TIMEOUT_MS,
   createDockerClient
 };

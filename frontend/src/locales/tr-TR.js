@@ -3,6 +3,7 @@ import notifications from './tr-TR/notifications.js';
 import applications from './tr-TR/applications.js';
 import migration from './tr-TR/migration.js';
 import security from './tr-TR/security.js';
+import observability from './tr-TR/observability.js';
 
 const trTR = {
   common: {
@@ -36,6 +37,7 @@ const trTR = {
       language: 'Dil & Bölge',
       security: 'Güvenlik',
       notifications: 'Bildirimler',
+      observability: 'Gözlem',
       users: 'Kullanıcılar',
       connections: 'Bağlantılar',
       applications: 'Uygulama Yöneticisi',
@@ -783,6 +785,7 @@ const trTR = {
   applications,
   migration,
   security,
+  observability,
   calendar: {
     localServer: 'Bu sunucu',
     localCalendar: 'FoxOS Takvimi',

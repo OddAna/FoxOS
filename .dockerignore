@@ -1,5 +1,8 @@
 .git
 .gitignore
+.env
+.env.*
+!.env.example
 .foxos-data
 **/node_modules
 frontend/dist

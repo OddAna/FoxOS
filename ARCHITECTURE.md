@@ -218,6 +218,51 @@ condition rather than creating unbounded noise. The authenticated menu-bar
 center receives live change hints over same-origin SSE and remains the canonical
 inbox even when every external channel is disabled or unavailable.
 
+### Implemented boundary: local observability
+
+Observability is an authenticated, read-only projection of the same canonical
+host and Application Manager inventory. A process-local sampler starts only
+after the FoxOS HTTP listener is ready, reads fixed host `/proc`, filesystem and
+optional thermal paths plus read-only Docker Engine endpoints, and performs no
+lifecycle, update, route, source, provider or configuration mutation. Failure
+to collect a sample or deliver an alert is isolated from startup, login and
+ordinary management.
+
+The observability state file is schema-versioned, atomic and owner-only under
+the FoxOS data root. It retains at most 1,440 one-minute host samples (24 hours),
+2,000 current allowlisted logical-application states, at most 2,000 state/health/
+runtime-replacement events and bounded alert-transition state. It does not
+persist raw Docker inspection bodies, environment values, labels, commands,
+mount source paths, Compose contents or log lines. The API downsamples history
+before returning it and exposes only CPU, memory, root-disk, load, network,
+uptime and optional temperature fields.
+
+Application observation resolves the exact logical application through the
+current server inventory and accepts only its verified full container ID for
+bounded Docker inspect, one-shot statistics and non-following log calls. The
+returned runtime projection is allowlisted to state, restart count, OOM/exit
+facts, timestamps, normalized CPU/memory/network/block-I/O/process metrics and
+redacted recent health-check output. Host services, inactive definitions and
+stopped runtimes report unavailable capabilities truthfully rather than falling
+back to a client-supplied name or arbitrary Docker target.
+
+Log reads are on demand, limited to 500 lines and 512 KiB with a five-second
+Docker deadline, and are never written into observability state. Before an
+authenticated response, FoxOS strips ANSI/control characters and masks common
+authorization headers, cookies, passwords, tokens, API/client secrets, URL
+credentials, JWT-like values and private-key blocks. Search and severity
+filters run only against that bounded in-memory redacted result. Diagnostics
+are generated on demand from the same allowlist, include at most 100 redacted
+application log lines, and are not retained as files by FoxOS.
+
+Disk usage at 85/95 percent, memory usage sustained above 90 percent for three
+samples (critical at 97 percent), and an application's canonical `error` state
+produce deduplicated `observability` events in Notification Hub. Recovery
+resolves the same key. Application alerts are marked sensitive for external
+delivery, and clicking an event opens **Settings → Observability**. The alert
+path may notify but has no automatic remediation authority; it cannot restart,
+stop, update, reconfigure or delete any resource.
+
 Checklist tasks are a separate server-owned authority under the same durable
 data root; a notification is never treated as the task record. The bounded,
 schema-versioned task file stores title, notes, source identity, optional stable

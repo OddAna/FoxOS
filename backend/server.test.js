@@ -536,6 +536,10 @@ test('health is public while management APIs require a session', async () => {
   assert.equal((await fetch(baseUrl() + '/api/notifications/settings')).status, 401);
   assert.equal((await fetch(baseUrl() + '/api/notifications/telegram')).status, 401);
   assert.equal((await fetch(baseUrl() + '/api/tasks/codex-review')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/observability/overview')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/observability/diagnostics')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/applications/example/observability')).status, 401);
+  assert.equal((await fetch(baseUrl() + '/api/applications/example/logs')).status, 401);
   assert.equal((await fetch(baseUrl() + '/api/notifications/ingest', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
   })).status, 401);
@@ -780,6 +784,33 @@ test('setup creates an authenticated session and server-owned onboarding state',
   assert.deepEqual(status.localePreferences, localePreferences);
   assert.match(status.session.id, /^ses_[a-f0-9]{32}$/);
   assert.equal(status.session.authMethod, 'password');
+
+  const emptyObservabilityResponse = await fetch(baseUrl() + '/api/observability/overview', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(emptyObservabilityResponse.status, 200);
+  assert.equal((await emptyObservabilityResponse.json()).readOnly, true);
+  const dockerReadsBeforeRefresh = dockerRequestLog.length;
+  const refreshObservabilityResponse = await fetch(baseUrl() + '/api/observability/refresh', {
+    method: 'POST',
+    headers: { Cookie: cookie }
+  });
+  assert.equal(refreshObservabilityResponse.status, 200);
+  const refreshedObservability = await refreshObservabilityResponse.json();
+  assert.equal(refreshedObservability.readOnly, true);
+  assert.equal(refreshedObservability.history.length, 1);
+  assert.equal(
+    dockerRequestLog.slice(dockerReadsBeforeRefresh).every((request) => request.method === 'GET'),
+    true
+  );
+  const observabilityStateFile = path.join(process.env.DATA_ROOT, 'observability', 'state.json');
+  assert.equal(fs.statSync(observabilityStateFile).mode & 0o777, 0o600);
+  const diagnosticsResponse = await fetch(baseUrl() + '/api/observability/diagnostics', {
+    headers: { Cookie: cookie }
+  });
+  assert.equal(diagnosticsResponse.status, 200);
+  assert.match(diagnosticsResponse.headers.get('content-disposition'), /attachment/);
+  assert.equal((await diagnosticsResponse.json()).redacted, true);
 
   const invalidOnboardingResponse = await fetch(baseUrl() + '/api/setup/onboarding/complete', {
     method: 'POST',

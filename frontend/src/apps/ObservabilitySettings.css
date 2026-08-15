@@ -1,0 +1,185 @@
+.observability-settings {
+  --observability-accent: #7dd3fc;
+  --observability-border: rgba(255, 255, 255, 0.09);
+  width: 100%;
+  max-width: 1080px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-bottom: 30px;
+  color: #fff;
+  container-type: inline-size;
+}
+
+.observability-hero {
+  min-height: 138px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  padding: 22px 24px;
+  border: 1px solid rgba(125, 211, 252, 0.2);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 88% 10%, rgba(56, 189, 248, 0.18), transparent 34%),
+    radial-gradient(circle at 58% 130%, rgba(45, 212, 191, 0.1), transparent 42%),
+    rgba(255, 255, 255, 0.045);
+}
+
+.observability-hero-mark {
+  width: 58px;
+  height: 58px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(125, 211, 252, 0.22);
+  border-radius: 17px;
+  background: rgba(56, 189, 248, 0.12);
+  color: #bae6fd;
+}
+
+.observability-hero-copy { min-width: 0; }
+
+.observability-hero-copy > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--observability-accent);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.09em;
+}
+
+.observability-hero-copy h3 { margin: 7px 0 6px; font-size: 22px; }
+.observability-hero-copy p { max-width: 610px; margin: 0; color: rgba(255, 255, 255, 0.57); font-size: 12px; line-height: 1.55; }
+.observability-hero-copy em { margin-top: 9px; display: flex; align-items: center; gap: 6px; color: #99f6e4; font-size: 9px; font-style: normal; }
+.observability-hero-copy em i { width: 6px; height: 6px; border-radius: 50%; background: #5eead4; box-shadow: 0 0 0 4px rgba(94, 234, 212, 0.08); }
+
+.observability-hero-actions { min-width: 150px; display: flex; flex-direction: column; align-items: stretch; gap: 7px; }
+.observability-hero-actions small { color: rgba(255, 255, 255, 0.45); font-size: 9px; text-align: right; }
+.observability-hero-actions button,
+.observability-feedback button {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 6px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.055);
+  color: rgba(255, 255, 255, 0.72);
+  font: inherit;
+  font-size: 9px;
+  cursor: pointer;
+}
+.observability-hero-actions button:disabled { opacity: 0.5; cursor: wait; }
+.observability-hero-actions button:hover:not(:disabled) { background: rgba(255, 255, 255, 0.1); }
+
+.observability-feedback,
+.observability-loading {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 10px;
+}
+.observability-feedback { border: 1px solid rgba(251, 113, 133, 0.2); background: rgba(251, 113, 133, 0.075); color: #fecdd3; }
+.observability-feedback span { flex: 1; }
+.observability-feedback button { min-height: 26px; color: inherit; }
+.observability-loading { justify-content: center; min-height: 160px; color: rgba(255, 255, 255, 0.5); }
+
+.observability-section {
+  padding: 18px;
+  border: 1px solid var(--observability-border);
+  border-radius: 15px;
+  background: rgba(255, 255, 255, 0.035);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+}
+
+.observability-section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.observability-section-heading h3 { margin: 0 0 4px; font-size: 14px; }
+.observability-section-heading p { margin: 0; color: rgba(255, 255, 255, 0.43); font-size: 10px; line-height: 1.5; }
+
+.observability-metric-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.observability-metric { min-width: 0; overflow: hidden; padding: 12px; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 12px; background: rgba(0, 0, 0, 0.13); }
+.observability-metric header { display: flex; align-items: center; gap: 7px; color: rgba(255, 255, 255, 0.6); font-size: 9px; }
+.observability-metric header > span { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 8px; background: rgba(56, 189, 248, 0.1); color: #7dd3fc; }
+.observability-metric header strong { font-weight: 650; }
+.observability-metric-value { margin-top: 10px; font-size: 21px; font-weight: 720; letter-spacing: -0.02em; }
+.observability-metric small { display: block; min-height: 16px; margin-top: 3px; overflow: hidden; color: rgba(255, 255, 255, 0.4); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.observability-metric.is-violet header > span { background: rgba(167, 139, 250, 0.11); color: #c4b5fd; }
+.observability-metric.is-amber header > span { background: rgba(245, 158, 11, 0.11); color: #fcd34d; }
+.observability-metric.is-teal header > span { background: rgba(45, 212, 191, 0.1); color: #99f6e4; }
+.observability-metric.is-rose header > span { background: rgba(251, 113, 133, 0.1); color: #fda4af; }
+.observability-metric.is-green header > span { background: rgba(74, 222, 128, 0.1); color: #86efac; }
+.observability-sparkline { width: 100%; height: 31px; display: block; margin-top: 7px; overflow: visible; }
+.observability-sparkline path { fill: none; stroke: rgba(255, 255, 255, 0.06); stroke-width: 1; }
+.observability-sparkline polyline { fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.6; vector-effect: non-scaling-stroke; }
+.observability-metric.is-blue .observability-sparkline { color: #38bdf8; }
+.observability-metric.is-violet .observability-sparkline { color: #a78bfa; }
+.observability-metric.is-amber .observability-sparkline { color: #f59e0b; }
+.observability-metric.is-teal .observability-sparkline { color: #2dd4bf; }
+.observability-metric.is-rose .observability-sparkline { color: #fb7185; }
+.observability-metric.is-green .observability-sparkline { color: #4ade80; }
+
+.observability-two-column { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+.observability-app-counts { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); overflow: hidden; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 11px; }
+.observability-app-counts div { min-width: 0; padding: 11px 8px; text-align: center; background: rgba(0, 0, 0, 0.12); }
+.observability-app-counts div + div { border-left: 1px solid rgba(255, 255, 255, 0.065); }
+.observability-app-counts strong { display: block; font-size: 18px; }
+.observability-app-counts span { display: block; margin-top: 3px; overflow: hidden; color: rgba(255, 255, 255, 0.42); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.observability-app-counts .is-running strong { color: #86efac; }
+.observability-app-counts .is-transitioning strong { color: #fcd34d; }
+.observability-app-counts .is-error strong { color: #fda4af; }
+
+.observability-alert-count { display: inline-flex; align-items: center; gap: 5px; padding: 4px 7px; border-radius: 99px; background: rgba(255, 255, 255, 0.06); color: rgba(255, 255, 255, 0.5); font-size: 9px; }
+.observability-alert-count.has-alerts { background: rgba(251, 113, 133, 0.1); color: #fda4af; }
+.observability-alert-list { display: flex; flex-direction: column; gap: 7px; }
+.observability-alert-list article { display: flex; align-items: center; gap: 9px; padding: 9px 10px; border: 1px solid rgba(245, 158, 11, 0.16); border-radius: 9px; background: rgba(245, 158, 11, 0.06); color: #fcd34d; }
+.observability-alert-list article.is-critical { border-color: rgba(251, 113, 133, 0.18); background: rgba(251, 113, 133, 0.07); color: #fda4af; }
+.observability-alert-list article div { min-width: 0; }
+.observability-alert-list strong, .observability-alert-list span { display: block; }
+.observability-alert-list strong { overflow: hidden; color: rgba(255, 255, 255, 0.78); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.observability-alert-list span { margin-top: 2px; font-size: 8px; }
+
+.observability-empty { min-height: 55px; display: flex; align-items: center; justify-content: center; gap: 7px; border: 1px dashed rgba(255, 255, 255, 0.08); border-radius: 10px; color: rgba(255, 255, 255, 0.4); font-size: 9px; }
+.observability-empty.is-success { color: #86efac; }
+.observability-event-list { overflow: hidden; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 11px; }
+.observability-event-list article { min-height: 52px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 9px 11px; background: rgba(0, 0, 0, 0.1); }
+.observability-event-list article + article { border-top: 1px solid rgba(255, 255, 255, 0.06); }
+.observability-event-dot { width: 7px; height: 7px; border-radius: 50%; background: #38bdf8; box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.07); }
+.observability-event-list div { min-width: 0; }
+.observability-event-list strong, .observability-event-list div span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.observability-event-list strong { font-size: 10px; }
+.observability-event-list div span { margin-top: 2px; color: rgba(255, 255, 255, 0.4); font-size: 8px; }
+.observability-event-list em { color: rgba(255, 255, 255, 0.56); font-size: 9px; font-style: normal; }
+.observability-event-list time { color: rgba(255, 255, 255, 0.35); font-size: 8px; }
+
+.observability-settings .is-spinning,
+.application-observability .is-spinning { animation: observability-spin 0.9s linear infinite; }
+@keyframes observability-spin { to { transform: rotate(360deg); } }
+
+@container (max-width: 720px) {
+  .observability-hero { grid-template-columns: auto minmax(0, 1fr); }
+  .observability-hero-actions { grid-column: 1 / -1; flex-direction: row; align-items: center; }
+  .observability-hero-actions small { flex: 1; text-align: left; }
+  .observability-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .observability-two-column { grid-template-columns: 1fr; }
+  .observability-event-list article { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .observability-event-list time { grid-column: 2 / -1; }
+}
+
+@container (max-width: 540px) {
+  .observability-hero { grid-template-columns: 1fr; padding: 18px; }
+  .observability-hero-mark { width: 48px; height: 48px; }
+  .observability-hero-actions { grid-column: auto; display: grid; grid-template-columns: 1fr 1fr; }
+  .observability-hero-actions small { grid-column: 1 / -1; }
+  .observability-metric-grid { grid-template-columns: 1fr; }
+  .observability-app-counts { grid-template-columns: repeat(2, 1fr); }
+  .observability-app-counts div + div { border-left: 0; border-top: 1px solid rgba(255, 255, 255, 0.065); }
+  .observability-event-list article { grid-template-columns: auto minmax(0, 1fr); }
+  .observability-event-list em, .observability-event-list time { grid-column: 2; }
+}

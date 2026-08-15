@@ -1,0 +1,127 @@
+.application-observability {
+  --application-observability-border: rgba(255, 255, 255, 0.08);
+  padding: 26px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  container-type: inline-size;
+}
+
+.application-observability-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.application-observability-heading > div:first-child { min-width: 0; }
+.application-observability-heading > div:first-child > span { display: inline-flex; align-items: center; gap: 5px; color: #99f6e4; font-size: 9px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; }
+.application-observability-heading h3 { margin: 6px 0 4px; font-size: 16px; }
+.application-observability-heading p { margin: 0; color: rgba(255, 255, 255, 0.43); font-size: 10px; line-height: 1.5; }
+.application-observability-actions { display: flex; gap: 7px; }
+.application-observability-actions button,
+.application-observability-tabs button,
+.application-observability-feedback button,
+.application-observability-log-filters button {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 6px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.055);
+  color: rgba(255, 255, 255, 0.7);
+  font: inherit;
+  font-size: 9px;
+  cursor: pointer;
+}
+.application-observability-actions button:disabled { opacity: 0.5; cursor: wait; }
+
+.application-observability-tabs { display: flex; gap: 5px; margin-top: 16px; padding: 4px; overflow-x: auto; border: 1px solid var(--application-observability-border); border-radius: 10px; background: rgba(0, 0, 0, 0.12); }
+.application-observability-tabs button { min-width: 86px; flex: 1 0 auto; border: 0; background: transparent; }
+.application-observability-tabs button.is-active { background: rgba(56, 189, 248, 0.12); color: #bae6fd; box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.15); }
+
+.application-observability-feedback,
+.application-observability-loading { min-height: 48px; display: flex; align-items: center; gap: 8px; margin-top: 12px; padding: 10px 12px; border-radius: 9px; font-size: 9px; }
+.application-observability-feedback { border: 1px solid rgba(251, 113, 133, 0.18); background: rgba(251, 113, 133, 0.07); color: #fecdd3; }
+.application-observability-feedback span { flex: 1; }
+.application-observability-feedback button { min-height: 25px; color: inherit; }
+.application-observability-loading { justify-content: center; color: rgba(255, 255, 255, 0.43); }
+
+.application-observability-summary { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr); gap: 12px; margin-top: 12px; }
+.application-observability-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow: hidden; border: 1px solid var(--application-observability-border); border-radius: 11px; background: rgba(0, 0, 0, 0.1); }
+.application-observability-facts div { min-width: 0; padding: 10px 11px; border-bottom: 1px solid rgba(255, 255, 255, 0.055); }
+.application-observability-facts div:nth-child(odd) { border-right: 1px solid rgba(255, 255, 255, 0.055); }
+.application-observability-facts div:nth-last-child(-n + 2) { border-bottom: 0; }
+.application-observability-facts span, .application-observability-facts strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.application-observability-facts span { color: rgba(255, 255, 255, 0.36); font-size: 8px; }
+.application-observability-facts strong { margin-top: 4px; color: rgba(255, 255, 255, 0.76); font-size: 10px; font-weight: 630; }
+
+.application-observability-health { min-width: 0; padding: 11px; border: 1px solid var(--application-observability-border); border-radius: 11px; background: rgba(0, 0, 0, 0.1); }
+.application-observability-health h4 { margin: 0 0 8px; color: rgba(255, 255, 255, 0.55); font-size: 9px; }
+.application-observability-health article { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 7px; padding: 6px 0; color: #86efac; }
+.application-observability-health article + article { border-top: 1px solid rgba(255, 255, 255, 0.05); }
+.application-observability-health article.is-error { color: #fda4af; }
+.application-observability-health code { overflow: hidden; color: rgba(255, 255, 255, 0.57); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.application-observability-health time { color: rgba(255, 255, 255, 0.32); font-size: 8px; }
+
+.application-observability-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; margin-top: 12px; }
+.application-observability-metric { min-width: 0; padding: 11px; border: 1px solid var(--application-observability-border); border-radius: 10px; background: rgba(0, 0, 0, 0.11); }
+.application-observability-metric header { display: flex; align-items: center; gap: 6px; color: #7dd3fc; }
+.application-observability-metric header span { color: rgba(255, 255, 255, 0.48); font-size: 8px; }
+.application-observability-metric strong { display: block; margin-top: 9px; font-size: 17px; }
+.application-observability-metric small { display: block; min-height: 13px; margin-top: 3px; overflow: hidden; color: rgba(255, 255, 255, 0.34); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.application-observability-metric.is-violet header { color: #c4b5fd; }
+.application-observability-metric.is-teal header { color: #99f6e4; }
+.application-observability-metric.is-green header { color: #86efac; }
+.application-observability-metric.is-amber header { color: #fcd34d; }
+.application-observability-meter { height: 3px; margin-top: 8px; overflow: hidden; border-radius: 99px; background: rgba(255, 255, 255, 0.06); }
+.application-observability-meter i { height: 100%; display: block; border-radius: inherit; background: currentColor; }
+
+.application-observability-logs { margin-top: 12px; }
+.application-observability-log-filters { display: flex; align-items: flex-end; gap: 7px; flex-wrap: wrap; }
+.application-observability-log-filters label { display: flex; flex-direction: column; gap: 4px; color: rgba(255, 255, 255, 0.38); font-size: 8px; }
+.application-observability-log-filters input,
+.application-observability-log-filters select { min-height: 30px; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; outline: 0; background: rgba(0, 0, 0, 0.18); color: rgba(255, 255, 255, 0.78); font: inherit; font-size: 9px; }
+.application-observability-log-filters select { padding: 0 24px 0 8px; }
+.application-observability-search { min-width: 180px; flex: 1; position: relative; }
+.application-observability-search svg { position: absolute; left: 9px; bottom: 8px; color: rgba(255, 255, 255, 0.35); }
+.application-observability-search input { width: 100%; box-sizing: border-box; padding: 6px 9px 6px 29px; }
+.application-observability-log-filters button.is-live { border-color: rgba(74, 222, 128, 0.2); background: rgba(74, 222, 128, 0.1); color: #86efac; }
+.application-observability-log-note { display: flex; align-items: center; gap: 6px; margin: 9px 0; color: rgba(255, 255, 255, 0.35); font-size: 8px; }
+.application-observability-log-view { max-height: 340px; overflow: auto; border: 1px solid rgba(255, 255, 255, 0.075); border-radius: 10px; background: #111216; }
+.application-observability-log-view > div { min-width: 640px; display: grid; grid-template-columns: 64px 48px minmax(0, 1fr); gap: 8px; padding: 6px 9px; border-bottom: 1px solid rgba(255, 255, 255, 0.04); font-size: 8px; }
+.application-observability-log-view time { color: rgba(255, 255, 255, 0.28); }
+.application-observability-log-view span { color: #7dd3fc; text-transform: uppercase; }
+.application-observability-log-view .is-error span { color: #fda4af; }
+.application-observability-log-view .is-warning span { color: #fcd34d; }
+.application-observability-log-view .is-debug span { color: #c4b5fd; }
+.application-observability-log-view code { color: rgba(255, 255, 255, 0.68); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.application-observability-events { margin-top: 12px; overflow: hidden; border: 1px solid var(--application-observability-border); border-radius: 10px; }
+.application-observability-events article { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 9px; min-height: 48px; padding: 8px 10px; background: rgba(0, 0, 0, 0.1); }
+.application-observability-events article + article { border-top: 1px solid rgba(255, 255, 255, 0.055); }
+.application-observability-events i { width: 7px; height: 7px; border-radius: 50%; background: #38bdf8; box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.07); }
+.application-observability-events strong, .application-observability-events span { display: block; }
+.application-observability-events strong { color: rgba(255, 255, 255, 0.72); font-size: 9px; }
+.application-observability-events span { margin-top: 2px; color: rgba(255, 255, 255, 0.37); font-size: 8px; }
+.application-observability-events time { color: rgba(255, 255, 255, 0.3); font-size: 8px; }
+
+.application-observability-empty { min-height: 38px; display: flex; align-items: center; justify-content: center; gap: 7px; color: rgba(255, 255, 255, 0.36); font-size: 8px; text-align: center; }
+.application-observability-empty.is-large { min-height: 110px; margin-top: 12px; border: 1px dashed rgba(255, 255, 255, 0.08); border-radius: 10px; }
+.application-observability > footer { display: flex; align-items: center; gap: 6px; margin-top: 10px; color: rgba(255, 255, 255, 0.3); font-size: 8px; }
+
+@container (max-width: 720px) {
+  .application-observability-summary { grid-template-columns: 1fr; }
+  .application-observability-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@container (max-width: 540px) {
+  .application-observability-heading { flex-direction: column; }
+  .application-observability-actions { width: 100%; }
+  .application-observability-actions button:last-child { flex: 1; }
+  .application-observability-tabs button { min-width: 96px; }
+  .application-observability-facts, .application-observability-metrics { grid-template-columns: 1fr; }
+  .application-observability-facts div:nth-child(odd) { border-right: 0; }
+  .application-observability-facts div:nth-last-child(-n + 2) { border-bottom: 1px solid rgba(255, 255, 255, 0.055); }
+  .application-observability-facts div:last-child { border-bottom: 0; }
+  .application-observability-log-filters > * { flex: 1 1 120px; }
+  .application-observability-search { flex-basis: 100%; }
+  .application-observability-events article { grid-template-columns: auto minmax(0, 1fr); }
+  .application-observability-events time { grid-column: 2; }
+}

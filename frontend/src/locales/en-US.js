@@ -3,6 +3,7 @@ import notifications from './en-US/notifications.js';
 import applications from './en-US/applications.js';
 import migration from './en-US/migration.js';
 import security from './en-US/security.js';
+import observability from './en-US/observability.js';
 
 const enUS = {
   common: {
@@ -36,6 +37,7 @@ const enUS = {
       language: 'Language & Region',
       security: 'Security',
       notifications: 'Notifications',
+      observability: 'Observability',
       users: 'Users',
       connections: 'Connections',
       applications: 'Application Manager',
@@ -783,6 +785,7 @@ const enUS = {
   applications,
   migration,
   security,
+  observability,
   calendar: {
     localServer: 'This server',
     localCalendar: 'FoxOS Calendar',

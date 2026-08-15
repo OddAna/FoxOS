@@ -10,7 +10,8 @@ const notifications = {
     calendar: 'Calendar',
     weather: 'Weather',
     backups: 'Backups',
-    mail: 'Email'
+    mail: 'Email',
+    observability: 'Observability'
   },
   delivery: {
     delivered: 'Delivered',

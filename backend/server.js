@@ -130,6 +130,7 @@ const { CalendarError, createCalendarManager } = require('./calendarManager');
 const { createCalendarConnectionManager } = require('./calendarConnectionManager');
 const { WeatherError, createWeatherManager } = require('./weatherManager');
 const { NotificationError, createNotificationManager } = require('./notificationManager');
+const { ObservabilityError, createObservabilityManager } = require('./observabilityManager');
 const { createWebPushManager } = require('./webPushManager');
 const { createTelegramNotificationManager } = require('./telegramNotificationManager');
 const { TaskError, createTaskManager } = require('./taskManager');
@@ -1681,6 +1682,17 @@ telegramNotificationManager.reconcileCommands().catch((error) => {
 taskManager.start();
 codexChecklistReviewManager.start();
 
+const observabilityManager = createObservabilityManager({
+  dataRoot: DATA_ROOT,
+  hostRoot: HOST_ROOT,
+  dockerInspect: dockerClient.containerInspect,
+  dockerStats: dockerClient.containerStats,
+  dockerLogs: dockerClient.containerLogs,
+  getApplicationInventory,
+  notificationManager,
+  onError: (error) => console.error('Observability operation failed:', error.code || 'observability-operation-failed')
+});
+
 function calendarPublicBaseUrl(req) {
   const configured = String(process.env.FOXOS_ROUTE_BASE_URL || '').trim();
   const candidate = configured || `${req.protocol}://${req.get('host')}`;
@@ -1743,6 +1755,20 @@ function sendNotificationError(res, error) {
       ? 'Bildirim işlemi tamamlanamadı.'
       : error.message,
     code: error.code || 'notification-operation-failed'
+  });
+}
+
+function sendObservabilityError(res, error) {
+  const status = error instanceof ObservabilityError ? error.statusCode : 500;
+  if (status >= 500 && !(error instanceof ObservabilityError)) {
+    console.error('Observability operation failed:', error.code || 'observability-operation-failed');
+  }
+  res.setHeader('Cache-Control', 'private, no-store');
+  return res.status(status).json({
+    error: status >= 500 && !(error instanceof ObservabilityError)
+      ? 'Gözlem verisi şu anda okunamadı.'
+      : error.message,
+    code: error.code || 'observability-operation-failed'
   });
 }
 
@@ -5313,6 +5339,58 @@ app.get('/api/applications', async (req, res) => {
   }
 });
 
+app.get('/api/observability/overview', (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(observabilityManager.overview());
+  } catch (error) {
+    sendObservabilityError(res, error);
+  }
+});
+
+app.post('/api/observability/refresh', async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(await observabilityManager.refresh());
+  } catch (error) {
+    sendObservabilityError(res, error);
+  }
+});
+
+app.get('/api/observability/diagnostics', async (req, res) => {
+  try {
+    const applicationId = req.query.applicationId === undefined ? null : req.query.applicationId;
+    const report = await observabilityManager.diagnostics(applicationId);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.attachment(`foxos-redacted-diagnostics-${timestamp}.json`);
+    res.type('application/json').send(JSON.stringify(report, null, 2) + '\n');
+  } catch (error) {
+    sendObservabilityError(res, error);
+  }
+});
+
+app.get('/api/applications/:applicationId/observability', async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(await observabilityManager.application(req.params.applicationId));
+  } catch (error) {
+    sendObservabilityError(res, error);
+  }
+});
+
+app.get('/api/applications/:applicationId/logs', async (req, res) => {
+  try {
+    const tail = req.query.tail === undefined ? 200 : Number(req.query.tail);
+    const level = req.query.level === undefined ? 'all' : req.query.level;
+    const query = req.query.query === undefined ? '' : req.query.query;
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(await observabilityManager.applicationLogs(req.params.applicationId, { tail, level, query }));
+  } catch (error) {
+    sendObservabilityError(res, error);
+  }
+});
+
 app.post('/api/applications/:applicationId/removal-plans', async (req, res) => {
   try {
     res.status(201).json({
@@ -5759,6 +5837,7 @@ app.use((error, req, res, next) => {
 
 if (require.main === module) {
   const shutdownAntigravityLogin = () => {
+    observabilityManager.stop();
     telegramNotificationManager.stop();
     codexChecklistReviewManager.stop();
     taskManager.stop();
@@ -5813,6 +5892,7 @@ if (require.main === module) {
         console.log('FoxOS is listening on port ' + PORT);
         console.log('Host execution mode: ' + HOST_EXECUTION);
         console.log('Host filesystem mount: ' + HOST_ROOT);
+        observabilityManager.start();
 
         inspectHostCodexCli()
           .then((inspection) => inspection.installed && installBundledCodexSkills())

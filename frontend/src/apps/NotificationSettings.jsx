@@ -93,6 +93,7 @@ function sourceName(source, t, locale) {
     weather: t('notifications.sources.weather'),
     backups: t('notifications.sources.backups'),
     mail: t('notifications.sources.mail'),
+    observability: t('notifications.sources.observability'),
     codex: 'Codex'
   };
   return names[source] || source.replaceAll('-', ' ').replace(/(^|\s)\S/g, (value) => value.toLocaleUpperCase(locale));
